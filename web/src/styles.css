@@ -139,6 +139,14 @@ input, select {
   text-transform: uppercase;
   color: #6d675d;
 }
+.layer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+.layer input { width: auto; margin: 0; }
 .swatch {
   display: flex;
   align-items: center;

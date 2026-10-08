@@ -25,12 +25,14 @@ import {
   withinScreen,
 } from '@shared/geom.ts'
 import { DEFAULT_PPM, DEFAULT_SHEET_M, gridStepM, isWetKind, SURFACES, surfaceOf } from '@shared/landscape.ts'
+import { DEFAULT_SHEET_LAYERS, PAPERS, type PaperId, type SheetLayers } from '@shared/sheet.ts'
 import { nozzleById, NOZZLES } from '@shared/nozzles.ts'
 import { SERIES, type PipeSeriesId } from '@shared/pipes.ts'
 import type { Doc, Drip, Point, Source, Sprinkler, Valve, Zone, ZoneKind } from '@shared/types.ts'
 import { api, type User } from '../api'
 import { layoutIrrigation } from '@shared/plan.ts'
 import { Board, readHit, worldPoint, type Hit, type View } from '../editor/Board'
+import { exportProjectSheets } from '../pdf/exportSheet'
 import { configurePdfWorker, renderPlanPdf } from '../pdf/readPlan'
 import { Spec } from '../editor/Spec'
 
@@ -135,6 +137,10 @@ export function EditorPage({
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
   const [planNote, setPlanNote] = useState('')
+  const [paper, setPaper] = useState<PaperId>('a4')
+  const [sheetLayers, setSheetLayers] = useState<SheetLayers>(DEFAULT_SHEET_LAYERS)
+  const [includeSpec, setIncludeSpec] = useState(true)
+  const [printBusy, setPrintBusy] = useState(false)
   const svgRef = useRef<SVGSVGElement>(null)
   const docRef = useRef(doc)
   const draftRef = useRef<Point[]>([])
@@ -726,6 +732,32 @@ export function EditorPage({
     setTool('select')
   }
 
+  async function runPrint(format: 'pdf' | 'png') {
+    setError('')
+    setPrintBusy(true)
+    setStatus(format === 'pdf' ? 'Готовлю PDF…' : 'Готовлю PNG…')
+    try {
+      await exportProjectSheets({
+        doc: docRef.current,
+        analysis,
+        title: name.trim() || 'Участок',
+        paper,
+        layers: sheetLayers,
+        includeSpec,
+        underlayUrl: backgroundUrl,
+        imageSize,
+        format,
+      })
+      setStatus('Сохранено')
+      setPlanNote(format === 'pdf' ? 'PDF скачан.' : 'PNG скачан.')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось собрать лист')
+      setStatus('Сохранено')
+    } finally {
+      setPrintBusy(false)
+    }
+  }
+
   function selectedZoneOf(): Zone | undefined {
     if (selection?.kind !== 'zone' || !selection.id) return undefined
     return docRef.current.zones.find((item) => item.id === selection.id)
@@ -919,7 +951,45 @@ export function EditorPage({
         )}
         {step === 'layout' && (
           <>
-            <p className="hint">ПКМ — выбор. Потянуть ПКМ — сдвинуть лист. Клик по дождевателю — ручки на дуге.</p>
+            <p className="tool-label">Формат</p>
+            {PAPERS.map((item) => (
+              <button
+                key={item.id}
+                className={paper === item.id ? 'tool active' : 'tool'}
+                onClick={() => setPaper(item.id)}
+              >
+                {item.name}
+              </button>
+            ))}
+            <p className="tool-label">Слои</p>
+            {([
+              ['underlay', 'Подложка'],
+              ['grid', 'Сетка'],
+              ['landscape', 'Ландшафт'],
+              ['spray', 'Дождеватели'],
+              ['pipes', 'Трубы'],
+              ['drip', 'Капля'],
+              ['fittings', 'Клапаны'],
+            ] as const).map(([key, label]) => (
+              <label key={key} className="layer">
+                <input
+                  type="checkbox"
+                  checked={sheetLayers[key]}
+                  onChange={() => setSheetLayers((current) => ({ ...current, [key]: !current[key] }))}
+                />
+                {label}
+              </label>
+            ))}
+            <label className="layer">
+              <input type="checkbox" checked={includeSpec} onChange={() => setIncludeSpec((value) => !value)} />
+              Спецификация
+            </label>
+            <div className="tool-gap" />
+            <button className="primary" disabled={printBusy} onClick={() => runPrint('pdf')}>
+              {printBusy ? 'Собираю…' : 'Скачать PDF'}
+            </button>
+            <button className="tool" disabled={printBusy} onClick={() => runPrint('png')}>Скачать PNG</button>
+            <p className="hint">На листе — рамка, легенда и масштаб. ПКМ двигает чертёж.</p>
           </>
         )}
         {step === 'spec' && (
@@ -1055,6 +1125,7 @@ export function EditorPage({
         {tool === 'circle' && <span>Круг: тяните от центра.</span>}
         {tool === 'brush' && <span>Кисть: рисуйте зажатой кнопкой, как у дорожек в IRRISketch. Esc — отмена.</span>}
         {step === 'irrig' && !doc.source && <span>Поставьте источник воды, затем «Рассчитать схему».</span>}
+        {step === 'layout' && <span>Скачайте PDF схемы и спецификации. Слои слева — что попадёт на лист.</span>}
       </footer>
     </main>
   )
