@@ -8,19 +8,21 @@ import { nozzleById, NOZZLES } from '@shared/nozzles.ts'
 import { SERIES, type PipeSeriesId } from '@shared/pipes.ts'
 import type { Doc, Drip, Point, Source, Sprinkler, Valve, Zone, ZoneKind } from '@shared/types.ts'
 import { api, type User } from '../api'
+import { layoutIrrigation } from '@shared/plan.ts'
 import { Board, readHit, worldPoint, type Hit, type View } from '../editor/Board'
-import { configurePdfWorker, readPlanPdf } from '../pdf/readPlan'
+import { configurePdfWorker, renderPlanPdf } from '../pdf/readPlan'
 import { Spec } from '../editor/Spec'
 
 configurePdfWorker(workerUrl)
 
 type Tool = 'select' | 'pan' | 'scale' | 'zone' | 'sprinkler' | 'pipe' | 'valve' | 'drip' | 'source'
-type Step = 'land' | 'water' | 'spec'
+type Step = 'sheet' | 'zones' | 'water' | 'spec'
 type Sel = { kind: 'sprinkler' | 'zone' | 'pipe' | 'source' | 'valve' | 'drip'; id?: string } | null
 
 const STEPS: { id: Step; label: string }[] = [
-  { id: 'land', label: 'Ландшафт' },
-  { id: 'water', label: 'Полив' },
+  { id: 'sheet', label: 'Подложка' },
+  { id: 'zones', label: 'Зоны' },
+  { id: 'water', label: 'Вода' },
   { id: 'spec', label: 'Спецификация' },
 ]
 
@@ -37,9 +39,17 @@ const TOOLS: { id: Tool; label: string }[] = [
 ]
 
 const STEP_TOOLS: Record<Step, Tool[]> = {
-  land: ['select', 'pan', 'scale', 'zone'],
-  water: ['select', 'pan', 'sprinkler', 'pipe', 'valve', 'drip', 'source'],
+  sheet: ['select', 'pan', 'scale'],
+  zones: ['select', 'pan', 'zone'],
+  water: ['select', 'pan', 'source', 'sprinkler', 'pipe', 'valve', 'drip'],
   spec: [],
+}
+
+const STEP_DEFAULT_TOOL: Record<Step, Tool> = {
+  sheet: 'scale',
+  zones: 'zone',
+  water: 'source',
+  spec: 'select',
 }
 
 function uid(prefix: string): string {
@@ -93,7 +103,7 @@ export function EditorPage({
 }) {
   const [doc, setDoc] = useState<Doc>(emptyDoc())
   const [name, setName] = useState('Участок')
-  const [step, setStep] = useState<Step>('land')
+  const [step, setStep] = useState<Step>('sheet')
   const [tool, setTool] = useState<Tool>('select')
   const [draft, setDraft] = useState<Point[]>([])
   const [hover, setHover] = useState<Point | null>(null)
@@ -365,39 +375,33 @@ export function EditorPage({
   }
 
   async function onBackground(file: File) {
+    setError('')
+    setStatus('Загружаю подложку…')
+    let dataUrl: string
+    let size: { w: number; h: number } | null = null
     if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
-      await onPlan(file)
-      return
+      const plan = await renderPlanPdf(await file.arrayBuffer())
+      if (plan.png.length > 7_500_000) throw new Error('Лист слишком большой для подложки')
+      dataUrl = plan.png
+      size = { w: plan.width, h: plan.height }
+    } else {
+      dataUrl = await fileToDataUrl(file)
     }
-    const dataUrl = await fileToDataUrl(file)
     await api.uploadBackground(projectId, dataUrl)
     const url = `/api/projects/${projectId}/background?v=${Date.now()}`
     setBackgroundUrl(url)
-    setPlanNote('')
-    measure(url, setImageSize)
-  }
-
-  async function onPlan(file: File) {
-    const current = docRef.current
-    const drawn = current.zones.length + current.sprinklers.length + current.pipes.length + current.valves.length + current.drips.length > 0
-    if (drawn && !confirm('Заменить чертёж расчётом по этому листу?')) return
-    setStatus('Считаю полив…')
-    setError('')
-    const plan = await readPlanPdf(await file.arrayBuffer())
-    if (plan.png.length > 7_500_000) throw new Error('Лист слишком большой для подложки')
-    await api.uploadBackground(projectId, plan.png)
-    const url = `/api/projects/${projectId}/background?v=${Date.now()}`
-    setBackgroundUrl(url)
-    setImageSize({ w: plan.width, h: plan.height })
-    fitTo(plan.width, plan.height)
-    if (plan.doc) {
-      plan.doc.pipeSeries = current.pipeSeries
-      plan.doc.trench = current.trench
-      if (plan.doc.source && current.source) plan.doc.source.pressureBar = current.source.pressureBar
-      commit(plan.doc)
+    if (size) {
+      setImageSize(size)
+      fitTo(size.w, size.h)
+    } else {
+      measure(url, (next) => {
+        setImageSize(next)
+        fitTo(next.w, next.h)
+      })
     }
-    setPlanNote(plan.note)
+    setPlanNote('Подложка поставлена. Задайте масштаб по известному отрезку, затем обведите зоны полива.')
     setStatus('Сохранено')
+    if (!docRef.current.pxPerMeter) setTool('scale')
   }
 
   async function clearBackground() {
@@ -428,12 +432,44 @@ export function EditorPage({
     setStep(next)
     setDraft([])
     setScalePoints([])
-    if (!STEP_TOOLS[next].includes(tool)) setTool('select')
+    setTool(next === 'sheet' && docRef.current.pxPerMeter ? 'pan' : STEP_DEFAULT_TOOL[next])
+  }
+
+  function runLayout() {
+    const current = docRef.current
+    if (!current.pxPerMeter) {
+      setError('Сначала задайте масштаб на подложке')
+      return
+    }
+    if (!current.zones.some((zone) => zone.kind === 'lawn' || zone.kind === 'bed')) {
+      setError('Обведите хотя бы одну зону полива — газон или клумбу')
+      return
+    }
+    if (!current.source) {
+      setError('Поставьте источник воды')
+      return
+    }
+    if ((current.sprinklers.length || current.pipes.length || current.valves.length || current.drips.length)
+      && !confirm('Заменить текущую схему новым расчётом?')) return
+    setError('')
+    setStatus('Считаю схему…')
+    const next = layoutIrrigation(current)
+    if (!next) {
+      setError('Не удалось развести сеть. Проверьте масштаб и контуры зон.')
+      setStatus('Сохранено')
+      return
+    }
+    commit(next)
+    setPlanNote(`Дождевателей: ${next.sprinklers.length}. Клапанов: ${next.valves.length}. Капельных линий: ${next.drips.length}. Схему можно поправить вручную, спецификация справа во вкладке.`)
+    setStatus('Сохранено')
+    setTool('select')
   }
 
   if (!loaded) return <div className="boot">{error || 'Загрузка проекта…'}</div>
 
-  const stepTools = STEP_TOOLS[step]
+  const stepTools = step === 'water' && doc.sprinklers.length === 0 && doc.pipes.length === 0 && doc.drips.length === 0
+    ? ['select' as const, 'pan' as const, 'source' as const]
+    : STEP_TOOLS[step]
 
   return (
     <main className={step === 'spec' ? 'editor step-spec' : 'editor'}>
@@ -456,7 +492,7 @@ export function EditorPage({
             {item.label}
           </button>
         ))}
-        {step === 'water' && (
+        {(step === 'water' || step === 'spec') && (
           <select
             value={doc.pipeSeries}
             aria-label="Ряд труб"
@@ -466,6 +502,15 @@ export function EditorPage({
               <option key={series.id} value={series.id}>{series.name}</option>
             ))}
           </select>
+        )}
+        {step === 'water' && (
+          <button className="primary" onClick={runLayout}>Рассчитать схему</button>
+        )}
+        {step === 'sheet' && (
+          <button className="tool" onClick={() => openStep('zones')}>Дальше: зоны</button>
+        )}
+        {step === 'zones' && (
+          <button className="tool" onClick={() => openStep('water')}>Дальше: вода</button>
         )}
         {tool === 'zone' && (
           <select value={zoneKind} onChange={(event) => setZoneKind(event.target.value as ZoneKind)} aria-label="Тип зоны">
@@ -486,7 +531,7 @@ export function EditorPage({
         )}
         {step !== 'spec' && <button className="tool" onClick={fit}>Вписать</button>}
         {step !== 'spec' && <button className="tool" onClick={loadExample}>Пример</button>}
-        {step === 'land' && <label className="tool file">
+        {step === 'sheet' && <label className="tool file">
           Подложка
           <input
             type="file"
@@ -498,7 +543,7 @@ export function EditorPage({
             }}
           />
         </label>}
-        {step === 'land' && backgroundUrl && <button className="tool" onClick={() => clearBackground().catch((err: Error) => setError(err.message))}>Убрать подложку</button>}
+        {step === 'sheet' && backgroundUrl && <button className="tool" onClick={() => clearBackground().catch((err: Error) => setError(err.message))}>Убрать подложку</button>}
       </nav>
       <div className="stage">
         <Board
@@ -534,7 +579,7 @@ export function EditorPage({
           </div>
         )}
         {planNote && <p className="hint">{planNote}</p>}
-        <p className="hint">{step === 'spec' ? 'Длины, диаметры, потери напора и осадки по зонам.' : hint(tool)}</p>
+        <p className="hint">{stepHint(step, doc, tool)}</p>
         <Spec
           doc={doc}
           analysis={analysis}
@@ -626,16 +671,19 @@ function cleanSprinkler(item: Sprinkler, patch: Partial<Sprinkler>): Sprinkler {
   return next
 }
 
-function hint(tool: Tool): string {
-  if (tool === 'zone') return 'Точки по контуру. Замкните зону у первой точки, кнопкой или Enter.'
-  if (tool === 'pipe') return 'Ведите трубу по точкам. Конец должен попасть на источник или дождеватель.'
-  if (tool === 'drip') return 'Ведите капельную трубку. Первая точка должна встать на трубу. Шаг капельниц 0,3 м, расход 2 л/ч.'
-  if (tool === 'sprinkler') return 'Щелчок ставит дождеватель. 0° сектора смотрит вверх.'
-  if (tool === 'valve') return 'Щелчок ставит клапан на точку трубы. Станции за клапанами поливаются по очереди.'
-  if (tool === 'source') return 'Щелчок ставит источник воды на трубу.'
-  if (tool === 'scale') return 'Две точки и известная длина в метрах.'
-  if (tool === 'pan') return 'Тяните чертёж. Колёсико меняет масштаб.'
-  return 'Выбор, перетаскивание и Delete. Ctrl+Z отменяет шаг.'
+function stepHint(step: Step, doc: Doc, tool: Tool): string {
+  if (step === 'sheet') {
+    if (!doc.pxPerMeter) return 'Загрузите чертёж (JPEG, PNG или PDF) и задайте масштаб двумя точками известного отрезка. Схема с картинки сама не читается.'
+    return 'Масштаб задан. Дальше обведите зоны, которые нужно поливать.'
+  }
+  if (step === 'zones') return tool === 'zone'
+    ? 'Обведите газон, клумбу или дорожку по контуру. Замкните у первой точки, кнопкой или Enter. Дорожка не поливается.'
+    : 'Обведите области полива. Газон — веера, клумба — капля. Дорожку можно обвести, чтобы по ней не ставились дождеватели.'
+  if (step === 'water') {
+    if (!doc.source) return 'Поставьте точку, откуда приходит вода. Затем нажмите «Рассчитать схему» — трубы, дождеватели и клапаны появятся сами.'
+    return 'Источник стоит. «Рассчитать схему» расставит дождеватели, каплю, трубы и клапаны по вашим зонам.'
+  }
+  return 'Длины, диаметры, потери напора и осадки по зонам. Если схема не подошла — вернитесь на «Вода» и посчитайте снова или поправьте вручную.'
 }
 
 function snapDrag(doc: Doc, hit: Hit): Doc {

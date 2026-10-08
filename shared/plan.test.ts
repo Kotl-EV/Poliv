@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { analyze } from './analyze.ts'
-import { layoutPlan, pxPerMeterFromPage, scaleBarPxPerMeter, segmentRole, sheetScaleRatio, type InkSeg } from './plan.ts'
+import { emptyDoc } from './doc.ts'
+import { layoutIrrigation, layoutPlan, pxPerMeterFromPage, scaleBarPxPerMeter, segmentRole, sheetScaleRatio, type InkSeg } from './plan.ts'
 import { pointInPolygon } from './geom.ts'
 import type { Point } from './types.ts'
 
@@ -132,4 +133,87 @@ test('a bed gets drip and no sprinkler inside it', () => {
   assert.ok(doc.drips.length >= 1)
   assert.ok(analyze(doc).drips.flowLph > 0)
   assert.equal(doc.sprinklers.some((head) => pointInPolygon(head, bed.points)), false)
+})
+
+test('layout from a drawn lawn and a source places heads and pipes', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 10
+  doc.zones = [{
+    id: 'zone-lawn',
+    name: 'Газон',
+    kind: 'lawn',
+    doseMm: 6,
+    soil: 'loam',
+    slope: 'flat',
+    climate: 'open',
+    points: [
+      { x: 100, y: 80 },
+      { x: 300, y: 80 },
+      { x: 300, y: 220 },
+      { x: 100, y: 220 },
+    ],
+  }]
+  doc.source = { x: 60, y: 150, pressureBar: 3, flowLimitLph: null }
+  const next = layoutIrrigation(doc)
+  assert.ok(next)
+  assert.equal(next.zones.length, 1)
+  assert.ok(next.sprinklers.length >= 4)
+  assert.ok(next.pipes.length >= 1)
+  assert.ok(next.source && next.source.x === 60)
+  const analysis = analyze(next)
+  assert.ok(analysis.connectedFlowLph > 0)
+  assert.equal(analysis.warnings.some((item) => item.includes('не соединена')), false)
+})
+
+test('layout puts drip on a bed and keeps the lawn heads out of it', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 10
+  doc.zones = [
+    {
+      id: 'zone-lawn',
+      name: 'Газон',
+      kind: 'lawn',
+      doseMm: 6,
+      soil: 'loam',
+      slope: 'flat',
+      climate: 'open',
+      points: [
+        { x: 100, y: 80 },
+        { x: 300, y: 80 },
+        { x: 300, y: 220 },
+        { x: 100, y: 220 },
+      ],
+    },
+    {
+      id: 'zone-bed',
+      name: 'Клумба',
+      kind: 'bed',
+      doseMm: 8,
+      soil: 'loam',
+      slope: 'flat',
+      climate: 'open',
+      points: [
+        { x: 120, y: 150 },
+        { x: 170, y: 150 },
+        { x: 170, y: 190 },
+        { x: 120, y: 190 },
+      ],
+    },
+  ]
+  doc.source = { x: 60, y: 150, pressureBar: 3, flowLimitLph: null }
+  const next = layoutIrrigation(doc)
+  assert.ok(next)
+  const bed = next.zones.find((zone) => zone.kind === 'bed')
+  assert.ok(bed)
+  assert.ok(next.drips.length >= 1)
+  assert.equal(next.sprinklers.some((head) => pointInPolygon(head, bed.points)), false)
+})
+
+test('layoutIrrigation needs scale, source and a wet zone', () => {
+  const base = emptyDoc()
+  assert.equal(layoutIrrigation(base), null)
+  base.pxPerMeter = 10
+  assert.equal(layoutIrrigation(base), null)
+  base.source = { x: 10, y: 10, pressureBar: 3, flowLimitLph: null }
+  assert.equal(layoutIrrigation(base), null)
 })

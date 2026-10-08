@@ -21,6 +21,20 @@ type PdfPage = {
   render: (params: { canvasContext: CanvasRenderingContext2D; viewport: { width: number; height: number } }) => { promise: Promise<void> }
 }
 
+export async function renderPlanPdf(data: ArrayBuffer): Promise<{ png: string; width: number; height: number }> {
+  const pdf = await openPdf(data)
+  try {
+    const page = (await pdf.getPage(1)) as unknown as PdfPage
+    const base = page.getViewport({ scale: 1 })
+    const scale = Math.min(1.7, 1600 / Math.max(base.width, base.height))
+    const viewport = page.getViewport({ scale })
+    const png = await renderPng(page, viewport)
+    return { png, width: Math.round(viewport.width), height: Math.round(viewport.height) }
+  } finally {
+    await pdf.destroy()
+  }
+}
+
 export async function readPlanPdf(data: ArrayBuffer): Promise<ReadPlan> {
   const pdf = await openPdf(data)
   try {

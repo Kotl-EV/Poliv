@@ -518,6 +518,291 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
   }
 }
 
+/** Схема полива по зонам и источнику, которые уже начертил пользователь. */
+export function layoutIrrigation(doc: Doc): Doc | null {
+  const ppm = doc.pxPerMeter
+  const source = doc.source
+  if (!(ppm > 0) || !source) return null
+  const irrigable = doc.zones.filter((zone) => (zone.kind === 'lawn' || zone.kind === 'bed') && zone.points.length >= 3)
+  if (irrigable.length === 0) return null
+
+  const cellM = Math.max(0.5, (SNAP_PX + 2) / ppm)
+  const cellPx = cellM * ppm
+  const pts: Point[] = [source]
+  for (const zone of doc.zones) pts.push(...zone.points)
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const point of pts) {
+    minX = Math.min(minX, point.x)
+    minY = Math.min(minY, point.y)
+    maxX = Math.max(maxX, point.x)
+    maxY = Math.max(maxY, point.y)
+  }
+  const pad = cellPx * 2
+  minX -= pad
+  minY -= pad
+  maxX += pad
+  maxY += pad
+  const cols = Math.max(1, Math.ceil((maxX - minX) / cellPx))
+  const rows = Math.max(1, Math.ceil((maxY - minY) / cellPx))
+  const keyOf = (c: number, r: number) => c + r * cols
+  const center = (key: number): Point => {
+    const c = key % cols
+    const r = Math.floor(key / cols)
+    return { x: minX + (c + 0.5) * cellPx, y: minY + (r + 0.5) * cellPx }
+  }
+  const inKind = (point: Point, kind: Zone['kind']) => doc.zones.some((zone) => zone.kind === kind && zone.points.length >= 3 && pointInPolygon(point, zone.points))
+
+  const lawnKeys: number[] = []
+  const allowed = new Set<number>()
+  const hull = convexHull(pts)
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const key = keyOf(c, r)
+      const point = center(key)
+      const lawn = inKind(point, 'lawn')
+      const bed = inKind(point, 'bed')
+      const path = inKind(point, 'path')
+      if (lawn && !bed && !path) lawnKeys.push(key)
+      if (lawn || bed || path || (hull.length >= 3 && pointInPolygon(point, hull))) allowed.add(key)
+    }
+  }
+
+  const lawnParts = connected(lawnKeys, cols, rows).filter((part) => part.length * cellM * cellM >= MIN_LAWN_M2)
+  const heads: { key: number; point: Point; nozzleId: string; rotationDeg: number }[] = []
+  for (const part of lawnParts) {
+    const partSet = new Set(part)
+    const angle = principal(part.map((key) => center(key)))
+    const mid = centroid(part.map((key) => center(key)))
+    const step = HEAD_M * ppm
+    const reach = Math.max(...part.map((key) => dist(center(key), mid))) + step
+    for (let u = -reach; u <= reach; u += step) {
+      for (let v = -reach; v <= reach; v += step) {
+        const x = mid.x + u * Math.cos(angle) - v * Math.sin(angle)
+        const y = mid.y + u * Math.sin(angle) + v * Math.cos(angle)
+        const c = Math.floor((x - minX) / cellPx)
+        const r = Math.floor((y - minY) / cellPx)
+        const key = keyOf(c, r)
+        if (!partSet.has(key)) continue
+        const point = center(key)
+        if (heads.some((head) => dist(head.point, point) < step * 0.82)) continue
+        const cover = coverNozzle(point, ppm, (sample) => {
+          const sc = Math.floor((sample.x - minX) / cellPx)
+          const sr = Math.floor((sample.y - minY) / cellPx)
+          return partSet.has(keyOf(sc, sr))
+        })
+        heads.push({ key, point, ...cover })
+        if (heads.length >= 80) break
+      }
+      if (heads.length >= 80) break
+    }
+  }
+
+  const drips: { key: number; points: Point[] }[] = []
+  for (const zone of doc.zones) {
+    if (zone.kind !== 'bed' || zone.points.length < 3) continue
+    const simplified = simplify(zone.points, 0.7 * ppm)
+    if (simplified.length < 2) continue
+    const spot = nearestKey(centroid(simplified), allowed, center)
+    if (spot === null) continue
+    const loop = simplified[0] === simplified[simplified.length - 1] ? simplified : [...simplified, simplified[0]]
+    drips.push({ key: spot, points: [center(spot), ...loop] })
+  }
+
+  if (heads.length === 0 && drips.length === 0) return null
+  const root = nearestKey(source, allowed, center)
+  if (root === null) return null
+
+  const taken = new Set<number>([root])
+  for (const head of heads) {
+    const next = !taken.has(head.key) ? head.key : freeCell(head.key, allowed, taken, cols, rows)
+    if (next === null) {
+      head.key = -1
+      continue
+    }
+    head.key = next
+    head.point = center(next)
+    taken.add(next)
+  }
+  for (const drip of drips) {
+    if (!taken.has(drip.key)) {
+      taken.add(drip.key)
+      continue
+    }
+    const next = freeCell(drip.key, allowed, taken, cols, rows)
+    if (next === null) {
+      drip.key = -1
+      continue
+    }
+    drip.points = [center(next), ...drip.points.slice(1)]
+    drip.key = next
+    taken.add(next)
+  }
+  const placedHeads = heads.filter((head) => head.key >= 0)
+  const placedDrips = drips.filter((drip) => drip.key >= 0)
+  const reachable = steiner(root, [...placedHeads.map((head) => head.key), ...placedDrips.map((drip) => drip.key)], allowed, cols, rows)
+  const keptHeads = placedHeads.filter((head) => reachable.has(head.key))
+  const keptDrips = placedDrips.filter((drip) => reachable.has(drip.key))
+  if (keptHeads.length === 0 && keptDrips.length === 0) return null
+
+  const flowAt = new Map<number, number>()
+  for (const head of keptHeads) flowAt.set(head.key, (flowAt.get(head.key) ?? 0) + nozzleById(head.nozzleId).flowLph)
+  for (const drip of keptDrips) {
+    const lengthM = polylinePx(drip.points) / ppm
+    flowAt.set(drip.key, (flowAt.get(drip.key) ?? 0) + Math.max(1, Math.round(lengthM / 0.3)) * 2)
+  }
+  const consumers = [...flowAt.entries()].map(([key, flow]) => ({ key, flow }))
+  const zoneRuntime = new Map<string, number>()
+  for (const zone of doc.zones) {
+    const area = polygonAreaPx(zone.points) / (ppm * ppm)
+    if (zone.doseMm <= 0 || area <= 0) {
+      zoneRuntime.set(zone.id, 0)
+      continue
+    }
+    let flow = 0
+    for (const head of keptHeads) {
+      if (pointInPolygon(head.point, zone.points)) flow += nozzleById(head.nozzleId).flowLph
+    }
+    for (const drip of keptDrips) {
+      const lengthM = polylinePx(drip.points) / ppm
+      if (pointInPolygon(centroid(drip.points), zone.points)) flow += Math.max(1, Math.round(lengthM / 0.3)) * 2
+    }
+    zoneRuntime.set(zone.id, flow > 0 ? (zone.doseMm / (flow / area)) * 60 : 0)
+  }
+  const runtimeAt = (point: Point) => {
+    let best = 0
+    for (const zone of doc.zones) {
+      if (!pointInPolygon(point, zone.points)) continue
+      best = Math.max(best, zoneRuntime.get(zone.id) ?? 0)
+    }
+    return best
+  }
+  const runtimeOf = new Map<number, number>()
+  for (const head of keptHeads) runtimeOf.set(head.key, Math.max(runtimeOf.get(head.key) ?? 0, runtimeAt(head.point)))
+  for (const drip of keptDrips) runtimeOf.set(drip.key, Math.max(runtimeOf.get(drip.key) ?? 0, runtimeAt(centroid(drip.points))))
+  consumers.sort((a, b) => (runtimeOf.get(b.key) ?? 0) - (runtimeOf.get(a.key) ?? 0) || b.flow - a.flow || a.key - b.key)
+  const groups: { key: number; flow: number }[][] = []
+  const bins: { flow: number; runtime: number }[] = []
+  for (const item of consumers) {
+    const runtime = runtimeOf.get(item.key) ?? 0
+    let best = -1
+    let bestCost = Infinity
+    for (let i = 0; i < bins.length; i++) {
+      if (bins[i].flow + item.flow > STATION_LPH) continue
+      const cost = Math.max(bins[i].runtime, runtime) - bins[i].runtime
+      const tighter = cost < bestCost || (cost === bestCost && best !== -1 && bins[i].flow > bins[best].flow)
+      if (tighter) {
+        bestCost = cost
+        best = i
+      }
+    }
+    if (best === -1) {
+      groups.push([item])
+      bins.push({ flow: item.flow, runtime })
+    } else {
+      groups[best].push(item)
+      bins[best].flow += item.flow
+      bins[best].runtime = Math.max(bins[best].runtime, runtime)
+    }
+  }
+
+  const terminalKeys = new Set(consumers.map((item) => item.key))
+  const reserved = new Set<number>([root, ...terminalKeys])
+  const spots: number[] = []
+  for (const group of groups) {
+    if (groups.length === 1) {
+      spots.push(root)
+      continue
+    }
+    const mid = centroid(group.map((item) => center(item.key)))
+    let best: number | null = null
+    let bestD = Infinity
+    for (const key of allowed) {
+      if (reserved.has(key)) continue
+      const distance = dist(center(key), mid)
+      if (distance < bestD) {
+        bestD = distance
+        best = key
+      }
+    }
+    const valveSpot: number = best ?? root
+    spots.push(valveSpot)
+    if (valveSpot !== root) reserved.add(valveSpot)
+  }
+  const reached = new Set<number>()
+  const valveKeys: number[] = []
+  const pipes: { id: string; points: Point[] }[] = []
+  const ids = sequencer()
+  const clear = (a: Point, b: Point) => segmentClear(a, b, [], cellPx)
+  const trunkAllowed = new Set<number>([root])
+  for (const key of allowed) if (!terminalKeys.has(key)) trunkAllowed.add(key)
+  for (const spot of spots) trunkAllowed.add(spot)
+  const trunk = steiner(root, spots.filter((spot) => spot !== root), trunkAllowed, cols, rows)
+  const trunkCells = new Set(trunk.keys())
+  pipes.push(...pipesFromTree(trunk, center, ids, clear, new Set(spots)))
+  for (let i = 0; i < groups.length; i++) {
+    const spot = spots[i]
+    if (spot !== root && !trunk.has(spot)) {
+      pipes.push({ id: ids('pipe'), points: [center(root), center(spot)] })
+    }
+    const owned = groups[i].map((item) => item.key)
+    const local = new Set<number>([spot])
+    for (const key of allowed) {
+      if (key !== spot && trunkCells.has(key)) continue
+      if (terminalKeys.has(key) && !owned.includes(key)) continue
+      if (spots.some((other) => other === key && other !== spot)) continue
+      local.add(key)
+    }
+    const { prev } = dijkstra(new Map([[spot, null]]), local, cols, rows, terminalKeys)
+    let hit = false
+    for (const key of owned) {
+      const cells = key === spot ? [spot] : pathTo(prev, key, spot)
+      if (cells && cells.length >= 2) {
+        const points = shorten(cells.map(center), clear)
+        if (points.length >= 2) pipes.push({ id: ids('pipe'), points })
+        hit = true
+        reached.add(key)
+        continue
+      }
+      if (key === spot) {
+        hit = true
+        reached.add(key)
+        continue
+      }
+      pipes.push({ id: ids('pipe'), points: [center(spot), center(key)] })
+      hit = true
+      reached.add(key)
+    }
+    if (hit && !valveKeys.includes(spot)) valveKeys.push(spot)
+  }
+  const finalHeads = keptHeads.filter((head) => reached.has(head.key))
+  const finalDrips = keptDrips.filter((drip) => reached.has(drip.key))
+  if (finalHeads.length === 0 && finalDrips.length === 0) return null
+
+  pipes.unshift({ id: ids('pipe'), points: [{ x: source.x, y: source.y }, center(root)] })
+  return {
+    ...doc,
+    sprinklers: finalHeads.map((head) => {
+      const nozzle = nozzleById(head.nozzleId)
+      return {
+        id: ids('head'),
+        nozzleId: nozzle.id,
+        x: head.point.x,
+        y: head.point.y,
+        radiusM: nozzle.radiusM,
+        arcDeg: nozzle.arcDeg,
+        rotationDeg: head.rotationDeg,
+        flowLph: nozzle.flowLph,
+      }
+    }),
+    drips: finalDrips.map((drip) => ({ id: ids('drip'), points: drip.points, spacingM: 0.3, emitterLph: 2 })),
+    valves: valveKeys.map((key, index) => ({ id: ids('valve'), name: `Клапан ${index + 1}`, ...center(key) })),
+    pipes,
+  }
+}
+
 function sequencer(): (prefix: string) => string {
   let n = 0
   return (prefix) => `${prefix}-${++n}`
