@@ -225,19 +225,26 @@ export const Board = forwardRef<SVGSVGElement, {
           )),
         )}
         {doc.sprinklers.map((sprinkler) => (
-          <circle
-            key={sprinkler.id}
-            data-hit="sprinkler"
-            data-id={sprinkler.id}
-            cx={sprinkler.x}
-            cy={sprinkler.y}
-            r={8 / view.k}
-            className={props.selectionKind === 'sprinkler' && props.selectionId === sprinkler.id ? 'node selected' : 'node'}
-          />
+          <g key={sprinkler.id}>
+            <circle
+              data-hit="sprinkler"
+              data-id={sprinkler.id}
+              cx={sprinkler.x}
+              cy={sprinkler.y}
+              r={16 / view.k}
+              fill="transparent"
+              stroke="none"
+            />
+            <circle
+              data-hit="sprinkler"
+              data-id={sprinkler.id}
+              cx={sprinkler.x}
+              cy={sprinkler.y}
+              r={9 / view.k}
+              className={props.selectionKind === 'sprinkler' && props.selectionId === sprinkler.id ? 'node selected' : 'node'}
+            />
+          </g>
         ))}
-        {selectedSprinkler && (
-          <SprinklerHandles sprinkler={selectedSprinkler} ppm={ppm} k={view.k} />
-        )}
         {doc.valves.map((valve) => (
           <polygon
             key={valve.id}
@@ -295,6 +302,9 @@ export const Board = forwardRef<SVGSVGElement, {
         ))}
         {props.scalePoints.length === 2 && (
           <DimLabel a={props.scalePoints[0]} b={props.scalePoints[1]} ppm={ppm} k={view.k} />
+        )}
+        {selectedSprinkler && (
+          <SprinklerHandles sprinkler={selectedSprinkler} ppm={ppm} k={view.k} />
         )}
       </g>
     </svg>
@@ -444,20 +454,20 @@ function DraftLayer({
 }
 
 function SprinklerHandles({ sprinkler, ppm, k }: { sprinkler: Sprinkler; ppm: number; k: number }) {
-  const radius = ppm * sprinkler.radiusM
-  if (!(radius > 0)) return null
-  const mid = polar(sprinkler, radius, sprinkler.rotationDeg)
+  const throwR = Math.max(ppm * (sprinkler.radiusM || 4.5), 24 / k)
+  const handleR = Math.min(throwR, 72 / k)
+  const mid = polar(sprinkler, handleR, sprinkler.rotationDeg)
   const open = sprinkler.arcDeg < 359
-  const start = polar(sprinkler, radius, sprinkler.rotationDeg - sprinkler.arcDeg / 2)
-  const end = polar(sprinkler, radius, sprinkler.rotationDeg + sprinkler.arcDeg / 2)
-  const s = 6 / k
+  const start = polar(sprinkler, handleR, sprinkler.rotationDeg - sprinkler.arcDeg / 2)
+  const end = polar(sprinkler, handleR, sprinkler.rotationDeg + sprinkler.arcDeg / 2)
+  const s = 9 / k
+  const rim = sectorPath(sprinkler, handleR, sprinkler.rotationDeg, sprinkler.arcDeg)
   return (
     <g className="sprinkler-handles">
+      <path d={rim} className="sprinkler-widget" pointerEvents="none" />
       <line x1={sprinkler.x} y1={sprinkler.y} x2={mid.x} y2={mid.y} className="sprinkler-ray" />
       {open && (
         <>
-          <line x1={sprinkler.x} y1={sprinkler.y} x2={start.x} y2={start.y} className="sprinkler-ray faint" />
-          <line x1={sprinkler.x} y1={sprinkler.y} x2={end.x} y2={end.y} className="sprinkler-ray faint" />
           <rect
             data-hit="sprinkler-arc"
             data-id={sprinkler.id}
@@ -485,7 +495,7 @@ function SprinklerHandles({ sprinkler, ppm, k }: { sprinkler: Sprinkler; ppm: nu
         data-id={sprinkler.id}
         cx={mid.x}
         cy={mid.y}
-        r={7 / k}
+        r={11 / k}
         className="handle rot-handle"
       />
     </g>

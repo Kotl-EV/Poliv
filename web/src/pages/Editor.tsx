@@ -14,6 +14,7 @@ import {
   mirrorAround,
   normDeg,
   orthoFrom,
+  pickSprinkler,
   polygonAreaPx,
   rectPoints,
   ringLength,
@@ -370,6 +371,13 @@ export function EditorPage({
     return point
   }
 
+  function resolveBoardHit(hit: Hit, point: Point): Hit {
+    if (hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc' || hit.kind === 'draft-ok' || hit.kind === 'draft-close') return hit
+    const id = pickSprinkler(docRef.current.sprinklers, point, view.k, ppm)
+    if (id) return { kind: 'sprinkler', id }
+    return hit
+  }
+
   function onPointerDown(event: React.PointerEvent<SVGSVGElement>) {
     if (!svgRef.current) return
     if (event.button === 2) {
@@ -377,17 +385,20 @@ export function EditorPage({
       if (tool === 'zone' || tool === 'pipe' || tool === 'drip') finishDraft()
       return
     }
-    const hit = readHit(event.target)
+    const raw = worldPoint(event, svgRef.current, view)
+    const hit = resolveBoardHit(readHit(event.target), raw)
     if ((tool === 'zone' || tool === 'pipe' || tool === 'drip') && (hit.kind === 'draft-ok' || hit.kind === 'draft-close')) {
       finishDraft()
       return
     }
     if (tool === 'pan' || event.button === 1) {
+      if (tool === 'pan' && event.button === 0 && (hit.kind === 'sprinkler' || hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc')) {
+        setSelection({ kind: 'sprinkler', id: hit.id })
+      }
       event.currentTarget.setPointerCapture(event.pointerId)
       pan.current = { x: event.clientX, y: event.clientY, view }
       return
     }
-    const raw = worldPoint(event, svgRef.current, view)
     click.current = { hit, x: event.clientX, y: event.clientY, moved: false }
     if (tool === 'select') event.currentTarget.setPointerCapture(event.pointerId)
 
@@ -890,7 +901,11 @@ export function EditorPage({
           </>
         )}
         {step === 'layout' && (
-          <p className="hint">Листы печати: рамка, слои и экспорт. Пока смотрите чертёж здесь, печать следующим заходом.</p>
+          <>
+            <button className={tool === 'select' ? 'tool active' : 'tool'} onClick={() => setTool('select')}>Выбор</button>
+            <button className={tool === 'pan' ? 'tool active' : 'tool'} onClick={() => setTool('pan')}>Рука</button>
+            <p className="hint">Клик по дождевателю или зелёному сектору — ручки на дуге. Листы печати следующим заходом.</p>
+          </>
         )}
         {step === 'spec' && (
           <p className="hint">Спецификация справа. Вернитесь в «Полив», если нужно пересчитать схему.</p>

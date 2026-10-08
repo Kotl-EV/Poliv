@@ -264,7 +264,7 @@ input, select {
   box-shadow: 0 10px 24px rgba(40, 32, 18, 0.14);
 }
 .draft-bar .primary:disabled { opacity: 0.45; }
-.board { position: relative; z-index: 0; width: 100%; height: 100%; display: block; touch-action: none; background: #c5d0c6; cursor: crosshair; }
+.board { position: relative; z-index: 0; width: 100%; height: 100%; display: block; overflow: visible; touch-action: none; background: #c5d0c6; cursor: crosshair; }
 .paper { fill: #e7efe6; }
 .grid { stroke: rgba(46, 90, 62, 0.14); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .grid.minor { stroke: rgba(46, 90, 62, 0.10); }
@@ -273,10 +273,10 @@ input, select {
 .mid-handle { fill: #fffdf8; stroke: #1f6b45; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .cover { fill: rgba(47, 122, 72, 0.16); stroke: #24633a; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .cover.selected { fill: rgba(47, 122, 72, 0.28); stroke: #b86a09; }
-.sprinkler-ray { fill: none; stroke: #b86a09; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
-.sprinkler-ray.faint { stroke: #8a7348; stroke-width: 1; opacity: 0.7; }
-.rot-handle { fill: #fffdf8; cursor: grab; }
-.arc-handle { fill: #fffdf8; cursor: nwse-resize; }
+.sprinkler-widget { fill: rgba(184, 106, 9, 0.14); stroke: #b86a09; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.sprinkler-ray { fill: none; stroke: #b86a09; stroke-width: 2.4; vector-effect: non-scaling-stroke; }
+.rot-handle { fill: #b86a09; stroke: #fffdf8; stroke-width: 2; cursor: grab; }
+.arc-handle { fill: #fffdf8; stroke: #b86a09; cursor: nwse-resize; }
 .draft { fill: none; stroke: #1c2822; }
 .draft-brush { fill: none; opacity: 0.55; }
 .draft-fill { fill: rgba(63, 122, 72, 0.14); stroke: none; }

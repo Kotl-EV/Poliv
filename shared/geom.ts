@@ -86,6 +86,40 @@ export function aimSprinkler(
   return sprinklerArcFromEnd(rotationDeg, arcDeg, bearing)
 }
 
+export function pointInSpray(
+  head: { x: number; y: number; radiusM: number; arcDeg: number; rotationDeg: number },
+  point: Point,
+  ppm: number,
+): boolean {
+  const radius = head.radiusM * ppm
+  if (!(radius > 0) || dist(head, point) > radius * 1.02) return false
+  if (head.arcDeg >= 359) return false
+  return Math.abs(normDeg(bearingDeg(head, point) - head.rotationDeg + 180) - 180) <= head.arcDeg / 2 + 3
+}
+
+export function pickSprinkler(
+  heads: { id: string; x: number; y: number; radiusM: number; arcDeg: number; rotationDeg: number }[],
+  point: Point,
+  k: number,
+  ppm: number,
+  nodePx = 16,
+): string | null {
+  let bestId: string | null = null
+  let bestD = nodePx
+  for (const head of heads) {
+    const d = dist(head, point) * k
+    if (d <= bestD) {
+      bestD = d
+      bestId = head.id
+    }
+  }
+  if (bestId) return bestId
+  for (let i = heads.length - 1; i >= 0; i--) {
+    if (pointInSpray(heads[i], point, ppm)) return heads[i].id
+  }
+  return null
+}
+
 export function midpoint(a: Point, b: Point): Point {
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
 }

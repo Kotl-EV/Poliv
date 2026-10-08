@@ -4,6 +4,7 @@ import { SNAP_PX } from './doc.ts'
 import {
   aimSprinkler,
   bearingDeg,
+  pickSprinkler,
   circlePoints,
   controlFromHandle,
   dist,
@@ -98,6 +99,18 @@ test('bearing is 0 up and grows clockwise', () => {
   assert.equal(Math.round(bearingDeg(o, { x: -10, y: 0 })), 270)
   assert.equal(snapDeg(22, 15), 15)
   assert.equal(snapDeg(353, 15), 0)
+})
+
+test('a click on the spray or on the head picks that sprinkler over the lawn', () => {
+  const heads = [
+    { id: 'a', x: 100, y: 100, radiusM: 4.5, arcDeg: 180, rotationDeg: 180 },
+    { id: 'b', x: 300, y: 100, radiusM: 4.5, arcDeg: 360, rotationDeg: 0 },
+  ]
+  const ppm = 10
+  assert.equal(pickSprinkler(heads, { x: 100, y: 100 }, 1, ppm), 'a')
+  assert.equal(pickSprinkler(heads, { x: 100, y: 120 }, 1, ppm), 'a')
+  assert.equal(pickSprinkler(heads, { x: 300, y: 100 }, 1, ppm), 'b')
+  assert.equal(pickSprinkler(heads, { x: 300, y: 130 }, 1, ppm), null)
 })
 
 test('dragging the mid handle turns the sector, edge handles change the arc', () => {
