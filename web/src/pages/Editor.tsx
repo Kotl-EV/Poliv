@@ -142,7 +142,7 @@ export function EditorPage({
   const future = useRef<Doc[]>([])
   const ready = useRef(false)
   const drag = useRef<Hit | null>(null)
-  const pan = useRef<{ x: number; y: number; view: View } | null>(null)
+  const pan = useRef<{ x: number; y: number; view: View; button: number; hit: Hit; moved: boolean } | null>(null)
   const click = useRef<{ hit: Hit; x: number; y: number; moved: boolean } | null>(null)
   const grab = useRef<Point | null>(null)
   const shapeStart = useRef<Point | null>(null)
@@ -380,15 +380,24 @@ export function EditorPage({
 
   function onPointerDown(event: React.PointerEvent<SVGSVGElement>) {
     if (!svgRef.current) return
-    if (event.button === 2) {
-      event.preventDefault()
-      if (tool === 'zone' || tool === 'pipe' || tool === 'drip') finishDraft()
-      return
-    }
     const raw = worldPoint(event, svgRef.current, view)
     const hit = resolveBoardHit(readHit(event.target), raw)
+    if (event.button === 2) {
+      event.preventDefault()
+      event.currentTarget.setPointerCapture(event.pointerId)
+      pan.current = { x: event.clientX, y: event.clientY, view, button: 2, hit, moved: false }
+      return
+    }
     if ((tool === 'zone' || tool === 'pipe' || tool === 'drip') && (hit.kind === 'draft-ok' || hit.kind === 'draft-close')) {
       finishDraft()
+      return
+    }
+    if (hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc') {
+      remember()
+      event.currentTarget.setPointerCapture(event.pointerId)
+      drag.current = hit
+      click.current = { hit, x: event.clientX, y: event.clientY, moved: false }
+      setSelection({ kind: 'sprinkler', id: hit.id })
       return
     }
     if (tool === 'pan' || event.button === 1) {
@@ -396,7 +405,7 @@ export function EditorPage({
         setSelection({ kind: 'sprinkler', id: hit.id })
       }
       event.currentTarget.setPointerCapture(event.pointerId)
-      pan.current = { x: event.clientX, y: event.clientY, view }
+      pan.current = { x: event.clientX, y: event.clientY, view, button: event.button, hit, moved: true }
       return
     }
     click.current = { hit, x: event.clientX, y: event.clientY, moved: false }
@@ -494,10 +503,15 @@ export function EditorPage({
   function onPointerMove(event: React.PointerEvent<SVGSVGElement>) {
     if (!svgRef.current) return
     if (pan.current) {
+      const gesture = pan.current
+      if (gesture.button === 2 && !gesture.moved) {
+        if (Math.abs(event.clientX - gesture.x) <= 3 && Math.abs(event.clientY - gesture.y) <= 3) return
+        gesture.moved = true
+      }
       setView({
-        ...pan.current.view,
-        x: pan.current.view.x + event.clientX - pan.current.x,
-        y: pan.current.view.y + event.clientY - pan.current.y,
+        ...gesture.view,
+        x: gesture.view.x + event.clientX - gesture.x,
+        y: gesture.view.y + event.clientY - gesture.y,
       })
       return
     }
@@ -540,10 +554,16 @@ export function EditorPage({
 
   function onPointerUp(event: React.PointerEvent<SVGSVGElement>) {
     if (pan.current) {
+      const gesture = pan.current
       pan.current = null
       drag.current = null
       click.current = null
       grab.current = null
+      if (gesture.button === 2 && !gesture.moved) {
+        const drawing = (tool === 'zone' || tool === 'pipe' || tool === 'drip') && draftRef.current.length > 0
+        if (drawing) finishDraft()
+        else setSelection(selectionFromHit(gesture.hit))
+      }
       return
     }
     if (shapeStart.current && (tool === 'rect' || tool === 'circle')) {
@@ -820,8 +840,9 @@ export function EditorPage({
       <aside className="ws-tools">
         {step === 'draw' && (
           <>
-            <button className={tool === 'select' ? 'tool active' : 'tool'} onClick={() => { setTool('select'); setDraftPoints([]) }}>Выбор</button>
-            <button className={tool === 'pan' ? 'tool active' : 'tool'} onClick={() => setTool('pan')}>Рука</button>
+            <button className={tool === 'select' ? 'tool active' : 'tool'} title="ПКМ тоже выбирает" onClick={() => { setTool('select'); setDraftPoints([]) }}>Выбор</button>
+            <button className={tool === 'pan' ? 'tool active' : 'tool'} title="ПКМ + перетаскивание — рука" onClick={() => setTool('pan')}>Рука</button>
+            <p className="hint">ПКМ — выбор. Потянуть ПКМ — сдвинуть лист.</p>
             <button className={tool === 'zone' ? 'tool active' : 'tool'} onClick={() => { setTool('zone'); setDraftPoints([]) }}>Полигон</button>
             <button className={tool === 'rect' ? 'tool active' : 'tool'} onClick={() => { setTool('rect'); setDraftPoints([]) }}>Прямоугольник</button>
             <button className={tool === 'circle' ? 'tool active' : 'tool'} onClick={() => { setTool('circle'); setDraftPoints([]) }}>Круг</button>
@@ -874,8 +895,9 @@ export function EditorPage({
         )}
         {step === 'irrig' && (
           <>
-            <button className={tool === 'select' ? 'tool active' : 'tool'} onClick={() => setTool('select')}>Выбор</button>
-            <button className={tool === 'pan' ? 'tool active' : 'tool'} onClick={() => setTool('pan')}>Рука</button>
+            <button className={tool === 'select' ? 'tool active' : 'tool'} title="ПКМ тоже выбирает" onClick={() => setTool('select')}>Выбор</button>
+            <button className={tool === 'pan' ? 'tool active' : 'tool'} title="ПКМ + перетаскивание — рука" onClick={() => setTool('pan')}>Рука</button>
+            <p className="hint">ПКМ — выбор. Потянуть ПКМ — сдвинуть лист.</p>
             <button className={tool === 'source' ? 'tool active' : 'tool'} onClick={() => setTool('source')}>Источник</button>
             <button className={tool === 'sprinkler' ? 'tool active' : 'tool'} onClick={() => setTool('sprinkler')}>Дождеватель</button>
             <button className={tool === 'pipe' ? 'tool active' : 'tool'} onClick={() => { setTool('pipe'); setDraftPoints([]) }}>Труба</button>
@@ -902,9 +924,9 @@ export function EditorPage({
         )}
         {step === 'layout' && (
           <>
-            <button className={tool === 'select' ? 'tool active' : 'tool'} onClick={() => setTool('select')}>Выбор</button>
-            <button className={tool === 'pan' ? 'tool active' : 'tool'} onClick={() => setTool('pan')}>Рука</button>
-            <p className="hint">Клик по дождевателю или зелёному сектору — ручки на дуге. Листы печати следующим заходом.</p>
+            <button className={tool === 'select' ? 'tool active' : 'tool'} title="ПКМ тоже выбирает" onClick={() => setTool('select')}>Выбор</button>
+            <button className={tool === 'pan' ? 'tool active' : 'tool'} title="ПКМ + перетаскивание — рука" onClick={() => setTool('pan')}>Рука</button>
+            <p className="hint">ПКМ — выбор. Потянуть ПКМ — сдвинуть лист. Клик по дождевателю — ручки на дуге.</p>
           </>
         )}
         {step === 'spec' && (
@@ -932,11 +954,14 @@ export function EditorPage({
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
-          onFinishDraft={finishDraft}
-          onContextMenu={(event) => {
-            event.preventDefault()
-            if (tool === 'zone' || tool === 'pipe' || tool === 'drip') finishDraft()
+          onPointerCancel={() => {
+            pan.current = null
+            drag.current = null
+            click.current = null
+            grab.current = null
           }}
+          onFinishDraft={finishDraft}
+          onContextMenu={(event) => event.preventDefault()}
         />
         {(tool === 'zone' || tool === 'pipe' || tool === 'drip') && draft.length >= (tool === 'zone' ? 3 : 2) && (
           <button
@@ -1091,8 +1116,8 @@ function cleanDrip(item: Drip, patch: Partial<Drip>): Drip {
 function selectionFromHit(hit: Hit): Sel {
   if (hit.kind === 'source') return { kind: 'source' }
   if (hit.kind === 'zone-point' || hit.kind === 'zone-mid' || hit.kind === 'zone-edge' || hit.kind === 'zone') return { kind: 'zone', id: hit.id }
-  if (hit.kind === 'pipe-point') return { kind: 'pipe', id: hit.id }
-  if (hit.kind === 'drip-point') return { kind: 'drip', id: hit.id }
+  if (hit.kind === 'pipe' || hit.kind === 'pipe-point') return { kind: 'pipe', id: hit.id }
+  if (hit.kind === 'drip' || hit.kind === 'drip-point') return { kind: 'drip', id: hit.id }
   if (hit.kind === 'sprinkler' || hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc') return { kind: 'sprinkler', id: hit.id }
   if (hit.kind === 'valve') return { kind: 'valve', id: hit.id }
   return null

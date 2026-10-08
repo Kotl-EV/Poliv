@@ -88,6 +88,7 @@ export const Board = forwardRef<SVGSVGElement, {
   onPointerDown: (event: PointerEvent<SVGSVGElement>) => void
   onPointerMove: (event: PointerEvent<SVGSVGElement>) => void
   onPointerUp: (event: PointerEvent<SVGSVGElement>) => void
+  onPointerCancel?: (event: PointerEvent<SVGSVGElement>) => void
   onFinishDraft?: () => void
   onContextMenu?: (event: MouseEvent<SVGSVGElement>) => void
 }>(function Board(props, ref) {
@@ -104,6 +105,7 @@ export const Board = forwardRef<SVGSVGElement, {
       onPointerDown={props.onPointerDown}
       onPointerMove={props.onPointerMove}
       onPointerUp={props.onPointerUp}
+      onPointerCancel={props.onPointerCancel}
       onContextMenu={props.onContextMenu}
     >
       <defs>
