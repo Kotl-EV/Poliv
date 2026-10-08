@@ -1,3 +1,4 @@
+import { DEFAULT_PPM, DEFAULT_SHEET_M, surfaceOf } from './landscape.ts'
 import { nozzleById } from './nozzles.ts'
 import { DEFAULT_SERIES, seriesById } from './pipes.ts'
 import type { Climate, Doc, Drip, Pipe, Point, Slope, Soil, Source, Sprinkler, Trench, Valve, Zone, ZoneKind } from './types.ts'
@@ -7,8 +8,11 @@ export const SNAP_PX = 14
 export function emptyDoc(): Doc {
   return {
     version: 1,
-    pxPerMeter: null,
+    pxPerMeter: DEFAULT_PPM,
     pipeSeries: DEFAULT_SERIES,
+    sheetM: { ...DEFAULT_SHEET_M },
+    gridOn: true,
+    snapGrid: true,
     zones: [],
     sprinklers: [],
     pipes: [],
@@ -59,11 +63,12 @@ function points(value: unknown, min: number, max: number): Point[] | null {
   return out
 }
 
-const KINDS = new Set<ZoneKind>(['lawn', 'bed', 'path'])
+const KINDS = new Set<ZoneKind>(['lawn', 'bed', 'shrub', 'path', 'concrete', 'water', 'building'])
 
 export function defaultDose(kind: ZoneKind): number {
-  if (kind === 'bed') return 8
-  if (kind === 'path') return 0
+  const wet = surfaceOf(kind).wet
+  if (wet === 'drip') return 8
+  if (wet === 'none') return 0
   return 6
 }
 
@@ -132,11 +137,14 @@ export function parseDoc(value: unknown): Doc | null {
     const dose = num(item.doseMm)
     const doseMm = dose === null ? defaultDose(item.kind) : dose
     if (doseMm < 0 || doseMm > 40) return null
+    const bends = parseBends(item.bends, pts.length)
+    if (item.bends !== undefined && !bends) return null
     zones.push({
       id,
       name,
       kind: item.kind,
       points: pts,
+      ...(bends ? { bends } : {}),
       doseMm,
       soil: asSoil(item.soil),
       slope: asSlope(item.slope),
@@ -194,7 +202,53 @@ export function parseDoc(value: unknown): Doc | null {
   const trench = parseTrench(raw.trench)
   if (!trench) return null
 
-  return { version: 1, pxPerMeter: px, pipeSeries, zones, sprinklers, pipes, valves, drips, source, trench }
+  const sheetM = parseSheet(raw.sheetM)
+  if (raw.sheetM !== undefined && !sheetM) return null
+  const gridOn = raw.gridOn === undefined ? true : raw.gridOn === true
+  const snapGrid = raw.snapGrid === undefined ? true : raw.snapGrid === true
+  if (raw.gridOn !== undefined && typeof raw.gridOn !== 'boolean') return null
+  if (raw.snapGrid !== undefined && typeof raw.snapGrid !== 'boolean') return null
+
+  return {
+    version: 1,
+    pxPerMeter: px,
+    pipeSeries,
+    ...(sheetM ? { sheetM } : {}),
+    gridOn,
+    snapGrid,
+    zones,
+    sprinklers,
+    pipes,
+    valves,
+    drips,
+    source,
+    trench,
+  }
+}
+
+function parseSheet(value: unknown): { w: number; h: number } | null {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'object') return null
+  const w = num((value as { w: number }).w)
+  const h = num((value as { h: number }).h)
+  if (w === null || h === null || w < 10 || w > 2000 || h < 10 || h > 2000) return null
+  return { w, h }
+}
+
+function parseBends(value: unknown, count: number): (Point | null)[] | null {
+  if (value === undefined) return null
+  if (!Array.isArray(value) || value.length !== count) return null
+  const out: (Point | null)[] = []
+  for (const item of value) {
+    if (item === null) {
+      out.push(null)
+      continue
+    }
+    const p = point(item)
+    if (!p) return null
+    out.push(p)
+  }
+  return out
 }
 
 function parseValves(value: unknown): Valve[] | null {

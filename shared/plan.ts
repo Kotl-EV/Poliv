@@ -1,7 +1,8 @@
 import { SNAP_PX, defaultDose, emptyDoc } from './doc.ts'
 import { dist, pointInPolygon, polygonAreaPx } from './geom.ts'
+import { isDripKind, isObstacleKind, isSprayKind, isWetKind } from './landscape.ts'
 import { nozzleById } from './nozzles.ts'
-import type { Doc, Point, Zone } from './types.ts'
+import type { Doc, Point } from './types.ts'
 
 export type Rgb = [number, number, number]
 export type InkRole = 'structure' | 'hatch' | 'plant' | 'bed' | 'grid' | 'stipple'
@@ -523,7 +524,7 @@ export function layoutIrrigation(doc: Doc): Doc | null {
   const ppm = doc.pxPerMeter
   const source = doc.source
   if (!(ppm > 0) || !source) return null
-  const irrigable = doc.zones.filter((zone) => (zone.kind === 'lawn' || zone.kind === 'bed') && zone.points.length >= 3)
+  const irrigable = doc.zones.filter((zone) => isWetKind(zone.kind) && zone.points.length >= 3)
   if (irrigable.length === 0) return null
 
   const cellM = Math.max(0.5, (SNAP_PX + 2) / ppm)
@@ -553,8 +554,6 @@ export function layoutIrrigation(doc: Doc): Doc | null {
     const r = Math.floor(key / cols)
     return { x: minX + (c + 0.5) * cellPx, y: minY + (r + 0.5) * cellPx }
   }
-  const inKind = (point: Point, kind: Zone['kind']) => doc.zones.some((zone) => zone.kind === kind && zone.points.length >= 3 && pointInPolygon(point, zone.points))
-
   const lawnKeys: number[] = []
   const allowed = new Set<number>()
   const hull = convexHull(pts)
@@ -562,9 +561,9 @@ export function layoutIrrigation(doc: Doc): Doc | null {
     for (let c = 0; c < cols; c++) {
       const key = keyOf(c, r)
       const point = center(key)
-      const lawn = inKind(point, 'lawn')
-      const bed = inKind(point, 'bed')
-      const path = inKind(point, 'path')
+      const lawn = doc.zones.some((zone) => isSprayKind(zone.kind) && zone.points.length >= 3 && pointInPolygon(point, zone.points))
+      const bed = doc.zones.some((zone) => isDripKind(zone.kind) && zone.points.length >= 3 && pointInPolygon(point, zone.points))
+      const path = doc.zones.some((zone) => isObstacleKind(zone.kind) && zone.points.length >= 3 && pointInPolygon(point, zone.points))
       if (lawn && !bed && !path) lawnKeys.push(key)
       if (lawn || bed || path || (hull.length >= 3 && pointInPolygon(point, hull))) allowed.add(key)
     }
@@ -602,7 +601,7 @@ export function layoutIrrigation(doc: Doc): Doc | null {
 
   const drips: { key: number; points: Point[] }[] = []
   for (const zone of doc.zones) {
-    if (zone.kind !== 'bed' || zone.points.length < 3) continue
+    if (!isDripKind(zone.kind) || zone.points.length < 3) continue
     const simplified = simplify(zone.points, 0.7 * ppm)
     if (simplified.length < 2) continue
     const spot = nearestKey(centroid(simplified), allowed, center)

@@ -3,7 +3,18 @@ import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 import { analyze } from '@shared/analyze.ts'
 import { asClimate, asSlope, asSoil, defaultDose, emptyDoc, SNAP_PX } from '@shared/doc.ts'
 import { exampleDoc } from '@shared/example.ts'
-import { dist, withinScreen } from '@shared/geom.ts'
+import {
+  closestOnSegment,
+  controlFromHandle,
+  dist,
+  midpoint,
+  polygonAreaPx,
+  ringLength,
+  rotateAround,
+  snapToGrid,
+  withinScreen,
+} from '@shared/geom.ts'
+import { DEFAULT_PPM, DEFAULT_SHEET_M, isWetKind, SURFACES, surfaceOf } from '@shared/landscape.ts'
 import { nozzleById, NOZZLES } from '@shared/nozzles.ts'
 import { SERIES, type PipeSeriesId } from '@shared/pipes.ts'
 import type { Doc, Drip, Point, Source, Sprinkler, Valve, Zone, ZoneKind } from '@shared/types.ts'
@@ -16,39 +27,20 @@ import { Spec } from '../editor/Spec'
 configurePdfWorker(workerUrl)
 
 type Tool = 'select' | 'pan' | 'scale' | 'zone' | 'sprinkler' | 'pipe' | 'valve' | 'drip' | 'source'
-type Step = 'sheet' | 'zones' | 'water' | 'spec'
+type Step = 'draw' | 'irrig' | 'layout' | 'spec'
 type Sel = { kind: 'sprinkler' | 'zone' | 'pipe' | 'source' | 'valve' | 'drip'; id?: string } | null
 
-const STEPS: { id: Step; label: string }[] = [
-  { id: 'sheet', label: 'Подложка' },
-  { id: 'zones', label: 'Зоны' },
-  { id: 'water', label: 'Вода' },
-  { id: 'spec', label: 'Спецификация' },
+const TABS: { id: Step; label: string }[] = [
+  { id: 'draw', label: 'Чертёж' },
+  { id: 'irrig', label: 'Полив' },
+  { id: 'layout', label: 'Листы' },
+  { id: 'spec', label: 'Спека' },
 ]
-
-const TOOLS: { id: Tool; label: string }[] = [
-  { id: 'select', label: 'Выбор' },
-  { id: 'pan', label: 'Рука' },
-  { id: 'scale', label: 'Масштаб' },
-  { id: 'zone', label: 'Зона' },
-  { id: 'sprinkler', label: 'Дождеватель' },
-  { id: 'pipe', label: 'Труба' },
-  { id: 'valve', label: 'Клапан' },
-  { id: 'drip', label: 'Капля' },
-  { id: 'source', label: 'Источник' },
-]
-
-const STEP_TOOLS: Record<Step, Tool[]> = {
-  sheet: ['select', 'pan', 'scale'],
-  zones: ['select', 'pan', 'zone'],
-  water: ['select', 'pan', 'source', 'sprinkler', 'pipe', 'valve', 'drip'],
-  spec: [],
-}
 
 const STEP_DEFAULT_TOOL: Record<Step, Tool> = {
-  sheet: 'scale',
-  zones: 'zone',
-  water: 'source',
+  draw: 'zone',
+  irrig: 'source',
+  layout: 'select',
   spec: 'select',
 }
 
@@ -56,9 +48,9 @@ function uid(prefix: string): string {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`
 }
 
-function snapTo(point: Point, targets: Point[]): Point {
+function snapTo(point: Point, targets: Point[], limit: number): Point {
   let best = point
-  let bestDistance = SNAP_PX
+  let bestDistance = limit
   for (const target of targets) {
     const distance = dist(point, target)
     if (distance <= bestDistance) {
@@ -81,8 +73,14 @@ function targetsOf(doc: Doc): Point[] {
 }
 
 function contentSize(doc: Doc, image: { w: number; h: number } | null): { w: number; h: number } {
-  let w = image?.w ?? 1200
-  let h = image?.h ?? 800
+  const ppm = doc.pxPerMeter && doc.pxPerMeter > 0 ? doc.pxPerMeter : DEFAULT_PPM
+  const sheet = doc.sheetM ?? DEFAULT_SHEET_M
+  let w = sheet.w * ppm
+  let h = sheet.h * ppm
+  if (image) {
+    w = Math.max(w, image.w)
+    h = Math.max(h, image.h)
+  }
   for (const point of targetsOf(doc)) {
     w = Math.max(w, point.x + 80)
     h = Math.max(h, point.y + 80)
@@ -103,8 +101,8 @@ export function EditorPage({
 }) {
   const [doc, setDoc] = useState<Doc>(emptyDoc())
   const [name, setName] = useState('Участок')
-  const [step, setStep] = useState<Step>('sheet')
-  const [tool, setTool] = useState<Tool>('select')
+  const [step, setStep] = useState<Step>('draw')
+  const [tool, setTool] = useState<Tool>('zone')
   const [draft, setDraft] = useState<Point[]>([])
   const [hover, setHover] = useState<Point | null>(null)
   const [scalePoints, setScalePoints] = useState<Point[]>([])
@@ -123,14 +121,19 @@ export function EditorPage({
   const docRef = useRef(doc)
   const draftRef = useRef<Point[]>([])
   const past = useRef<Doc[]>([])
+  const future = useRef<Doc[]>([])
   const ready = useRef(false)
   const drag = useRef<Hit | null>(null)
   const pan = useRef<{ x: number; y: number; view: View } | null>(null)
+  const click = useRef<{ hit: Hit; x: number; y: number; moved: boolean } | null>(null)
+  const grab = useRef<Point | null>(null)
+  const didFit = useRef(false)
   docRef.current = doc
   draftRef.current = draft
 
   const analysis = useMemo(() => analyze(doc), [doc])
   const board = contentSize(doc, imageSize)
+  const ppm = doc.pxPerMeter && doc.pxPerMeter > 0 ? doc.pxPerMeter : DEFAULT_PPM
 
   useEffect(() => {
     let cancelled = false
@@ -168,12 +171,19 @@ export function EditorPage({
   }, [doc, name, projectId])
 
   useEffect(() => {
+    if (!loaded || didFit.current) return
+    didFit.current = true
+    const id = window.requestAnimationFrame(() => fitTo(board.w, board.h))
+    return () => window.cancelAnimationFrame(id)
+  }, [loaded, board.w, board.h])
+
+  useEffect(() => {
     const svg = svgRef.current
     if (!svg) return
     const onWheel = (event: WheelEvent) => {
       event.preventDefault()
       const current = view
-      const nextK = Math.min(8, Math.max(0.08, current.k * (event.deltaY < 0 ? 1.1 : 0.9)))
+      const nextK = Math.min(12, Math.max(0.06, current.k * (event.deltaY < 0 ? 1.1 : 0.9)))
       const rect = svg.getBoundingClientRect()
       const sx = event.clientX - rect.left
       const sy = event.clientY - rect.top
@@ -191,8 +201,13 @@ export function EditorPage({
       if (target.matches('input, textarea, select')) return
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
         event.preventDefault()
-        const previous = past.current.pop()
-        if (previous) setDoc(previous)
+        if (event.shiftKey) redo()
+        else undo()
+        return
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') {
+        event.preventDefault()
+        redo()
         return
       }
       if (event.key === 'Escape') {
@@ -213,10 +228,25 @@ export function EditorPage({
   function remember(current = docRef.current) {
     past.current.push(structuredClone(current))
     if (past.current.length > 40) past.current.shift()
+    future.current = []
   }
 
   function commit(next: Doc) {
     remember()
+    setDoc(next)
+  }
+
+  function undo() {
+    const previous = past.current.pop()
+    if (!previous) return
+    future.current.push(structuredClone(docRef.current))
+    setDoc(previous)
+  }
+
+  function redo() {
+    const next = future.current.pop()
+    if (!next) return
+    past.current.push(structuredClone(docRef.current))
     setDoc(next)
   }
 
@@ -235,9 +265,10 @@ export function EditorPage({
     const current = docRef.current
     const points = draftRef.current
     if (tool === 'zone' && points.length >= 3) {
+      const surface = surfaceOf(zoneKind)
       const zone: Zone = {
         id: uid('zone'),
-        name: zoneKind === 'bed' ? 'Клумба' : zoneKind === 'path' ? 'Дорожка' : 'Газон',
+        name: surface.label,
         kind: zoneKind,
         doseMm: defaultDose(zoneKind),
         soil: 'loam',
@@ -277,6 +308,17 @@ export function EditorPage({
     setSelection(null)
   }
 
+  function worldSnap(raw: Point): Point {
+    const current = docRef.current
+    let point = raw
+    if (current.snapGrid !== false) {
+      const pxPerM = view.k * ppm
+      const stepM = pxPerM < 8 ? 5 : pxPerM < 18 ? 1 : 0.5
+      point = snapToGrid(point, stepM * ppm)
+    }
+    return snapTo(point, [...targetsOf(current), ...draftRef.current], 10 / view.k)
+  }
+
   function onPointerDown(event: React.PointerEvent<SVGSVGElement>) {
     if (!svgRef.current) return
     if (event.button === 2) {
@@ -290,23 +332,34 @@ export function EditorPage({
       return
     }
     const raw = worldPoint(event, svgRef.current, view)
-    const hit = tool === 'select' ? readHit(event.target) : { kind: 'board' as const }
-    if (tool === 'select' && (hit.kind === 'sprinkler' || hit.kind === 'source' || hit.kind === 'valve' || hit.kind === 'zone-point' || hit.kind === 'pipe-point' || hit.kind === 'drip-point')) {
-      remember()
-      drag.current = hit
-      setSelection(selectionFromHit(hit))
-      return
-    }
+    const hit = readHit(event.target)
+    click.current = { hit, x: event.clientX, y: event.clientY, moved: false }
+
     if (tool === 'select') {
-      if (hit.kind === 'zone' || hit.kind === 'pipe' || hit.kind === 'sprinkler' || hit.kind === 'valve' || hit.kind === 'drip') setSelection({ kind: hit.kind, id: hit.id })
+      if (hit.kind === 'zone-point' || hit.kind === 'zone-mid' || hit.kind === 'pipe-point' || hit.kind === 'drip-point' || hit.kind === 'sprinkler' || hit.kind === 'source' || hit.kind === 'valve') {
+        remember()
+        drag.current = hit
+        setSelection(selectionFromHit(hit))
+        return
+      }
+      if (hit.kind === 'zone') {
+        remember()
+        drag.current = hit
+        grab.current = raw
+        setSelection({ kind: 'zone', id: hit.id })
+        return
+      }
+      if (hit.kind === 'zone-edge') {
+        setSelection({ kind: 'zone', id: hit.id })
+        return
+      }
+      if (hit.kind === 'pipe' || hit.kind === 'sprinkler' || hit.kind === 'valve' || hit.kind === 'drip') setSelection({ kind: hit.kind, id: hit.id })
       else if (hit.kind === 'source') setSelection({ kind: 'source' })
       else setSelection(null)
       return
     }
-    const snapTargets = tool === 'zone' && draftRef.current.length >= 3
-      ? [...targetsOf(doc), ...draftRef.current.slice(1)]
-      : [...targetsOf(doc), ...draftRef.current]
-    const point = tool === 'scale' ? raw : snapTo(raw, snapTargets)
+
+    const point = tool === 'scale' ? raw : worldSnap(raw)
     if (tool === 'source') {
       commit(withSourcePoint(doc, point))
       setSelection({ kind: 'source' })
@@ -343,7 +396,6 @@ export function EditorPage({
         finishDraft()
         return
       }
-      const hit = readHit(event.target)
       if (hit.kind === 'draft-close' || (tool === 'zone' && nearDraftStart(raw))) {
         finishDraft()
         return
@@ -366,17 +418,44 @@ export function EditorPage({
     }
     const point = worldPoint(event, svgRef.current, view)
     setHover(point)
+    if (click.current && (Math.abs(event.clientX - click.current.x) > 3 || Math.abs(event.clientY - click.current.y) > 3)) {
+      click.current.moved = true
+    }
     const active = drag.current
     if (!active) return
-    setDoc((current) => moveHit(current, active, point))
+    if ((active.kind === 'zone') && grab.current) {
+      const dx = point.x - grab.current.x
+      const dy = point.y - grab.current.y
+      grab.current = point
+      setDoc((current) => ({
+        ...current,
+        zones: current.zones.map((zone) => (zone.id === active.id ? shiftZone(zone, dx, dy) : zone)),
+      }))
+      return
+    }
+    const snapped = doc.snapGrid !== false ? worldSnap(point) : point
+    setDoc((current) => moveHit(current, active, snapped))
   }
 
-  function onPointerUp() {
+  function onPointerUp(event: React.PointerEvent<SVGSVGElement>) {
     const active = drag.current
+    const tap = click.current
     drag.current = null
     pan.current = null
-    if (!active) return
-    setDoc((current) => snapDrag(current, active))
+    click.current = null
+    grab.current = null
+    if (active && tap?.moved) {
+      setDoc((current) => snapDrag(current, active))
+    }
+    if (!tap || tap.moved || tool !== 'select') return
+    if (tap.hit.kind === 'zone-point' && event.detail >= 2 && tap.hit.id) {
+      commit(deleteZoneVertex(docRef.current, tap.hit.id, tap.hit.index))
+      return
+    }
+    if (tap.hit.kind === 'zone-edge' && tap.hit.id) {
+      const raw = svgRef.current ? worldPoint(event, svgRef.current, view) : null
+      if (raw) commit(insertZoneVertex(docRef.current, tap.hit.id, tap.hit.index, worldSnap(raw)))
+    }
   }
 
   function applyScale() {
@@ -390,6 +469,7 @@ export function EditorPage({
     setError('')
     commit({ ...doc, pxPerMeter: pixels / meters })
     setScalePoints([])
+    setTool('zone')
   }
 
   function fit() {
@@ -428,9 +508,9 @@ export function EditorPage({
         fitTo(next.w, next.h)
       })
     }
-    setPlanNote('Подложка поставлена. Задайте масштаб по известному отрезку, затем обведите зоны полива.')
+    setPlanNote('Подложка на листе. Задайте масштаб линейкой по известному отрезку.')
     setStatus('Сохранено')
-    if (!docRef.current.pxPerMeter) setTool('scale')
+    setTool('scale')
   }
 
   async function clearBackground() {
@@ -461,17 +541,17 @@ export function EditorPage({
     setStep(next)
     setDraftPoints([])
     setScalePoints([])
-    setTool(next === 'sheet' && docRef.current.pxPerMeter ? 'pan' : STEP_DEFAULT_TOOL[next])
+    setTool(STEP_DEFAULT_TOOL[next])
   }
 
   function runLayout() {
     const current = docRef.current
     if (!current.pxPerMeter) {
-      setError('Сначала задайте масштаб на подложке')
+      setError('Сначала задайте масштаб')
       return
     }
-    if (!current.zones.some((zone) => zone.kind === 'lawn' || zone.kind === 'bed')) {
-      setError('Обведите хотя бы одну зону полива — газон или клумбу')
+    if (!current.zones.some((zone) => isWetKind(zone.kind))) {
+      setError('Обведите хотя бы одну зону полива — газон, клумбу или кусты')
       return
     }
     if (!current.source) {
@@ -489,94 +569,128 @@ export function EditorPage({
       return
     }
     commit(next)
-    setPlanNote(`Дождевателей: ${next.sprinklers.length}. Клапанов: ${next.valves.length}. Капельных линий: ${next.drips.length}. Схему можно поправить вручную, спецификация справа во вкладке.`)
+    setPlanNote(`Дождевателей: ${next.sprinklers.length}. Клапанов: ${next.valves.length}. Капельных линий: ${next.drips.length}.`)
     setStatus('Сохранено')
     setTool('select')
   }
 
+  function rotateSelected(deg: number) {
+    if (selection?.kind !== 'zone' || !selection.id) return
+    const zone = doc.zones.find((item) => item.id === selection.id)
+    if (!zone) return
+    const origin = {
+      x: zone.points.reduce((sum, point) => sum + point.x, 0) / zone.points.length,
+      y: zone.points.reduce((sum, point) => sum + point.y, 0) / zone.points.length,
+    }
+    commit({
+      ...doc,
+      zones: doc.zones.map((item) => item.id === zone.id ? {
+        ...item,
+        points: item.points.map((point) => rotateAround(point, origin, deg)),
+        bends: item.bends?.map((bend) => (bend ? rotateAround(bend, origin, deg) : null)),
+      } : item),
+    })
+  }
+
   if (!loaded) return <div className="boot">{error || 'Загрузка проекта…'}</div>
 
-  const stepTools = step === 'water' && doc.sprinklers.length === 0 && doc.pipes.length === 0 && doc.drips.length === 0
-    ? ['select' as const, 'pan' as const, 'source' as const]
-    : STEP_TOOLS[step]
+  const selectedZone = selection?.kind === 'zone' ? doc.zones.find((item) => item.id === selection.id) : undefined
+  const hoverLen = draft.length > 0 && hover ? dist(draft[draft.length - 1], hover) / ppm : 0
+  const zoneArea = selectedZone ? polygonAreaPx(selectedZone.points) / (ppm * ppm) : 0
+  const zonePerim = selectedZone ? ringLength(selectedZone.points, selectedZone.bends) / ppm : 0
 
   return (
-    <main className={step === 'spec' ? 'editor step-spec' : 'editor'}>
-      <header className="top">
+    <main className={step === 'spec' ? 'workshop tab-spec' : 'workshop'}>
+      <header className="ws-head">
         <button className="mark link" onClick={() => go('/projects')}>Полив</button>
+        <nav className="ws-tabs">
+          {TABS.map((item) => (
+            <button key={item.id} className={step === item.id ? 'tab active' : 'tab'} onClick={() => openStep(item.id)}>
+              {item.label}
+            </button>
+          ))}
+        </nav>
         <input className="name" value={name} onChange={(event) => setName(event.target.value)} aria-label="Название проекта" />
+        <button className={doc.gridOn !== false ? 'icon on' : 'icon'} title="Сетка" onClick={() => setDoc((current) => ({ ...current, gridOn: current.gridOn === false }))}>#</button>
+        <button className={doc.snapGrid !== false ? 'icon on' : 'icon'} title="Привязка к сетке" onClick={() => setDoc((current) => ({ ...current, snapGrid: current.snapGrid === false }))}>▦</button>
+        <button className="icon" title="Отменить" onClick={undo}>↶</button>
+        <button className="icon" title="Повторить" onClick={redo}>↷</button>
+        <button className="icon" title="Вписать" onClick={fit}>▣</button>
         <span className="status">{status}</span>
         <span className="who">{user.name}</span>
         <button className="ghost" onClick={logout}>Выйти</button>
       </header>
-      <nav className="tools">
-        {STEPS.map((item) => (
-          <button key={item.id} className={step === item.id ? 'tool step active' : 'tool step'} onClick={() => openStep(item.id)}>
-            {item.label}
-          </button>
-        ))}
-        {stepTools.length > 0 && <div className="tool-gap" />}
-        {TOOLS.filter((item) => stepTools.includes(item.id)).map((item) => (
-          <button key={item.id} className={tool === item.id ? 'tool active' : 'tool'} onClick={() => { setTool(item.id); setDraftPoints([]) }}>
-            {item.label}
-          </button>
-        ))}
-        {(step === 'water' || step === 'spec') && (
-          <select
-            value={doc.pipeSeries}
-            aria-label="Ряд труб"
-            onChange={(event) => setDoc((current) => ({ ...current, pipeSeries: event.target.value as PipeSeriesId }))}
-          >
-            {SERIES.map((series) => (
-              <option key={series.id} value={series.id}>{series.name}</option>
+      <aside className="ws-tools">
+        {step === 'draw' && (
+          <>
+            <button className={tool === 'select' ? 'tool active' : 'tool'} onClick={() => { setTool('select'); setDraftPoints([]) }}>Выбор</button>
+            <button className={tool === 'pan' ? 'tool active' : 'tool'} onClick={() => setTool('pan')}>Рука</button>
+            <button className={tool === 'zone' ? 'tool active' : 'tool'} onClick={() => { setTool('zone'); setDraftPoints([]) }}>Полигон</button>
+            <div className="tool-gap" />
+            <p className="tool-label">Поверхность</p>
+            {SURFACES.map((surface) => (
+              <button
+                key={surface.id}
+                className={zoneKind === surface.id ? 'swatch active' : 'swatch'}
+                onClick={() => { setZoneKind(surface.id); setTool('zone') }}
+              >
+                <i className={`chip ${surface.pattern}`} />
+                {surface.label}
+              </button>
             ))}
-          </select>
+            <div className="tool-gap" />
+            <button className={tool === 'scale' ? 'tool active' : 'tool'} onClick={() => { setTool('scale'); setScalePoints([]) }}>Линейка</button>
+            <label className="tool file">
+              Подложка
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.pdf"
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  if (file) onBackground(file).catch((err: Error) => setError(err.message))
+                  event.target.value = ''
+                }}
+              />
+            </label>
+            {backgroundUrl && <button className="tool" onClick={() => clearBackground().catch((err: Error) => setError(err.message))}>Убрать подложку</button>}
+            <button className="tool" onClick={loadExample}>Пример</button>
+          </>
         )}
-        {step === 'water' && (
-          <button className="primary" onClick={runLayout}>Рассчитать схему</button>
+        {step === 'irrig' && (
+          <>
+            <button className={tool === 'select' ? 'tool active' : 'tool'} onClick={() => setTool('select')}>Выбор</button>
+            <button className={tool === 'pan' ? 'tool active' : 'tool'} onClick={() => setTool('pan')}>Рука</button>
+            <button className={tool === 'source' ? 'tool active' : 'tool'} onClick={() => setTool('source')}>Источник</button>
+            <button className={tool === 'sprinkler' ? 'tool active' : 'tool'} onClick={() => setTool('sprinkler')}>Дождеватель</button>
+            <button className={tool === 'pipe' ? 'tool active' : 'tool'} onClick={() => { setTool('pipe'); setDraftPoints([]) }}>Труба</button>
+            <button className={tool === 'valve' ? 'tool active' : 'tool'} onClick={() => setTool('valve')}>Клапан</button>
+            <button className={tool === 'drip' ? 'tool active' : 'tool'} onClick={() => { setTool('drip'); setDraftPoints([]) }}>Капля</button>
+            {tool === 'sprinkler' && (
+              <select value={nozzleId} onChange={(event) => setNozzleId(event.target.value)} aria-label="Форсунка">
+                {NOZZLES.map((nozzle) => (
+                  <option key={nozzle.id} value={nozzle.id}>{nozzle.name}</option>
+                ))}
+              </select>
+            )}
+            <select
+              value={doc.pipeSeries}
+              aria-label="Ряд труб"
+              onChange={(event) => setDoc((current) => ({ ...current, pipeSeries: event.target.value as PipeSeriesId }))}
+            >
+              {SERIES.map((series) => (
+                <option key={series.id} value={series.id}>{series.name}</option>
+              ))}
+            </select>
+            <button className="primary" onClick={runLayout}>Рассчитать схему</button>
+          </>
         )}
-        {step === 'sheet' && (
-          <button className="tool" onClick={() => openStep('zones')}>Дальше: зоны</button>
+        {step === 'layout' && (
+          <p className="hint">Листы печати: рамка, слои и экспорт. Пока смотрите чертёж здесь, печать следующим заходом.</p>
         )}
-        {step === 'zones' && (
-          <button className="tool" onClick={() => openStep('water')}>Дальше: вода</button>
+        {step === 'spec' && (
+          <p className="hint">Спецификация справа. Вернитесь в «Полив», если нужно пересчитать схему.</p>
         )}
-        {tool === 'zone' && (
-          <select value={zoneKind} onChange={(event) => setZoneKind(event.target.value as ZoneKind)} aria-label="Тип зоны">
-            <option value="lawn">Газон</option>
-            <option value="bed">Клумба</option>
-            <option value="path">Дорожка</option>
-          </select>
-        )}
-        {tool === 'sprinkler' && (
-          <select value={nozzleId} onChange={(event) => setNozzleId(event.target.value)} aria-label="Форсунка">
-            {NOZZLES.map((nozzle) => (
-              <option key={nozzle.id} value={nozzle.id}>{nozzle.name}</option>
-            ))}
-          </select>
-        )}
-        {tool === 'zone' && (
-          <button className="primary" onClick={finishDraft} disabled={draft.length < 3}>Замкнуть</button>
-        )}
-        {(tool === 'pipe' || tool === 'drip') && draft.length >= 2 && (
-          <button className="primary" onClick={finishDraft}>Готово</button>
-        )}
-        {step !== 'spec' && <button className="tool" onClick={fit}>Вписать</button>}
-        {step !== 'spec' && <button className="tool" onClick={loadExample}>Пример</button>}
-        {step === 'sheet' && <label className="tool file">
-          Подложка
-          <input
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.pdf"
-            onChange={(event) => {
-              const file = event.target.files?.[0]
-              if (file) onBackground(file).catch((err: Error) => setError(err.message))
-              event.target.value = ''
-            }}
-          />
-        </label>}
-        {step === 'sheet' && backgroundUrl && <button className="tool" onClick={() => clearBackground().catch((err: Error) => setError(err.message))}>Убрать подложку</button>}
-      </nav>
+      </aside>
       <div className="stage">
         <Board
           ref={svgRef}
@@ -587,7 +701,8 @@ export function EditorPage({
           backgroundUrl={backgroundUrl}
           imageSize={imageSize}
           draft={draft}
-          hover={tool === 'zone' || tool === 'pipe' || tool === 'drip' ? hover : null}
+          draftKind={zoneKind}
+          hover={tool === 'zone' || tool === 'pipe' || tool === 'drip' || tool === 'scale' ? hover : null}
           scalePoints={scalePoints}
           selectionId={selection?.id ?? null}
           selectionKind={selection?.kind ?? null}
@@ -599,60 +714,77 @@ export function EditorPage({
             if (tool === 'zone' || tool === 'pipe' || tool === 'drip') finishDraft()
           }}
         />
-        {tool === 'zone' && draft.length > 0 && (
-          <div className="draft-bar">
-            <span>Точек: {draft.length}</span>
-            <button className="primary" onClick={finishDraft} disabled={draft.length < 3}>Замкнуть контур</button>
+        {(tool === 'zone' && draft.length > 0) && (
+          <div className="ops">
+            <span>Точек {draft.length}</span>
+            <button className="primary" onClick={finishDraft} disabled={draft.length < 3}>OK</button>
+            <button className="tool" onClick={() => setDraftPoints([])}>Отмена</button>
           </div>
         )}
-      </div>
-      <div className="side">
-        {error && <p className="error">{error}</p>}
         {tool === 'scale' && (
-          <div className="props">
-            <h2>Масштаб</h2>
-            <p>{scalePoints.length < 2 ? 'Отметьте две точки известного отрезка.' : `На чертеже ${Math.round(scalePx)} px.`}</p>
-            <label>
-              Длина, м
+          <div className="ops">
+            <span>{scalePoints.length < 2 ? 'Две точки известного отрезка' : `${Math.round(scalePx)} px`}</span>
+            <label className="inline">
+              м
               <input value={scaleMeters} onChange={(event) => setScaleMeters(event.target.value)} />
             </label>
-            <button className="primary" onClick={applyScale} disabled={scalePoints.length < 2}>Применить</button>
-            {doc.pxPerMeter && <p>Сейчас {doc.pxPerMeter.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} px = 1 м</p>}
+            <button className="primary" onClick={applyScale} disabled={scalePoints.length < 2}>OK</button>
           </div>
         )}
-        {tool === 'zone' && (
-          <div className="props">
-            <h2>Контур зоны</h2>
-            <p>Точек: {draft.length}. С трёх точек контур можно замкнуть.</p>
-            <button className="primary" onClick={finishDraft} disabled={draft.length < 3}>Замкнуть</button>
-            {draft.length > 0 && <button className="tool" onClick={() => setDraftPoints([])}>Сбросить точки</button>}
+        {selectedZone && draft.length === 0 && (
+          <div className="ops">
+            {SURFACES.map((surface) => (
+              <button
+                key={surface.id}
+                className={selectedZone.kind === surface.id ? 'swatch active' : 'swatch'}
+                onClick={() => setDoc((current) => ({
+                  ...current,
+                  zones: current.zones.map((zone) => zone.id === selectedZone.id ? { ...zone, kind: surface.id, name: surface.label, doseMm: defaultDose(surface.id) } : zone),
+                }))}
+              >
+                {surface.label}
+              </button>
+            ))}
+            <button className="tool" onClick={() => rotateSelected(90)}>↻ 90°</button>
+            <button className="tool" onClick={removeSelection}>Удалить</button>
           </div>
         )}
-        {planNote && <p className="hint">{planNote}</p>}
-        <p className="hint">{stepHint(step, doc, tool)}</p>
-        <Spec
-          doc={doc}
-          analysis={analysis}
-          selection={selection}
-          onZone={(id, patch) => setDoc((current) => ({ ...current, zones: current.zones.map((zone) => (zone.id === id ? cleanZone(zone, patch) : zone)) }))}
-          onSprinkler={(id, patch) => setDoc((current) => ({
-            ...current,
-            sprinklers: current.sprinklers.map((item) => (item.id === id ? cleanSprinkler(item, patch) : item)),
-          }))}
-          onSource={(patch) => setDoc((current) => (current.source ? { ...current, source: cleanSource(current.source, patch) } : current))}
-          onValve={(id, patch) => setDoc((current) => ({
-            ...current,
-            valves: current.valves.map((item) => (item.id === id ? { ...item, name: patch.name?.trim() ? patch.name : item.name } : item)),
-          }))}
-          onDrip={(id, patch) => setDoc((current) => ({
-            ...current,
-            drips: current.drips.map((item) => (item.id === id ? cleanDrip(item, patch) : item)),
-          }))}
-          onSeries={(id) => setDoc((current) => ({ ...current, pipeSeries: id }))}
-          onTrench={(patch) => setDoc((current) => ({ ...current, trench: cleanTrench(current.trench, patch) }))}
-          onDelete={removeSelection}
-        />
       </div>
+      {step === 'spec' && (
+        <div className="side">
+          <Spec
+            doc={doc}
+            analysis={analysis}
+            selection={selection}
+            onZone={(id, patch) => setDoc((current) => ({ ...current, zones: current.zones.map((zone) => (zone.id === id ? cleanZone(zone, patch) : zone)) }))}
+            onSprinkler={(id, patch) => setDoc((current) => ({
+              ...current,
+              sprinklers: current.sprinklers.map((item) => (item.id === id ? cleanSprinkler(item, patch) : item)),
+            }))}
+            onSource={(patch) => setDoc((current) => (current.source ? { ...current, source: cleanSource(current.source, patch) } : current))}
+            onValve={(id, patch) => setDoc((current) => ({
+              ...current,
+              valves: current.valves.map((item) => (item.id === id ? { ...item, name: patch.name?.trim() ? patch.name : item.name } : item)),
+            }))}
+            onDrip={(id, patch) => setDoc((current) => ({
+              ...current,
+              drips: current.drips.map((item) => (item.id === id ? cleanDrip(item, patch) : item)),
+            }))}
+            onSeries={(id) => setDoc((current) => ({ ...current, pipeSeries: id }))}
+            onTrench={(patch) => setDoc((current) => ({ ...current, trench: cleanTrench(current.trench, patch) }))}
+            onDelete={removeSelection}
+          />
+        </div>
+      )}
+      <footer className="ws-status">
+        {error && <span className="error">{error}</span>}
+        {planNote && <span>{planNote}</span>}
+        {hover && <span>X {(hover.x / ppm).toFixed(2)} м · Y {(hover.y / ppm).toFixed(2)} м</span>}
+        {draft.length > 0 && hoverLen > 0 && <span>Сторона {hoverLen.toFixed(2)} м</span>}
+        {selectedZone && <span>{surfaceOf(selectedZone.kind).label}: {zoneArea.toFixed(1)} м² · периметр {zonePerim.toFixed(1)} м</span>}
+        {tool === 'zone' && draft.length === 0 && <span>Полигон: клики по углам, OK / Enter / клик по первому квадрату — замкнуть. Сетка и привязка сверху.</span>}
+        {step === 'irrig' && !doc.source && <span>Поставьте источник воды, затем «Рассчитать схему».</span>}
+      </footer>
     </main>
   )
 }
@@ -705,7 +837,7 @@ function cleanDrip(item: Drip, patch: Partial<Drip>): Drip {
 
 function selectionFromHit(hit: Hit): Sel {
   if (hit.kind === 'source') return { kind: 'source' }
-  if (hit.kind === 'zone-point') return { kind: 'zone', id: hit.id }
+  if (hit.kind === 'zone-point' || hit.kind === 'zone-mid' || hit.kind === 'zone-edge' || hit.kind === 'zone') return { kind: 'zone', id: hit.id }
   if (hit.kind === 'pipe-point') return { kind: 'pipe', id: hit.id }
   if (hit.kind === 'drip-point') return { kind: 'drip', id: hit.id }
   if (hit.kind === 'sprinkler' || hit.kind === 'valve') return { kind: hit.kind, id: hit.id }
@@ -721,21 +853,6 @@ function cleanSprinkler(item: Sprinkler, patch: Partial<Sprinkler>): Sprinkler {
   return next
 }
 
-function stepHint(step: Step, doc: Doc, tool: Tool): string {
-  if (step === 'sheet') {
-    if (!doc.pxPerMeter) return 'Загрузите чертёж (JPEG, PNG или PDF) и задайте масштаб двумя точками известного отрезка. Схема с картинки сама не читается.'
-    return 'Масштаб задан. Дальше обведите зоны, которые нужно поливать.'
-  }
-  if (step === 'zones') return tool === 'zone'
-    ? 'Ставьте точки по краю газона. С третьей точки появляется зелёный кружок на старте — кликните его, либо кнопку «Замкнуть контур», либо правую кнопку, либо Enter.'
-    : 'Обведите области полива. Газон — веера, клумба — капля. Дорожку можно обвести, чтобы по ней не ставились дождеватели.'
-  if (step === 'water') {
-    if (!doc.source) return 'Поставьте точку, откуда приходит вода. Затем нажмите «Рассчитать схему» — трубы, дождеватели и клапаны появятся сами.'
-    return 'Источник стоит. «Рассчитать схему» расставит дождеватели, каплю, трубы и клапаны по вашим зонам.'
-  }
-  return 'Длины, диаметры, потери напора и осадки по зонам. Если схема не подошла — вернитесь на «Вода» и посчитайте снова или поправьте вручную.'
-}
-
 function snapDrag(doc: Doc, hit: Hit): Doc {
   const points = doc.pipes.flatMap((pipe) => pipe.points)
   if (points.length === 0) return doc
@@ -744,16 +861,16 @@ function snapDrag(doc: Doc, hit: Hit): Doc {
       ...doc,
       sprinklers: doc.sprinklers.map((item) => {
         if (item.id !== hit.id) return item
-        const next = snapTo({ x: item.x, y: item.y }, points)
+        const next = snapTo({ x: item.x, y: item.y }, points, SNAP_PX)
         return { ...item, x: next.x, y: next.y }
       }),
     }
   }
-  if (hit.kind === 'source' && doc.source) return withSourcePoint(doc, snapTo(doc.source, points))
+  if (hit.kind === 'source' && doc.source) return withSourcePoint(doc, snapTo(doc.source, points, SNAP_PX))
   if (hit.kind === 'valve') {
     return {
       ...doc,
-      valves: doc.valves.map((item) => (item.id === hit.id ? { ...item, ...snapTo(item, points) } : item)),
+      valves: doc.valves.map((item) => (item.id === hit.id ? { ...item, ...snapTo(item, points, SNAP_PX) } : item)),
     }
   }
   return doc
@@ -779,6 +896,21 @@ function moveHit(doc: Doc, hit: Hit, point: Point): Doc {
       zones: doc.zones.map((zone) => zone.id === hit.id ? { ...zone, points: zone.points.map((item, index) => (index === hit.index ? point : item)) } : zone),
     }
   }
+  if (hit.kind === 'zone-mid') {
+    return {
+      ...doc,
+      zones: doc.zones.map((zone) => {
+        if (zone.id !== hit.id) return zone
+        const a = zone.points[hit.index]
+        const b = zone.points[(hit.index + 1) % zone.points.length]
+        const straight = midpoint(a, b)
+        const bends = zone.bends ? [...zone.bends] : zone.points.map(() => null)
+        while (bends.length < zone.points.length) bends.push(null)
+        bends[hit.index] = dist(point, straight) < 4 ? null : controlFromHandle(a, b, point)
+        return { ...zone, bends }
+      }),
+    }
+  }
   if (hit.kind === 'pipe-point') {
     return {
       ...doc,
@@ -786,6 +918,46 @@ function moveHit(doc: Doc, hit: Hit, point: Point): Doc {
     }
   }
   return doc
+}
+
+function shiftZone(zone: Zone, dx: number, dy: number): Zone {
+  const move = (point: Point) => ({ x: point.x + dx, y: point.y + dy })
+  return {
+    ...zone,
+    points: zone.points.map(move),
+    bends: zone.bends?.map((bend) => (bend ? move(bend) : null)),
+  }
+}
+
+function insertZoneVertex(doc: Doc, id: string, edge: number, point: Point): Doc {
+  return {
+    ...doc,
+    zones: doc.zones.map((zone) => {
+      if (zone.id !== id) return zone
+      const a = zone.points[edge]
+      const b = zone.points[(edge + 1) % zone.points.length]
+      const hit = closestOnSegment(point, a, b).point
+      const points = [...zone.points]
+      points.splice(edge + 1, 0, hit)
+      const bends = zone.bends ? [...zone.bends] : zone.points.map(() => null)
+      while (bends.length < zone.points.length) bends.push(null)
+      bends[edge] = null
+      bends.splice(edge + 1, 0, null)
+      return { ...zone, points, bends }
+    }),
+  }
+}
+
+function deleteZoneVertex(doc: Doc, id: string, index: number): Doc {
+  return {
+    ...doc,
+    zones: doc.zones.map((zone) => {
+      if (zone.id !== id || zone.points.length <= 3) return zone
+      const points = zone.points.filter((_, i) => i !== index)
+      const bends = (zone.bends ? [...zone.bends] : zone.points.map(() => null)).filter((_, i) => i !== index)
+      return { ...zone, points, bends }
+    }),
+  }
 }
 
 function measure(url: string, setSize: (size: { w: number; h: number }) => void) {

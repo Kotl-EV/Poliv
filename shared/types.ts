@@ -2,7 +2,7 @@ import type { PipeSeriesId } from './pipes.ts'
 
 export type Point = { x: number; y: number }
 
-export type ZoneKind = 'lawn' | 'bed' | 'path'
+export type ZoneKind = 'lawn' | 'bed' | 'shrub' | 'path' | 'concrete' | 'water' | 'building'
 export type Soil = 'sand' | 'loam' | 'clay'
 export type Slope = 'flat' | 'mild' | 'steep'
 export type Climate = 'shade' | 'open' | 'wind'
@@ -12,6 +12,8 @@ export type Zone = {
   name: string
   kind: ZoneKind
   points: Point[]
+  /** Quadratic control for edge i → i+1. Null = straight. */
+  bends?: (Point | null)[]
   doseMm: number
   soil: Soil
   slope: Slope
@@ -64,6 +66,9 @@ export type Doc = {
   version: 1
   pxPerMeter: number | null
   pipeSeries: PipeSeriesId
+  sheetM?: { w: number; h: number }
+  gridOn?: boolean
+  snapGrid?: boolean
   zones: Zone[]
   sprinklers: Sprinkler[]
   pipes: Pipe[]

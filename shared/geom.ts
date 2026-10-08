@@ -41,6 +41,124 @@ export function polar(origin: Point, radius: number, bearingDeg: number): Point 
   }
 }
 
+export function midpoint(a: Point, b: Point): Point {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+}
+
+export function addPoints(a: Point, b: Point): Point {
+  return { x: a.x + b.x, y: a.y + b.y }
+}
+
+export function subPoints(a: Point, b: Point): Point {
+  return { x: a.x - b.x, y: a.y - b.y }
+}
+
+export function scalePoint(point: Point, k: number): Point {
+  return { x: point.x * k, y: point.y * k }
+}
+
+export function snapToGrid(point: Point, step: number): Point {
+  if (!(step > 0)) return point
+  return {
+    x: Math.round(point.x / step) * step,
+    y: Math.round(point.y / step) * step,
+  }
+}
+
+export function closestOnSegment(point: Point, a: Point, b: Point): { point: Point; t: number; distance: number } {
+  const ab = subPoints(b, a)
+  const len2 = ab.x * ab.x + ab.y * ab.y
+  const t = len2 <= 1e-9 ? 0 : Math.max(0, Math.min(1, ((point.x - a.x) * ab.x + (point.y - a.y) * ab.y) / len2))
+  const hit = { x: a.x + ab.x * t, y: a.y + ab.y * t }
+  return { point: hit, t, distance: dist(point, hit) }
+}
+
+/** Quadratic control from a point on the curve at t = 0.5. */
+export function controlFromHandle(a: Point, b: Point, handle: Point): Point {
+  return { x: 2 * handle.x - (a.x + b.x) / 2, y: 2 * handle.y - (a.y + b.y) / 2 }
+}
+
+export function handleFromControl(a: Point, b: Point, control: Point): Point {
+  return { x: 0.25 * a.x + 0.5 * control.x + 0.25 * b.x, y: 0.25 * a.y + 0.5 * control.y + 0.25 * b.y }
+}
+
+export function quadPoint(a: Point, control: Point, b: Point, t: number): Point {
+  const u = 1 - t
+  return {
+    x: u * u * a.x + 2 * u * t * control.x + t * t * b.x,
+    y: u * u * a.y + 2 * u * t * control.y + t * t * b.y,
+  }
+}
+
+export function sampleQuad(a: Point, control: Point, b: Point, steps = 8): Point[] {
+  const out: Point[] = []
+  for (let i = 1; i <= steps; i++) out.push(quadPoint(a, control, b, i / steps))
+  return out
+}
+
+export function outlineOf(points: Point[], bends?: (Point | null)[] | null): Point[] {
+  if (points.length === 0) return []
+  const out: Point[] = [points[0]]
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i]
+    const b = points[(i + 1) % points.length]
+    const bend = bends?.[i]
+    if (bend) out.push(...sampleQuad(a, bend, b, 8))
+    else if (i < points.length - 1 || points.length >= 3) out.push(b)
+  }
+  if (points.length >= 3) {
+    const last = out[out.length - 1]
+    if (last && dist(last, points[0]) < 1e-6) out.pop()
+  }
+  return out
+}
+
+export function polylineLength(points: Point[]): number {
+  let sum = 0
+  for (let i = 1; i < points.length; i++) sum += dist(points[i - 1], points[i])
+  return sum
+}
+
+export function ringLength(points: Point[], bends?: (Point | null)[] | null): number {
+  if (points.length < 2) return 0
+  const outline = outlineOf(points, bends)
+  if (points.length < 3) return polylineLength(outline)
+  return polylineLength(outline) + dist(outline[outline.length - 1], outline[0])
+}
+
+export function zonePathD(points: Point[], bends?: (Point | null)[] | null, close = true): string {
+  if (points.length === 0) return ''
+  let d = `M ${points[0].x} ${points[0].y}`
+  const last = close ? points.length : Math.max(0, points.length - 1)
+  for (let i = 0; i < last; i++) {
+    const b = points[(i + 1) % points.length]
+    const bend = bends?.[i]
+    d += bend ? ` Q ${bend.x} ${bend.y} ${b.x} ${b.y}` : ` L ${b.x} ${b.y}`
+  }
+  if (close && points.length >= 3) d += ' Z'
+  return d
+}
+
+export function rotateAround(point: Point, origin: Point, deg: number): Point {
+  const rad = (deg * Math.PI) / 180
+  const c = Math.cos(rad)
+  const s = Math.sin(rad)
+  const x = point.x - origin.x
+  const y = point.y - origin.y
+  return { x: origin.x + x * c - y * s, y: origin.y + x * s + y * c }
+}
+
+export function centroid(points: Point[]): Point {
+  if (points.length === 0) return { x: 0, y: 0 }
+  let x = 0
+  let y = 0
+  for (const point of points) {
+    x += point.x
+    y += point.y
+  }
+  return { x: x / points.length, y: y / points.length }
+}
+
 export function sectorPath(origin: Point, radius: number, rotationDeg: number, arcDeg: number): string {
   if (radius <= 0) return ''
   if (arcDeg >= 359.9) {

@@ -1,9 +1,10 @@
 import { asClimate, asSlope, asSoil, defaultDose } from '@shared/doc.ts'
+import { SURFACES } from '@shared/landscape.ts'
 import type { Analysis, Doc, Drip, Source, Sprinkler, Valve, Zone } from '@shared/types.ts'
 import { NOZZLES } from '@shared/nozzles.ts'
 import { SERIES, seriesById, type PipeSeriesId } from '@shared/pipes.ts'
 
-const KIND = { lawn: 'Газон', bed: 'Клумба', path: 'Дорожка' }
+const KIND = Object.fromEntries(SURFACES.map((item) => [item.id, item.label])) as Record<string, string>
 
 function cyclesWord(count: number): string {
   const mod10 = count % 10
@@ -81,9 +82,9 @@ export function Spec({
                 onZone(zone.id, { kind, doseMm: defaultDose(kind) })
               }}
             >
-              <option value="lawn">Газон</option>
-              <option value="bed">Клумба</option>
-              <option value="path">Дорожка</option>
+              {SURFACES.map((surface) => (
+                <option key={surface.id} value={surface.id}>{surface.label}</option>
+              ))}
             </select>
           </label>
           <label>
