@@ -46,7 +46,14 @@ const STEP_DEFAULT_TOOL: Record<Step, Tool> = {
 }
 
 function uid(prefix: string): string {
-  return `${prefix}-${crypto.randomUUID().slice(0, 8)}`
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return `${prefix}-${crypto.randomUUID().slice(0, 8)}`
+    }
+  } catch {
+    // insecure origin has no randomUUID
+  }
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 function snapTo(point: Point, targets: Point[], limit: number): Point {
@@ -265,35 +272,39 @@ export function EditorPage({
   function finishDraft() {
     const current = docRef.current
     const points = draftRef.current
-    if (tool === 'zone' && points.length >= 3) {
-      const surface = surfaceOf(zoneKind)
-      const zone: Zone = {
-        id: uid('zone'),
-        name: surface.label,
-        kind: zoneKind,
-        doseMm: defaultDose(zoneKind),
-        soil: 'loam',
-        slope: 'flat',
-        climate: 'open',
-        points,
+    try {
+      if (tool === 'zone' && points.length >= 3) {
+        const surface = surfaceOf(zoneKind)
+        const zone: Zone = {
+          id: uid('zone'),
+          name: surface.label,
+          kind: zoneKind,
+          doseMm: defaultDose(zoneKind),
+          soil: 'loam',
+          slope: 'flat',
+          climate: 'open',
+          points,
+        }
+        commit({ ...current, zones: [...current.zones, zone] })
+        setSelection({ kind: 'zone', id: zone.id })
+        setDraftPoints([])
+        return
       }
-      commit({ ...current, zones: [...current.zones, zone] })
-      setSelection({ kind: 'zone', id: zone.id })
-      setDraftPoints([])
-      return
-    }
-    if (tool === 'pipe' && points.length >= 2) {
-      const pipe = { id: uid('pipe'), points }
-      commit({ ...current, pipes: [...current.pipes, pipe] })
-      setSelection({ kind: 'pipe', id: pipe.id })
-      setDraftPoints([])
-      return
-    }
-    if (tool === 'drip' && points.length >= 2) {
-      const drip: Drip = { id: uid('drip'), points, spacingM: 0.3, emitterLph: 2 }
-      commit({ ...current, drips: [...current.drips, drip] })
-      setSelection({ kind: 'drip', id: drip.id })
-      setDraftPoints([])
+      if (tool === 'pipe' && points.length >= 2) {
+        const pipe = { id: uid('pipe'), points }
+        commit({ ...current, pipes: [...current.pipes, pipe] })
+        setSelection({ kind: 'pipe', id: pipe.id })
+        setDraftPoints([])
+        return
+      }
+      if (tool === 'drip' && points.length >= 2) {
+        const drip: Drip = { id: uid('drip'), points, spacingM: 0.3, emitterLph: 2 }
+        commit({ ...current, drips: [...current.drips, drip] })
+        setSelection({ kind: 'drip', id: drip.id })
+        setDraftPoints([])
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось замкнуть контур')
     }
   }
 
@@ -335,13 +346,14 @@ export function EditorPage({
       finishDraft()
       return
     }
-    event.currentTarget.setPointerCapture(event.pointerId)
     if (tool === 'pan' || event.button === 1) {
+      event.currentTarget.setPointerCapture(event.pointerId)
       pan.current = { x: event.clientX, y: event.clientY, view }
       return
     }
     const raw = worldPoint(event, svgRef.current, view)
     click.current = { hit, x: event.clientX, y: event.clientY, moved: false }
+    if (tool === 'select') event.currentTarget.setPointerCapture(event.pointerId)
 
     if (tool === 'select') {
       if (hit.kind === 'zone-point' || hit.kind === 'zone-mid' || hit.kind === 'pipe-point' || hit.kind === 'drip-point' || hit.kind === 'sprinkler' || hit.kind === 'source' || hit.kind === 'valve') {
@@ -410,7 +422,7 @@ export function EditorPage({
       }
       const last = draftRef.current[draftRef.current.length - 1]
       const canFinish = tool === 'zone' ? draftRef.current.length >= 3 : draftRef.current.length >= 2
-      if (canFinish && last && dist(raw, last) * view.k < 17) {
+      if (canFinish && last && dist(raw, last) * view.k <= 28) {
         finishDraft()
         return
       }
@@ -726,11 +738,32 @@ export function EditorPage({
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
+          onFinishDraft={finishDraft}
           onContextMenu={(event) => {
             event.preventDefault()
             if (tool === 'zone' || tool === 'pipe' || tool === 'drip') finishDraft()
           }}
         />
+        {(tool === 'zone' || tool === 'pipe' || tool === 'drip') && draft.length >= (tool === 'zone' ? 3 : 2) && (
+          <button
+            type="button"
+            className="ok-on-line"
+            style={{
+              left: view.x + draft[draft.length - 1].x * view.k,
+              top: view.y + draft[draft.length - 1].y * view.k,
+            }}
+            onPointerDown={(event) => {
+              event.stopPropagation()
+              finishDraft()
+            }}
+            onClick={(event) => {
+              event.stopPropagation()
+              finishDraft()
+            }}
+          >
+            OK
+          </button>
+        )}
         {tool === 'scale' && (
           <div className="ops">
             <span>{scalePoints.length < 2 ? 'Две точки известного отрезка' : `${Math.round(scalePx)} px`}</span>

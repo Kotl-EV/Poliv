@@ -24,7 +24,8 @@ export type Hit =
   | { kind: 'draft-ok' }
 
 export function readHit(target: EventTarget | null): Hit {
-  const el = (target as Element | null)?.closest?.('[data-hit]')
+  const node = target instanceof Node && target.nodeType === Node.TEXT_NODE ? target.parentElement : target
+  const el = (node as Element | null)?.closest?.('[data-hit]')
   if (!el) return { kind: 'board' }
   const kind = el.getAttribute('data-hit')
   const id = el.getAttribute('data-id') || ''
@@ -81,6 +82,7 @@ export const Board = forwardRef<SVGSVGElement, {
   onPointerDown: (event: PointerEvent<SVGSVGElement>) => void
   onPointerMove: (event: PointerEvent<SVGSVGElement>) => void
   onPointerUp: (event: PointerEvent<SVGSVGElement>) => void
+  onFinishDraft?: () => void
   onContextMenu?: (event: MouseEvent<SVGSVGElement>) => void
 }>(function Board(props, ref) {
   const { doc, analysis, view, board, backgroundUrl, imageSize } = props
@@ -185,6 +187,7 @@ export const Board = forwardRef<SVGSVGElement, {
           view={view}
           ppm={ppm}
           showOk={props.showOk}
+          onFinish={props.onFinishDraft}
         />
         {doc.drips.map((drip) => (
           <polyline
@@ -292,6 +295,7 @@ function DraftLayer({
   view,
   ppm,
   showOk,
+  onFinish,
 }: {
   points: Point[]
   hover: Point | null
@@ -299,6 +303,7 @@ function DraftLayer({
   view: View
   ppm: number
   showOk: boolean
+  onFinish?: () => void
 }) {
   const start = points[0]
   const last = points[points.length - 1]
@@ -312,7 +317,7 @@ function DraftLayer({
   const surface = surfaceOf(kind)
   const preview = canClose ? (closing ? points : [...points, ...(hover ? [hover] : [])]) : []
   const s = 4.5 / view.k
-  const okR = 17 / view.k
+  const okR = 22 / view.k
   return (
     <g className="draft-layer">
       {preview.length >= 3 && (
@@ -369,13 +374,20 @@ function DraftLayer({
         />
       )}
       {showOk && last && (
-        <g data-hit="draft-ok" className="draft-ok">
-          <circle cx={last.x} cy={last.y} r={okR} className="draft-ok-hit" />
+        <g
+          data-hit="draft-ok"
+          className="draft-ok"
+          onPointerDown={(event) => {
+            event.stopPropagation()
+            onFinish?.()
+          }}
+        >
+          <circle data-hit="draft-ok" cx={last.x} cy={last.y} r={okR} className="draft-ok-hit" />
           <text
             x={last.x}
             y={last.y}
             className="draft-ok-label"
-            fontSize={11 / view.k}
+            fontSize={12 / view.k}
             textAnchor="middle"
             dominantBaseline="middle"
             pointerEvents="none"
