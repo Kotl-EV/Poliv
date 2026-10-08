@@ -33,7 +33,32 @@ db.exec(`
     updated_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS projects_user ON projects(user_id, updated_at);
+  CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `)
+
+migrateSnapOptIn()
+
+function migrateSnapOptIn() {
+  const done = db.prepare('SELECT value FROM meta WHERE key = ?').get('snap_opt_in_v1') as { value: string } | undefined
+  if (done) return
+  const projects = db.prepare('SELECT id, doc_json FROM projects').all() as { id: string; doc_json: string }[]
+  const update = db.prepare('UPDATE projects SET doc_json = ? WHERE id = ?')
+  for (const project of projects) {
+    try {
+      const doc = JSON.parse(project.doc_json) as { snapGrid?: unknown }
+      if (doc && doc.snapGrid === true) {
+        doc.snapGrid = false
+        update.run(JSON.stringify(doc), project.id)
+      }
+    } catch {
+      // skip a broken row
+    }
+  }
+  db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)').run('snap_opt_in_v1', '1')
+}
 
 export type UserRow = { id: string; email: string; name: string; password_hash: string }
 export type ProjectRow = {

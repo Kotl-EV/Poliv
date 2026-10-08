@@ -8,7 +8,6 @@ import {
   controlFromHandle,
   dist,
   midpoint,
-  nearestScreen,
   orthoFrom,
   polygonAreaPx,
   ringLength,
@@ -311,22 +310,17 @@ export function EditorPage({
   }
 
   function worldSnap(raw: Point, shift = false): Point {
-    const current = docRef.current
     const last = draftRef.current[draftRef.current.length - 1]
     const start = draftRef.current[0]
     let point = raw
-    if (current.snapGrid !== false) {
+    if (docRef.current.snapGrid === true) {
       point = snapToGrid(point, gridStepM(view.k, ppm) * ppm)
     }
     if (shift && last) point = orthoFrom(last, point)
     if (tool === 'zone' && start && draftRef.current.length >= 3 && withinScreen(start, raw, view.k, 14)) {
       return start
     }
-    const verts = [
-      ...targetsOf(current),
-      ...draftRef.current.slice(0, Math.max(0, draftRef.current.length - 1)),
-    ]
-    return nearestScreen(point, verts, view.k, 8) ?? point
+    return point
   }
 
   function onPointerDown(event: React.PointerEvent<SVGSVGElement>) {
@@ -336,13 +330,17 @@ export function EditorPage({
       if (tool === 'zone' || tool === 'pipe' || tool === 'drip') finishDraft()
       return
     }
+    const hit = readHit(event.target)
+    if ((tool === 'zone' || tool === 'pipe' || tool === 'drip') && (hit.kind === 'draft-ok' || hit.kind === 'draft-close')) {
+      finishDraft()
+      return
+    }
     event.currentTarget.setPointerCapture(event.pointerId)
     if (tool === 'pan' || event.button === 1) {
       pan.current = { x: event.clientX, y: event.clientY, view }
       return
     }
     const raw = worldPoint(event, svgRef.current, view)
-    const hit = readHit(event.target)
     click.current = { hit, x: event.clientX, y: event.clientY, moved: false }
 
     if (tool === 'select') {
@@ -406,11 +404,16 @@ export function EditorPage({
         finishDraft()
         return
       }
-      if (hit.kind === 'draft-close' || (tool === 'zone' && nearDraftStart(raw))) {
+      if (tool === 'zone' && nearDraftStart(raw)) {
         finishDraft()
         return
       }
       const last = draftRef.current[draftRef.current.length - 1]
+      const canFinish = tool === 'zone' ? draftRef.current.length >= 3 : draftRef.current.length >= 2
+      if (canFinish && last && dist(raw, last) * view.k < 17) {
+        finishDraft()
+        return
+      }
       if (last && dist(point, last) * view.k < 4) return
       setHover(point)
       setDraftPoints([...draftRef.current, point])
@@ -446,7 +449,7 @@ export function EditorPage({
       }))
       return
     }
-    const snapped = doc.snapGrid !== false ? worldSnap(point) : point
+    const snapped = doc.snapGrid === true ? worldSnap(point) : point
     setDoc((current) => moveHit(current, active, snapped))
   }
 
@@ -625,7 +628,7 @@ export function EditorPage({
         </nav>
         <input className="name" value={name} onChange={(event) => setName(event.target.value)} aria-label="Название проекта" />
         <button className={doc.gridOn !== false ? 'icon on' : 'icon'} title="Сетка" onClick={() => setDoc((current) => ({ ...current, gridOn: current.gridOn === false }))}>#</button>
-        <button className={doc.snapGrid !== false ? 'icon on' : 'icon'} title="Привязка к сетке" onClick={() => setDoc((current) => ({ ...current, snapGrid: current.snapGrid === false }))}>▦</button>
+        <button className={doc.snapGrid === true ? 'icon on' : 'icon'} title="Привязка к сетке" onClick={() => setDoc((current) => ({ ...current, snapGrid: current.snapGrid !== true }))}>▦</button>
         <button className="icon" title="Отменить" onClick={undo}>↶</button>
         <button className="icon" title="Повторить" onClick={redo}>↷</button>
         <button className="icon" title="Вписать" onClick={fit}>▣</button>
@@ -715,6 +718,7 @@ export function EditorPage({
           imageSize={imageSize}
           draft={draft}
           draftKind={zoneKind}
+          showOk={(tool === 'zone' && draft.length >= 3) || ((tool === 'pipe' || tool === 'drip') && draft.length >= 2)}
           hover={tool === 'zone' || tool === 'pipe' || tool === 'drip' || tool === 'scale' ? hover : null}
           scalePoints={scalePoints}
           selectionId={selection?.id ?? null}
@@ -727,27 +731,6 @@ export function EditorPage({
             if (tool === 'zone' || tool === 'pipe' || tool === 'drip') finishDraft()
           }}
         />
-        {(tool === 'zone' || tool === 'pipe' || tool === 'drip') && draft.length >= (tool === 'zone' ? 3 : 2) && (
-          <button
-            type="button"
-            className="ok-on-line"
-            style={{
-              left: view.x + draft[draft.length - 1].x * view.k,
-              top: view.y + draft[draft.length - 1].y * view.k,
-            }}
-            onPointerDown={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-            }}
-            onClick={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-              finishDraft()
-            }}
-          >
-            OK
-          </button>
-        )}
         {tool === 'scale' && (
           <div className="ops">
             <span>{scalePoints.length < 2 ? 'Две точки известного отрезка' : `${Math.round(scalePx)} px`}</span>
@@ -809,7 +792,7 @@ export function EditorPage({
         {hover && <span>X {(hover.x / ppm).toFixed(2)} м · Y {(hover.y / ppm).toFixed(2)} м</span>}
         {draft.length > 0 && hoverLen > 0 && <span>Сторона {hoverLen.toFixed(2)} м</span>}
         {selectedZone && <span>{surfaceOf(selectedZone.kind).label}: {zoneArea.toFixed(1)} м² · периметр {zonePerim.toFixed(1)} м</span>}
-        {tool === 'zone' && draft.length === 0 && <span>Полигон: точки идут по сетке. С третьей точки на конце линии появляется OK.</span>}
+        {tool === 'zone' && draft.length === 0 && <span>Полигон: кликайте по контуру. С третьей точки на конце линии нажмите OK.</span>}
         {step === 'irrig' && !doc.source && <span>Поставьте источник воды, затем «Рассчитать схему».</span>}
       </footer>
     </main>

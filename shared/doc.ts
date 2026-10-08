@@ -12,7 +12,7 @@ export function emptyDoc(): Doc {
     pipeSeries: DEFAULT_SERIES,
     sheetM: { ...DEFAULT_SHEET_M },
     gridOn: true,
-    snapGrid: true,
+    snapGrid: false,
     zones: [],
     sprinklers: [],
     pipes: [],
@@ -205,7 +205,7 @@ export function parseDoc(value: unknown): Doc | null {
   const sheetM = parseSheet(raw.sheetM)
   if (raw.sheetM !== undefined && !sheetM) return null
   const gridOn = raw.gridOn === undefined ? true : raw.gridOn === true
-  const snapGrid = raw.snapGrid === undefined ? true : raw.snapGrid === true
+  const snapGrid = raw.snapGrid === true
   if (raw.gridOn !== undefined && typeof raw.gridOn !== 'boolean') return null
   if (raw.snapGrid !== undefined && typeof raw.snapGrid !== 'boolean') return null
 

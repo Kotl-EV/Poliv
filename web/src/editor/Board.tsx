@@ -21,6 +21,7 @@ export type Hit =
   | { kind: 'drip'; id: string }
   | { kind: 'drip-point'; id: string; index: number }
   | { kind: 'draft-close' }
+  | { kind: 'draft-ok' }
 
 export function readHit(target: EventTarget | null): Hit {
   const el = (target as Element | null)?.closest?.('[data-hit]')
@@ -35,6 +36,7 @@ export function readHit(target: EventTarget | null): Hit {
   if (kind === 'valve') return { kind, id }
   if (kind === 'drip') return { kind, id }
   if (kind === 'draft-close') return { kind }
+  if (kind === 'draft-ok') return { kind }
   if (kind === 'zone-point' && Number.isInteger(index)) return { kind, id, index }
   if (kind === 'zone-mid' && Number.isInteger(index)) return { kind, id, index }
   if (kind === 'zone-edge' && Number.isInteger(index)) return { kind, id, index }
@@ -71,6 +73,7 @@ export const Board = forwardRef<SVGSVGElement, {
   imageSize: { w: number; h: number } | null
   draft: Point[]
   draftKind: ZoneKind
+  showOk: boolean
   hover: Point | null
   scalePoints: Point[]
   selectionId: string | null
@@ -181,6 +184,7 @@ export const Board = forwardRef<SVGSVGElement, {
           kind={props.draftKind}
           view={view}
           ppm={ppm}
+          showOk={props.showOk}
         />
         {doc.drips.map((drip) => (
           <polyline
@@ -287,12 +291,14 @@ function DraftLayer({
   kind,
   view,
   ppm,
+  showOk,
 }: {
   points: Point[]
   hover: Point | null
   kind: ZoneKind
   view: View
   ppm: number
+  showOk: boolean
 }) {
   const start = points[0]
   const last = points[points.length - 1]
@@ -306,6 +312,7 @@ function DraftLayer({
   const surface = surfaceOf(kind)
   const preview = canClose ? (closing ? points : [...points, ...(hover ? [hover] : [])]) : []
   const s = 4.5 / view.k
+  const okR = 17 / view.k
   return (
     <g className="draft-layer">
       {preview.length >= 3 && (
@@ -348,6 +355,7 @@ function DraftLayer({
           width={s * 2}
           height={s * 2}
           className={index === 0 && closing ? 'draft-point closing' : 'draft-point'}
+          pointerEvents={index === points.length - 1 && showOk ? 'none' : undefined}
         />
       ))}
       {hover && !closing && (
@@ -359,6 +367,22 @@ function DraftLayer({
           className="snap-cursor"
           pointerEvents="none"
         />
+      )}
+      {showOk && last && (
+        <g data-hit="draft-ok" className="draft-ok">
+          <circle cx={last.x} cy={last.y} r={okR} className="draft-ok-hit" />
+          <text
+            x={last.x}
+            y={last.y}
+            className="draft-ok-label"
+            fontSize={11 / view.k}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            pointerEvents="none"
+          >
+            OK
+          </text>
+        </g>
       )}
     </g>
   )
