@@ -41,6 +41,51 @@ export function polar(origin: Point, radius: number, bearingDeg: number): Point 
   }
 }
 
+export function bearingDeg(from: Point, to: Point): number {
+  return ((Math.atan2(to.x - from.x, -(to.y - from.y)) * 180) / Math.PI + 360) % 360
+}
+
+export function normDeg(deg: number): number {
+  return ((deg % 360) + 360) % 360
+}
+
+export function snapDeg(deg: number, step: number): number {
+  if (!(step > 0)) return normDeg(deg)
+  return normDeg(Math.round(deg / step) * step)
+}
+
+export function clockwiseDeltaDeg(from: number, to: number): number {
+  let d = normDeg(to) - normDeg(from)
+  if (d <= 0) d += 360
+  return d
+}
+
+export function sprinklerArcFromStart(rotationDeg: number, arcDeg: number, startDeg: number): { rotationDeg: number; arcDeg: number } {
+  const end = rotationDeg + arcDeg / 2
+  const arc = Math.min(360, Math.max(8, clockwiseDeltaDeg(startDeg, end)))
+  return { rotationDeg: normDeg(startDeg + arc / 2), arcDeg: arc }
+}
+
+export function sprinklerArcFromEnd(rotationDeg: number, arcDeg: number, endDeg: number): { rotationDeg: number; arcDeg: number } {
+  const start = rotationDeg - arcDeg / 2
+  const arc = Math.min(360, Math.max(8, clockwiseDeltaDeg(start, endDeg)))
+  return { rotationDeg: normDeg(start + arc / 2), arcDeg: arc }
+}
+
+export function aimSprinkler(
+  origin: Point,
+  rotationDeg: number,
+  arcDeg: number,
+  point: Point,
+  mode: 'rot' | 'start' | 'end',
+  step: number | null = null,
+): { rotationDeg: number; arcDeg: number } {
+  const bearing = step ? snapDeg(bearingDeg(origin, point), step) : bearingDeg(origin, point)
+  if (mode === 'rot') return { rotationDeg: bearing, arcDeg }
+  if (mode === 'start') return sprinklerArcFromStart(rotationDeg, arcDeg, bearing)
+  return sprinklerArcFromEnd(rotationDeg, arcDeg, bearing)
+}
+
 export function midpoint(a: Point, b: Point): Point {
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
 }

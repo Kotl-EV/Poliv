@@ -4,6 +4,7 @@ import { analyze } from '@shared/analyze.ts'
 import { asClimate, asSlope, asSoil, defaultDose, emptyDoc, SNAP_PX } from '@shared/doc.ts'
 import { exampleDoc } from '@shared/example.ts'
 import {
+  aimSprinkler,
   circlePoints,
   closestOnSegment,
   controlFromHandle,
@@ -11,6 +12,7 @@ import {
   dist,
   midpoint,
   mirrorAround,
+  normDeg,
   orthoFrom,
   polygonAreaPx,
   rectPoints,
@@ -390,7 +392,7 @@ export function EditorPage({
     if (tool === 'select') event.currentTarget.setPointerCapture(event.pointerId)
 
     if (tool === 'select') {
-      if (hit.kind === 'zone-point' || hit.kind === 'zone-mid' || hit.kind === 'pipe-point' || hit.kind === 'drip-point' || hit.kind === 'sprinkler' || hit.kind === 'source' || hit.kind === 'valve') {
+      if (hit.kind === 'zone-point' || hit.kind === 'zone-mid' || hit.kind === 'pipe-point' || hit.kind === 'drip-point' || hit.kind === 'sprinkler' || hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc' || hit.kind === 'source' || hit.kind === 'valve') {
         remember()
         drag.current = hit
         setSelection(selectionFromHit(hit))
@@ -506,6 +508,11 @@ export function EditorPage({
     }
     const active = drag.current
     if (!active) return
+    if (active.kind === 'sprinkler-rot' || active.kind === 'sprinkler-arc') {
+      const step = event.shiftKey ? 15 : null
+      setDoc((current) => aimSprinklerHit(current, active, point, step))
+      return
+    }
     if ((active.kind === 'zone') && grab.current) {
       const dx = point.x - grab.current.x
       const dy = point.y - grab.current.y
@@ -703,6 +710,16 @@ export function EditorPage({
   }
 
   function rotateSelected(deg: number) {
+    if (selection?.kind === 'sprinkler' && selection.id) {
+      const id = selection.id
+      commit({
+        ...docRef.current,
+        sprinklers: docRef.current.sprinklers.map((item) => (
+          item.id === id ? { ...item, rotationDeg: normDeg(item.rotationDeg + deg) } : item
+        )),
+      })
+      return
+    }
     mapSelectedZone((zone) => {
       const origin = centroid(zone.points)
       return {
@@ -763,6 +780,7 @@ export function EditorPage({
   if (!loaded) return <div className="boot">{error || 'Загрузка проекта…'}</div>
 
   const selectedZone = selection?.kind === 'zone' ? doc.zones.find((item) => item.id === selection.id) : undefined
+  const selectedSprinkler = selection?.kind === 'sprinkler' ? doc.sprinklers.find((item) => item.id === selection.id) : undefined
   const hoverLen = draft.length > 0 && hover ? dist(draft[draft.length - 1], hover) / ppm : 0
   const zoneArea = selectedZone ? polygonAreaPx(selectedZone.points) / (ppm * ppm) : 0
   const zonePerim = selectedZone ? ringLength(selectedZone.points, selectedZone.bends) / ppm : 0
@@ -935,6 +953,14 @@ export function EditorPage({
             <button className="primary" onClick={applyScale} disabled={scalePoints.length < 2}>OK</button>
           </div>
         )}
+        {selectedSprinkler && draft.length === 0 && (
+          <div className="ops">
+            <button className="tool" onClick={() => rotateSelected(-15)} title="Против часовой">↺ 15°</button>
+            <button className="tool" onClick={() => rotateSelected(15)} title="По часовой">↻ 15°</button>
+            <button className="tool" onClick={() => rotateSelected(90)} title="Повернуть на 90°">↻ 90°</button>
+            <button className="tool" onClick={removeSelection}>Удалить</button>
+          </div>
+        )}
         {selectedZone && draft.length === 0 && (
           <div className="ops">
             {SURFACES.map((surface) => (
@@ -1052,8 +1078,21 @@ function selectionFromHit(hit: Hit): Sel {
   if (hit.kind === 'zone-point' || hit.kind === 'zone-mid' || hit.kind === 'zone-edge' || hit.kind === 'zone') return { kind: 'zone', id: hit.id }
   if (hit.kind === 'pipe-point') return { kind: 'pipe', id: hit.id }
   if (hit.kind === 'drip-point') return { kind: 'drip', id: hit.id }
-  if (hit.kind === 'sprinkler' || hit.kind === 'valve') return { kind: hit.kind, id: hit.id }
+  if (hit.kind === 'sprinkler' || hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc') return { kind: 'sprinkler', id: hit.id }
+  if (hit.kind === 'valve') return { kind: 'valve', id: hit.id }
   return null
+}
+
+function aimSprinklerHit(doc: Doc, hit: Hit, point: Point, step: number | null): Doc {
+  if (hit.kind !== 'sprinkler-rot' && hit.kind !== 'sprinkler-arc') return doc
+  const mode = hit.kind === 'sprinkler-rot' ? 'rot' : hit.index === 0 ? 'start' : 'end'
+  return {
+    ...doc,
+    sprinklers: doc.sprinklers.map((item) => {
+      if (item.id !== hit.id) return item
+      return { ...item, ...aimSprinkler(item, item.rotationDeg, item.arcDeg, point, mode, step) }
+    }),
+  }
 }
 
 function cleanSprinkler(item: Sprinkler, patch: Partial<Sprinkler>): Sprinkler {

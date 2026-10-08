@@ -151,8 +151,9 @@ export function Spec({
           </label>
           <label>
             Поворот, °
-            <input type="number" min={0} max={359} value={sprinkler.rotationDeg} onChange={(event) => onSprinkler(sprinkler.id, { rotationDeg: Number(event.target.value) })} />
+            <input type="number" min={0} max={359} value={Math.round(sprinkler.rotationDeg)} onChange={(event) => onSprinkler(sprinkler.id, { rotationDeg: Number(event.target.value) })} />
           </label>
+          <p className="hint">На схеме: круглая ручка на дуге крутит сектор, квадраты по краям меняют угол. Shift — шаг 15°.</p>
           <label>
             Расход, л/ч
             <input type="number" min={0} max={20000} value={sprinkler.flowLph} onChange={(event) => onSprinkler(sprinkler.id, { flowLph: Number(event.target.value) })} />

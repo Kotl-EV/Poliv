@@ -1,7 +1,7 @@
 import { forwardRef, type MouseEvent, type PointerEvent } from 'react'
-import { centroid, dist, handleFromControl, midpoint, sectorPath, zonePathD } from '@shared/geom.ts'
+import { centroid, dist, handleFromControl, midpoint, polar, sectorPath, zonePathD } from '@shared/geom.ts'
 import { DEFAULT_PPM, gridStepM, surfaceOf } from '@shared/landscape.ts'
-import type { Analysis, Doc, Point, Zone, ZoneKind } from '@shared/types.ts'
+import type { Analysis, Doc, Point, Sprinkler, Zone, ZoneKind } from '@shared/types.ts'
 
 export const CLOSE_SCREEN_PX = 14
 
@@ -10,6 +10,8 @@ export type View = { x: number; y: number; k: number }
 export type Hit =
   | { kind: 'board' }
   | { kind: 'sprinkler'; id: string }
+  | { kind: 'sprinkler-rot'; id: string }
+  | { kind: 'sprinkler-arc'; id: string; index: number }
   | { kind: 'source' }
   | { kind: 'zone'; id: string }
   | { kind: 'zone-point'; id: string; index: number }
@@ -31,6 +33,8 @@ export function readHit(target: EventTarget | null): Hit {
   const id = el.getAttribute('data-id') || ''
   const index = Number(el.getAttribute('data-index'))
   if (kind === 'sprinkler') return { kind, id }
+  if (kind === 'sprinkler-rot') return { kind, id }
+  if (kind === 'sprinkler-arc' && Number.isInteger(index)) return { kind, id, index }
   if (kind === 'source') return { kind }
   if (kind === 'zone') return { kind, id }
   if (kind === 'pipe') return { kind, id }
@@ -91,6 +95,7 @@ export const Board = forwardRef<SVGSVGElement, {
   const ppm = doc.pxPerMeter && doc.pxPerMeter > 0 ? doc.pxPerMeter : DEFAULT_PPM
   const gridOn = doc.gridOn !== false
   const selectedZone = props.selectionKind === 'zone' ? doc.zones.find((zone) => zone.id === props.selectionId) : undefined
+  const selectedSprinkler = props.selectionKind === 'sprinkler' ? doc.sprinklers.find((item) => item.id === props.selectionId) : undefined
 
   return (
     <svg
@@ -145,11 +150,12 @@ export const Board = forwardRef<SVGSVGElement, {
         })}
         {doc.sprinklers.map((sprinkler) => {
           const radius = ppm * sprinkler.radiusM
+          const selected = selectedSprinkler?.id === sprinkler.id
           return (
             <path
               key={`${sprinkler.id}-cover`}
               d={sectorPath(sprinkler, radius, sprinkler.rotationDeg, sprinkler.arcDeg)}
-              className="cover"
+              className={selected ? 'cover selected' : 'cover'}
               pointerEvents="none"
             />
           )
@@ -229,6 +235,9 @@ export const Board = forwardRef<SVGSVGElement, {
             className={props.selectionKind === 'sprinkler' && props.selectionId === sprinkler.id ? 'node selected' : 'node'}
           />
         ))}
+        {selectedSprinkler && (
+          <SprinklerHandles sprinkler={selectedSprinkler} ppm={ppm} k={view.k} />
+        )}
         {doc.valves.map((valve) => (
           <polygon
             key={valve.id}
@@ -430,6 +439,55 @@ function DraftLayer({
           </text>
         </g>
       )}
+    </g>
+  )
+}
+
+function SprinklerHandles({ sprinkler, ppm, k }: { sprinkler: Sprinkler; ppm: number; k: number }) {
+  const radius = ppm * sprinkler.radiusM
+  if (!(radius > 0)) return null
+  const mid = polar(sprinkler, radius, sprinkler.rotationDeg)
+  const open = sprinkler.arcDeg < 359
+  const start = polar(sprinkler, radius, sprinkler.rotationDeg - sprinkler.arcDeg / 2)
+  const end = polar(sprinkler, radius, sprinkler.rotationDeg + sprinkler.arcDeg / 2)
+  const s = 6 / k
+  return (
+    <g className="sprinkler-handles">
+      <line x1={sprinkler.x} y1={sprinkler.y} x2={mid.x} y2={mid.y} className="sprinkler-ray" />
+      {open && (
+        <>
+          <line x1={sprinkler.x} y1={sprinkler.y} x2={start.x} y2={start.y} className="sprinkler-ray faint" />
+          <line x1={sprinkler.x} y1={sprinkler.y} x2={end.x} y2={end.y} className="sprinkler-ray faint" />
+          <rect
+            data-hit="sprinkler-arc"
+            data-id={sprinkler.id}
+            data-index={0}
+            x={start.x - s}
+            y={start.y - s}
+            width={s * 2}
+            height={s * 2}
+            className="handle arc-handle"
+          />
+          <rect
+            data-hit="sprinkler-arc"
+            data-id={sprinkler.id}
+            data-index={1}
+            x={end.x - s}
+            y={end.y - s}
+            width={s * 2}
+            height={s * 2}
+            className="handle arc-handle"
+          />
+        </>
+      )}
+      <circle
+        data-hit="sprinkler-rot"
+        data-id={sprinkler.id}
+        cx={mid.x}
+        cy={mid.y}
+        r={7 / k}
+        className="handle rot-handle"
+      />
     </g>
   )
 }

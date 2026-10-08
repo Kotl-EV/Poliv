@@ -272,6 +272,11 @@ input, select {
 .dim { fill: #1c2822; font-weight: 650; paint-order: stroke; stroke: #e7efe6; stroke-width: 3px; }
 .mid-handle { fill: #fffdf8; stroke: #1f6b45; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .cover { fill: rgba(47, 122, 72, 0.16); stroke: #24633a; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.cover.selected { fill: rgba(47, 122, 72, 0.28); stroke: #b86a09; }
+.sprinkler-ray { fill: none; stroke: #b86a09; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.sprinkler-ray.faint { stroke: #8a7348; stroke-width: 1; opacity: 0.7; }
+.rot-handle { fill: #fffdf8; cursor: grab; }
+.arc-handle { fill: #fffdf8; cursor: nwse-resize; }
 .draft { fill: none; stroke: #1c2822; }
 .draft-brush { fill: none; opacity: 0.55; }
 .draft-fill { fill: rgba(63, 122, 72, 0.14); stroke: none; }
@@ -300,7 +305,7 @@ input, select {
 .spec td { border-bottom: 1px solid #e4dccb; padding: 4px 0; }
 .spec td:last-child { text-align: right; }
 .props { display: grid; gap: 8px; margin-bottom: 16px; }
-.hint { color: #5c564c; font-size: 13px; }
+.hint { margin: 0 0 10px; color: #5c564c; font-size: 12px; line-height: 1.35; }
 .plain { margin: 0; padding-left: 18px; }
 
 .editor.step-spec {

@@ -217,3 +217,119 @@ test('layoutIrrigation needs scale, source and a wet zone', () => {
   base.source = { x: 10, y: 10, pressureBar: 3, flowLimitLph: null }
   assert.equal(layoutIrrigation(base), null)
 })
+
+function zone(id: string, kind: 'lawn' | 'bed' | 'shrub' | 'building', x: number, y: number, w: number, h: number) {
+  return {
+    id,
+    name: id,
+    kind,
+    doseMm: kind === 'lawn' ? 6 : 8,
+    soil: 'loam' as const,
+    slope: 'flat' as const,
+    climate: 'open' as const,
+    points: [
+      { x, y },
+      { x: x + w, y },
+      { x: x + w, y: y + h },
+      { x, y: y + h },
+    ],
+  }
+}
+
+function coveredShare(points: Point[], sprinklers: { x: number; y: number; radiusM: number; arcDeg: number; rotationDeg: number }[], ppm: number): number {
+  const minX = Math.min(...points.map((p) => p.x))
+  const maxX = Math.max(...points.map((p) => p.x))
+  const minY = Math.min(...points.map((p) => p.y))
+  const maxY = Math.max(...points.map((p) => p.y))
+  const step = 0.6 * ppm
+  let total = 0
+  let good = 0
+  for (let x = minX + step / 2; x < maxX; x += step) {
+    for (let y = minY + step / 2; y < maxY; y += step) {
+      const sample = { x, y }
+      if (!pointInPolygon(sample, points)) continue
+      total += 1
+      const hit = sprinklers.some((head) => {
+        const d = Math.hypot(head.x - sample.x, head.y - sample.y)
+        if (d > head.radiusM * ppm * 1.05) return false
+        if (head.arcDeg >= 359) return true
+        const bearing = ((Math.atan2(sample.x - head.x, -(sample.y - head.y)) * 180) / Math.PI + 360) % 360
+        let delta = bearing - head.rotationDeg
+        while (delta > 180) delta -= 360
+        while (delta < -180) delta += 360
+        return Math.abs(delta) <= head.arcDeg / 2 + 6
+      })
+      if (hit) good += 1
+    }
+  }
+  return total === 0 ? 0 : good / total
+}
+
+test('a large lawn uses rotors and covers most of the grass', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 10
+  doc.zones = [zone('lawn', 'lawn', 100, 80, 200, 140)]
+  doc.source = { x: 60, y: 150, pressureBar: 3, flowLimitLph: null }
+  const next = layoutIrrigation(doc)
+  assert.ok(next)
+  assert.ok(next.sprinklers.length >= 4)
+  assert.ok(next.sprinklers.length <= 16)
+  assert.ok(next.sprinklers.some((head) => head.radiusM >= 9))
+  assert.ok(coveredShare(next.zones[0].points, next.sprinklers, 10) >= 0.85)
+  const analysis = analyze(next)
+  assert.equal(analysis.warnings.some((item) => item.includes('не соединена')), false)
+  assert.equal(analysis.warnings.some((item) => item.includes('не стоит на трубе')), false)
+})
+
+test('a small lawn uses fan nozzles', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 10
+  doc.zones = [zone('lawn', 'lawn', 100, 80, 90, 60)]
+  doc.source = { x: 60, y: 110, pressureBar: 3, flowLimitLph: null }
+  const next = layoutIrrigation(doc)
+  assert.ok(next)
+  assert.ok(next.sprinklers.length >= 2)
+  assert.ok(next.sprinklers.every((head) => head.radiusM <= 5))
+  assert.ok(coveredShare(next.zones[0].points, next.sprinklers, 10) >= 0.8)
+})
+
+test('a bed without a lawn still gets drip laterals', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 10
+  doc.zones = [zone('bed', 'bed', 100, 80, 50, 40)]
+  doc.source = { x: 60, y: 100, pressureBar: 3, flowLimitLph: null }
+  const next = layoutIrrigation(doc)
+  assert.ok(next)
+  assert.equal(next.sprinklers.length, 0)
+  assert.ok(next.drips.length >= 1)
+  const lengthM = next.drips.reduce((sum, drip) => {
+    let px = 0
+    for (let i = 1; i < drip.points.length; i++) {
+      px += Math.hypot(drip.points[i].x - drip.points[i - 1].x, drip.points[i].y - drip.points[i - 1].y)
+    }
+    return sum + px / 10
+  }, 0)
+  assert.ok(lengthM > 20, `drip ${lengthM}m should be laterals, not a 18m perimeter`)
+  assert.ok(analyze(next).drips.flowLph > 0)
+})
+
+test('shrubs get drip and a building stays dry', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 10
+  doc.zones = [
+    zone('lawn', 'lawn', 80, 60, 220, 160),
+    zone('shrub', 'shrub', 100, 80, 40, 40),
+    zone('house', 'building', 200, 100, 50, 50),
+  ]
+  doc.source = { x: 40, y: 140, pressureBar: 3, flowLimitLph: null }
+  const next = layoutIrrigation(doc)
+  assert.ok(next)
+  const shrub = next.zones.find((item) => item.kind === 'shrub')
+  const house = next.zones.find((item) => item.kind === 'building')
+  assert.ok(shrub && house)
+  assert.ok(next.drips.length >= 1)
+  assert.equal(next.sprinklers.some((head) => pointInPolygon(head, shrub.points)), false)
+  assert.equal(next.sprinklers.some((head) => pointInPolygon(head, house.points)), false)
+  const dripInShrub = next.drips.some((drip) => drip.points.some((point, i) => i > 0 && pointInPolygon(point, shrub.points)))
+  assert.ok(dripInShrub)
+})

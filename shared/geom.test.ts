@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { SNAP_PX } from './doc.ts'
 import {
+  aimSprinkler,
+  bearingDeg,
   circlePoints,
   controlFromHandle,
   dist,
@@ -12,6 +14,7 @@ import {
   polygonAreaPx,
   rectPoints,
   scaleAround,
+  snapDeg,
   snapToGrid,
   strokeToPolygon,
   withinScreen,
@@ -85,4 +88,25 @@ test('scale and mirror keep the centroid', () => {
   assert.deepEqual(scaleAround({ x: 14, y: 10 }, origin, 2), { x: 18, y: 10 })
   assert.deepEqual(mirrorAround({ x: 14, y: 8 }, origin, 'x'), { x: 6, y: 8 })
   assert.deepEqual(mirrorAround({ x: 14, y: 8 }, origin, 'y'), { x: 14, y: 12 })
+})
+
+test('bearing is 0 up and grows clockwise', () => {
+  const o = { x: 0, y: 0 }
+  assert.equal(Math.round(bearingDeg(o, { x: 0, y: -10 })), 0)
+  assert.equal(Math.round(bearingDeg(o, { x: 10, y: 0 })), 90)
+  assert.equal(Math.round(bearingDeg(o, { x: 0, y: 10 })), 180)
+  assert.equal(Math.round(bearingDeg(o, { x: -10, y: 0 })), 270)
+  assert.equal(snapDeg(22, 15), 15)
+  assert.equal(snapDeg(353, 15), 0)
+})
+
+test('dragging the mid handle turns the sector, edge handles change the arc', () => {
+  const o = { x: 100, y: 100 }
+  const rot = aimSprinkler(o, 0, 180, { x: 200, y: 100 }, 'rot')
+  assert.equal(Math.round(rot.rotationDeg), 90)
+  assert.equal(rot.arcDeg, 180)
+  const start = aimSprinkler(o, 180, 180, { x: 100, y: 0 }, 'start')
+  assert.equal(Math.round(start.arcDeg), 270)
+  const end = aimSprinkler(o, 180, 180, { x: 100, y: 200 }, 'end')
+  assert.equal(Math.round(end.arcDeg), 90)
 })
