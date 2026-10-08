@@ -36,7 +36,7 @@ import { Spec } from '../editor/Spec'
 
 configurePdfWorker(workerUrl)
 
-type Tool = 'select' | 'pan' | 'scale' | 'zone' | 'rect' | 'circle' | 'brush' | 'sprinkler' | 'pipe' | 'valve' | 'drip' | 'source'
+type Tool = 'select' | 'scale' | 'zone' | 'rect' | 'circle' | 'brush' | 'sprinkler' | 'pipe' | 'valve' | 'drip' | 'source'
 type Step = 'draw' | 'irrig' | 'layout' | 'spec'
 type Sel = { kind: 'sprinkler' | 'zone' | 'pipe' | 'source' | 'valve' | 'drip'; id?: string } | null
 
@@ -392,32 +392,38 @@ export function EditorPage({
       finishDraft()
       return
     }
-    if (hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc') {
+    if (event.button === 1) {
+      event.currentTarget.setPointerCapture(event.pointerId)
+      pan.current = { x: event.clientX, y: event.clientY, view, button: 1, hit, moved: true }
+      return
+    }
+    const drafting = (tool === 'zone' || tool === 'pipe' || tool === 'drip') && draftRef.current.length > 0
+    const editHit = hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc' || hit.kind === 'zone-point' || hit.kind === 'zone-mid' || hit.kind === 'pipe-point' || hit.kind === 'drip-point' || hit.kind === 'sprinkler' || hit.kind === 'source' || hit.kind === 'valve'
+    if (!drafting && editHit) {
       remember()
       event.currentTarget.setPointerCapture(event.pointerId)
       drag.current = hit
       click.current = { hit, x: event.clientX, y: event.clientY, moved: false }
-      setSelection({ kind: 'sprinkler', id: hit.id })
+      setSelection(selectionFromHit(hit))
       return
     }
-    if (tool === 'pan' || event.button === 1) {
-      if (tool === 'pan' && event.button === 0 && (hit.kind === 'sprinkler' || hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc')) {
-        setSelection({ kind: 'sprinkler', id: hit.id })
-      }
+    if (!drafting && hit.kind === 'zone-edge') {
+      click.current = { hit, x: event.clientX, y: event.clientY, moved: false }
+      setSelection({ kind: 'zone', id: hit.id })
+      return
+    }
+    if (!drafting && hit.kind === 'zone' && selection?.kind === 'zone' && selection.id === hit.id) {
+      remember()
       event.currentTarget.setPointerCapture(event.pointerId)
-      pan.current = { x: event.clientX, y: event.clientY, view, button: event.button, hit, moved: true }
+      drag.current = hit
+      grab.current = raw
+      click.current = { hit, x: event.clientX, y: event.clientY, moved: false }
       return
     }
     click.current = { hit, x: event.clientX, y: event.clientY, moved: false }
     if (tool === 'select') event.currentTarget.setPointerCapture(event.pointerId)
 
     if (tool === 'select') {
-      if (hit.kind === 'zone-point' || hit.kind === 'zone-mid' || hit.kind === 'pipe-point' || hit.kind === 'drip-point' || hit.kind === 'sprinkler' || hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc' || hit.kind === 'source' || hit.kind === 'valve') {
-        remember()
-        drag.current = hit
-        setSelection(selectionFromHit(hit))
-        return
-      }
       if (hit.kind === 'zone') {
         remember()
         drag.current = hit
@@ -425,12 +431,7 @@ export function EditorPage({
         setSelection({ kind: 'zone', id: hit.id })
         return
       }
-      if (hit.kind === 'zone-edge') {
-        setSelection({ kind: 'zone', id: hit.id })
-        return
-      }
-      if (hit.kind === 'pipe' || hit.kind === 'sprinkler' || hit.kind === 'valve' || hit.kind === 'drip') setSelection({ kind: hit.kind, id: hit.id })
-      else if (hit.kind === 'source') setSelection({ kind: 'source' })
+      if (hit.kind === 'pipe' || hit.kind === 'drip') setSelection({ kind: hit.kind, id: hit.id })
       else setSelection(null)
       return
     }
@@ -596,7 +597,7 @@ export function EditorPage({
     if (active && tap?.moved) {
       setDoc((current) => snapDrag(current, active))
     }
-    if (!tap || tap.moved || tool !== 'select') return
+    if (!tap || tap.moved) return
     if (tap.hit.kind === 'zone-point' && event.detail >= 2 && tap.hit.id) {
       commit(deleteZoneVertex(docRef.current, tap.hit.id, tap.hit.index))
       return
@@ -840,9 +841,6 @@ export function EditorPage({
       <aside className="ws-tools">
         {step === 'draw' && (
           <>
-            <button className={tool === 'select' ? 'tool active' : 'tool'} title="ПКМ тоже выбирает" onClick={() => { setTool('select'); setDraftPoints([]) }}>Выбор</button>
-            <button className={tool === 'pan' ? 'tool active' : 'tool'} title="ПКМ + перетаскивание — рука" onClick={() => setTool('pan')}>Рука</button>
-            <p className="hint">ПКМ — выбор. Потянуть ПКМ — сдвинуть лист.</p>
             <button className={tool === 'zone' ? 'tool active' : 'tool'} onClick={() => { setTool('zone'); setDraftPoints([]) }}>Полигон</button>
             <button className={tool === 'rect' ? 'tool active' : 'tool'} onClick={() => { setTool('rect'); setDraftPoints([]) }}>Прямоугольник</button>
             <button className={tool === 'circle' ? 'tool active' : 'tool'} onClick={() => { setTool('circle'); setDraftPoints([]) }}>Круг</button>
@@ -895,9 +893,6 @@ export function EditorPage({
         )}
         {step === 'irrig' && (
           <>
-            <button className={tool === 'select' ? 'tool active' : 'tool'} title="ПКМ тоже выбирает" onClick={() => setTool('select')}>Выбор</button>
-            <button className={tool === 'pan' ? 'tool active' : 'tool'} title="ПКМ + перетаскивание — рука" onClick={() => setTool('pan')}>Рука</button>
-            <p className="hint">ПКМ — выбор. Потянуть ПКМ — сдвинуть лист.</p>
             <button className={tool === 'source' ? 'tool active' : 'tool'} onClick={() => setTool('source')}>Источник</button>
             <button className={tool === 'sprinkler' ? 'tool active' : 'tool'} onClick={() => setTool('sprinkler')}>Дождеватель</button>
             <button className={tool === 'pipe' ? 'tool active' : 'tool'} onClick={() => { setTool('pipe'); setDraftPoints([]) }}>Труба</button>
@@ -924,8 +919,6 @@ export function EditorPage({
         )}
         {step === 'layout' && (
           <>
-            <button className={tool === 'select' ? 'tool active' : 'tool'} title="ПКМ тоже выбирает" onClick={() => setTool('select')}>Выбор</button>
-            <button className={tool === 'pan' ? 'tool active' : 'tool'} title="ПКМ + перетаскивание — рука" onClick={() => setTool('pan')}>Рука</button>
             <p className="hint">ПКМ — выбор. Потянуть ПКМ — сдвинуть лист. Клик по дождевателю — ручки на дуге.</p>
           </>
         )}

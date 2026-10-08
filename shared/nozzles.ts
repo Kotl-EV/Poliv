@@ -6,13 +6,13 @@ export type Nozzle = {
   flowLph: number
 }
 
-/** Свои типы форсунок. Чужие каталоги производителей сюда не копируются. */
+/** Свои типы форсунок. Расход внутри семейства согласован по MPR: 90° / 180° / 360° = 1 / 2 / 4. */
 export const NOZZLES: Nozzle[] = [
   { id: 'fan90', name: 'Веер 90°', radiusM: 4.5, arcDeg: 90, flowLph: 180 },
   { id: 'fan180', name: 'Веер 180°', radiusM: 4.5, arcDeg: 180, flowLph: 360 },
   { id: 'fan360', name: 'Веер 360°', radiusM: 4.5, arcDeg: 360, flowLph: 720 },
-  { id: 'rotor90', name: 'Ротор 90°', radiusM: 10, arcDeg: 90, flowLph: 420 },
-  { id: 'rotor', name: 'Ротор 180°', radiusM: 10, arcDeg: 180, flowLph: 840 },
+  { id: 'rotor90', name: 'Ротор 90°', radiusM: 10, arcDeg: 90, flowLph: 360 },
+  { id: 'rotor', name: 'Ротор 180°', radiusM: 10, arcDeg: 180, flowLph: 720 },
   { id: 'rotor360', name: 'Ротор 360°', radiusM: 10, arcDeg: 360, flowLph: 1440 },
 ]
 

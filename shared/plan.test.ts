@@ -76,7 +76,8 @@ test('a fenced rectangle gets sprinklers, valves and a connected network', () =>
   assert.ok((lawn && analysis.zones.find((zone) => zone.id === lawn.id)?.areaM2) || 0 > 100)
   const area = analysis.zones.find((zone) => zone.id === lawn.id)?.areaM2 ?? 0
   assert.ok(area > 100 && area < 290)
-  assert.ok(analysis.connectedFlowLph > 0 && analysis.connectedFlowLph <= 1600)
+  assert.ok(analysis.connectedFlowLph > 0)
+  assert.ok(analysis.stations.every((station) => station.flowLph <= 1500))
   assert.ok(analysis.totalFlowLph >= analysis.connectedFlowLph)
   assert.equal(analysis.warnings.some((item) => item.includes('петля')), false)
   assert.equal(analysis.warnings.some((item) => item.includes('не стоит на трубе')), false)
@@ -264,6 +265,68 @@ function coveredShare(points: Point[], sprinklers: { x: number; y: number; radiu
   }
   return total === 0 ? 0 : good / total
 }
+
+test('a rectangular lawn gets heads at the corners aimed inward', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 10
+  doc.zones = [zone('lawn', 'lawn', 100, 80, 200, 140)]
+  doc.source = { x: 60, y: 150, pressureBar: 3, flowLimitLph: null }
+  const next = layoutIrrigation(doc)
+  assert.ok(next)
+  if (!next) return
+  const corners = [
+    { x: 100, y: 80 },
+    { x: 300, y: 80 },
+    { x: 300, y: 220 },
+    { x: 100, y: 220 },
+  ]
+  for (const corner of corners) {
+    let found = false
+    for (const item of next.sprinklers) {
+      if (Math.hypot(item.x - corner.x, item.y - corner.y) >= 25) continue
+      found = true
+      assert.ok(item.arcDeg <= 100)
+      assert.ok(item.x > 100 && item.x < 300 && item.y > 80 && item.y < 220)
+      break
+    }
+    assert.ok(found, `no head near ${corner.x},${corner.y}`)
+  }
+  assert.ok(coveredShare(next.zones[0].points, next.sprinklers, 10) >= 0.9)
+})
+
+test('an L-shaped lawn is covered without heads in the cutout', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 10
+  doc.zones = [{
+    id: 'lawn',
+    name: 'Газон',
+    kind: 'lawn',
+    doseMm: 6,
+    soil: 'loam',
+    slope: 'flat',
+    climate: 'open',
+    points: [
+      { x: 100, y: 80 },
+      { x: 300, y: 80 },
+      { x: 300, y: 150 },
+      { x: 180, y: 150 },
+      { x: 180, y: 220 },
+      { x: 100, y: 220 },
+    ],
+  }]
+  doc.source = { x: 60, y: 150, pressureBar: 3, flowLimitLph: null }
+  const next = layoutIrrigation(doc)
+  assert.ok(next)
+  assert.ok(next.sprinklers.length >= 4)
+  const cutout = [
+    { x: 180, y: 150 },
+    { x: 300, y: 150 },
+    { x: 300, y: 220 },
+    { x: 180, y: 220 },
+  ]
+  assert.equal(next.sprinklers.some((head) => pointInPolygon(head, cutout)), false)
+  assert.ok(coveredShare(next.zones[0].points, next.sprinklers, 10) >= 0.82)
+})
 
 test('a large lawn uses rotors and covers most of the grass', () => {
   const doc = emptyDoc()

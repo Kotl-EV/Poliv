@@ -1,17 +1,14 @@
 import { SNAP_PX, defaultDose, emptyDoc } from './doc.ts'
-import { dist, pointInPolygon, polygonAreaPx, polar } from './geom.ts'
+import { dist, pointInPolygon, polygonAreaPx } from './geom.ts'
 import { isDripKind, isObstacleKind, isSprayKind, isWetKind } from './landscape.ts'
 import { nozzleById } from './nozzles.ts'
+import { placeSprayOnPolygon, ringsOverlap } from './spray.ts'
 import type { Doc, Point, Zone, ZoneKind } from './types.ts'
 
 export type Rgb = [number, number, number]
 export type InkRole = 'structure' | 'hatch' | 'plant' | 'bed' | 'grid' | 'stipple'
 export type InkSeg = { a: Point; b: Point; role: InkRole }
 
-const FAN_M = 4.5
-const ROTOR_M = 10
-const HEAD_SPACING = 0.9
-const MIN_HEAD_SEP = 0.35
 const DRIP_SPACING_M = 0.35
 const MAX_HEADS = 120
 const STATION_LPH = 1500
@@ -284,12 +281,10 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
       part,
       ppm,
       cellPx,
-      cellM,
       cols,
-      rows,
       origin: { x: 0, y: 0 },
       center,
-      keyOf,
+      holes: [...buildings, ...bedRings],
     }))
     if (heads.length >= MAX_HEADS) break
   }
@@ -340,13 +335,13 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
   const keptDrips = placedDrips.filter((drip) => reachable.has(drip.key))
   if (keptHeads.length === 0 && keptDrips.length === 0) return null
 
-  const flowAt = new Map<number, number>()
-  for (const head of keptHeads) flowAt.set(head.key, (flowAt.get(head.key) ?? 0) + nozzleById(head.nozzleId).flowLph)
-  for (const drip of keptDrips) {
-    const lengthM = polylinePx(drip.points) / ppm
-    flowAt.set(drip.key, (flowAt.get(drip.key) ?? 0) + Math.max(1, Math.round(lengthM / 0.3)) * 2)
-  }
-  const consumers = [...flowAt.entries()].map(([key, flow]) => ({ key, flow }))
+  const consumers = [
+    ...keptHeads.map((head) => ({ key: head.key, flow: nozzleById(head.nozzleId).flowLph, kind: 'spray' as const })),
+    ...keptDrips.map((drip) => {
+      const lengthM = polylinePx(drip.points) / ppm
+      return { key: drip.key, flow: Math.max(1, Math.round(lengthM / 0.3)) * 2, kind: 'drip' as const }
+    }),
+  ]
   const zoneRuntime = new Map<string, number>()
   for (const zone of zones) {
     const area = polygonAreaPx(zone.points) / (ppm * ppm)
@@ -376,13 +371,14 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
   for (const head of keptHeads) runtimeOf.set(head.key, Math.max(runtimeOf.get(head.key) ?? 0, runtimeAt(head.point)))
   for (const drip of keptDrips) runtimeOf.set(drip.key, Math.max(runtimeOf.get(drip.key) ?? 0, runtimeAt(centroid(drip.points))))
   consumers.sort((a, b) => (runtimeOf.get(b.key) ?? 0) - (runtimeOf.get(a.key) ?? 0) || b.flow - a.flow || a.key - b.key)
-  const groups: { key: number; flow: number }[][] = []
-  const bins: { flow: number; runtime: number }[] = []
+  const groups: { key: number; flow: number; kind: 'spray' | 'drip' }[][] = []
+  const bins: { flow: number; runtime: number; kind: 'spray' | 'drip' }[] = []
   for (const item of consumers) {
     const runtime = runtimeOf.get(item.key) ?? 0
     let best = -1
     let bestCost = Infinity
     for (let i = 0; i < bins.length; i++) {
+      if (bins[i].kind !== item.kind) continue
       if (bins[i].flow + item.flow > STATION_LPH) continue
       const cost = Math.max(bins[i].runtime, runtime) - bins[i].runtime
       const tighter = cost < bestCost || (cost === bestCost && best !== -1 && bins[i].flow > bins[best].flow)
@@ -393,7 +389,7 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
     }
     if (best === -1) {
       groups.push([item])
-      bins.push({ flow: item.flow, runtime })
+      bins.push({ flow: item.flow, runtime, kind: item.kind })
     } else {
       groups[best].push(item)
       bins[best].flow += item.flow
@@ -497,7 +493,7 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
   })
   doc.drips = finalDrips.map((drip) => ({ id: ids('drip'), points: drip.points, spacingM: 0.3, emitterLph: 2 }))
   doc.valves = valveKeys.map((key, index) => ({ id: ids('valve'), name: `Клапан ${index + 1}`, ...center(key) }))
-  doc.pipes = pipes
+  doc.pipes = treePipes(pipes, SNAP_PX, ids)
   return doc
 
   function center(key: number): Point {
@@ -523,7 +519,7 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
 export function layoutIrrigation(doc: Doc): Doc | null {
   const ppm = doc.pxPerMeter
   const source = doc.source
-  if (!(ppm > 0) || !source) return null
+  if (ppm == null || !(ppm > 0) || !source) return null
   const irrigable = doc.zones.filter((zone) => isWetKind(zone.kind) && zone.points.length >= 3)
   if (irrigable.length === 0) return null
 
@@ -567,21 +563,21 @@ export function layoutIrrigation(doc: Doc): Doc | null {
     }
   }
 
-  const lawnParts = connected(lawnKeys, cols, rows).filter((part) => part.length * cellM * cellM >= MIN_LAWN_M2)
+  const lawnSet = new Set(lawnKeys)
   const heads: HeadSpot[] = []
-  for (const part of lawnParts) {
-    heads.push(...placeSprayHeads({
-      part,
-      ppm,
-      cellPx,
-      cellM,
-      cols,
-      rows,
-      origin: { x: minX, y: minY },
-      center,
-      keyOf,
-    }))
-    if (heads.length >= MAX_HEADS) break
+  for (const zone of doc.zones) {
+    if (!isSprayKind(zone.kind) || zone.points.length < 3) continue
+    if (polygonAreaPx(zone.points) / (ppm * ppm) < MIN_LAWN_M2) continue
+    const holes = doc.zones
+      .filter((other) => other.id !== zone.id && (isDripKind(other.kind) || isObstacleKind(other.kind)))
+      .filter((other) => ringsOverlap(zone.points, other.points))
+      .map((other) => other.points)
+    for (const spot of placeSprayOnPolygon(zone.points, holes, ppm)) {
+      if (heads.length >= MAX_HEADS) break
+      const key = snapHeadKey(spot.point, lawnSet, center) ?? snapHeadKey(spot.point, allowed, center)
+      if (key === null) continue
+      heads.push({ key, ...spot })
+    }
   }
   if (heads.length > MAX_HEADS) heads.length = MAX_HEADS
 
@@ -632,13 +628,13 @@ export function layoutIrrigation(doc: Doc): Doc | null {
   const keptDrips = placedDrips.filter((drip) => reachable.has(drip.key))
   if (keptHeads.length === 0 && keptDrips.length === 0) return null
 
-  const flowAt = new Map<number, number>()
-  for (const head of keptHeads) flowAt.set(head.key, (flowAt.get(head.key) ?? 0) + nozzleById(head.nozzleId).flowLph)
-  for (const drip of keptDrips) {
-    const lengthM = polylinePx(drip.points) / ppm
-    flowAt.set(drip.key, (flowAt.get(drip.key) ?? 0) + Math.max(1, Math.round(lengthM / 0.3)) * 2)
-  }
-  const consumers = [...flowAt.entries()].map(([key, flow]) => ({ key, flow }))
+  const consumers = [
+    ...keptHeads.map((head) => ({ key: head.key, flow: nozzleById(head.nozzleId).flowLph, kind: 'spray' as const })),
+    ...keptDrips.map((drip) => {
+      const lengthM = polylinePx(drip.points) / ppm
+      return { key: drip.key, flow: Math.max(1, Math.round(lengthM / 0.3)) * 2, kind: 'drip' as const }
+    }),
+  ]
   const zoneRuntime = new Map<string, number>()
   for (const zone of doc.zones) {
     const area = polygonAreaPx(zone.points) / (ppm * ppm)
@@ -668,13 +664,14 @@ export function layoutIrrigation(doc: Doc): Doc | null {
   for (const head of keptHeads) runtimeOf.set(head.key, Math.max(runtimeOf.get(head.key) ?? 0, runtimeAt(head.point)))
   for (const drip of keptDrips) runtimeOf.set(drip.key, Math.max(runtimeOf.get(drip.key) ?? 0, runtimeAt(centroid(drip.points))))
   consumers.sort((a, b) => (runtimeOf.get(b.key) ?? 0) - (runtimeOf.get(a.key) ?? 0) || b.flow - a.flow || a.key - b.key)
-  const groups: { key: number; flow: number }[][] = []
-  const bins: { flow: number; runtime: number }[] = []
+  const groups: { key: number; flow: number; kind: 'spray' | 'drip' }[][] = []
+  const bins: { flow: number; runtime: number; kind: 'spray' | 'drip' }[] = []
   for (const item of consumers) {
     const runtime = runtimeOf.get(item.key) ?? 0
     let best = -1
     let bestCost = Infinity
     for (let i = 0; i < bins.length; i++) {
+      if (bins[i].kind !== item.kind) continue
       if (bins[i].flow + item.flow > STATION_LPH) continue
       const cost = Math.max(bins[i].runtime, runtime) - bins[i].runtime
       const tighter = cost < bestCost || (cost === bestCost && best !== -1 && bins[i].flow > bins[best].flow)
@@ -685,7 +682,7 @@ export function layoutIrrigation(doc: Doc): Doc | null {
     }
     if (best === -1) {
       groups.push([item])
-      bins.push({ flow: item.flow, runtime })
+      bins.push({ flow: item.flow, runtime, kind: item.kind })
     } else {
       groups[best].push(item)
       bins[best].flow += item.flow
@@ -720,7 +717,8 @@ export function layoutIrrigation(doc: Doc): Doc | null {
   const valveKeys: number[] = []
   const pipes: { id: string; points: Point[] }[] = []
   const ids = sequencer()
-  const clear = (a: Point, b: Point) => segmentClear(a, b, [], cellPx)
+  const buildings = doc.zones.filter((zone) => zone.kind === 'building' || zone.kind === 'water').map((zone) => zone.points)
+  const clear = (a: Point, b: Point) => segmentClear(a, b, buildings, cellPx)
   const trunkAllowed = new Set<number>([root])
   for (const key of allowed) if (!terminalKeys.has(key)) trunkAllowed.add(key)
   for (const spot of spots) trunkAllowed.add(spot)
@@ -788,13 +786,56 @@ export function layoutIrrigation(doc: Doc): Doc | null {
     }),
     drips: finalDrips.map((drip) => ({ id: ids('drip'), points: drip.points, spacingM: 0.3, emitterLph: 2 })),
     valves: valveKeys.map((key, index) => ({ id: ids('valve'), name: `Клапан ${index + 1}`, ...center(key) })),
-    pipes,
+    pipes: treePipes(pipes, SNAP_PX, ids),
   }
 }
 
 function sequencer(): (prefix: string) => string {
   let n = 0
   return (prefix) => `${prefix}-${++n}`
+}
+
+function treePipes(
+  pipes: { id: string; points: Point[] }[],
+  snap: number,
+  ids: (prefix: string) => string,
+): { id: string; points: Point[] }[] {
+  const segs: { a: Point; b: Point; len: number }[] = []
+  for (const pipe of pipes) {
+    for (let i = 1; i < pipe.points.length; i++) {
+      const a = pipe.points[i - 1]
+      const b = pipe.points[i]
+      const len = dist(a, b)
+      if (len < 0.5) continue
+      segs.push({ a, b, len })
+    }
+  }
+  segs.sort((left, right) => left.len - right.len)
+  const nodes: Point[] = []
+  const parent: number[] = []
+  const find = (i: number): number => {
+    while (parent[i] !== i) i = parent[i]
+    return i
+  }
+  const idx = (point: Point): number => {
+    const hit = nodes.findIndex((node) => dist(node, point) <= snap)
+    if (hit >= 0) return hit
+    nodes.push(point)
+    parent.push(parent.length)
+    return nodes.length - 1
+  }
+  const kept: { a: Point; b: Point }[] = []
+  for (const seg of segs) {
+    const a = idx(seg.a)
+    const b = idx(seg.b)
+    if (a === b) continue
+    const pa = find(a)
+    const pb = find(b)
+    if (pa === pb) continue
+    parent[pa] = pb
+    kept.push({ a: seg.a, b: seg.b })
+  }
+  return kept.map((seg) => ({ id: ids('pipe'), points: [seg.a, seg.b] }))
 }
 
 function splitCells(keys: number[], maxArea: number, cellArea: number, cols: number, rows: number): number[][] {
@@ -1230,13 +1271,6 @@ function spansOf(points: Point[], ppm: number): { minSpan: number; maxSpan: numb
   return { minSpan: Math.min(spanU, spanV), maxSpan: Math.max(spanU, spanV), angle, mid }
 }
 
-function keyFromPoint(point: Point, origin: Point, cellPx: number, cols: number, rows: number, keyOf: (c: number, r: number) => number): number {
-  const c = Math.floor((point.x - origin.x) / cellPx)
-  const r = Math.floor((point.y - origin.y) / cellPx)
-  if (c < 0 || r < 0 || c >= cols || r >= rows) return -1
-  return keyOf(c, r)
-}
-
 function snapHeadKey(point: Point, partSet: Set<number>, center: (key: number) => Point): number | null {
   let best: number | null = null
   let bestD = Infinity
@@ -1250,233 +1284,49 @@ function snapHeadKey(point: Point, partSet: Set<number>, center: (key: number) =
   return best
 }
 
-function bearingOf(from: Point, to: Point): number {
-  return ((Math.atan2(to.x - from.x, -(to.y - from.y)) * 180) / Math.PI + 360) % 360
-}
-
-function angleDeltaDeg(a: number, b: number): number {
-  let d = a - b
-  while (d > 180) d -= 360
-  while (d < -180) d += 360
-  return d
-}
-
-function pickNozzle(
-  point: Point,
-  radiusM: number,
-  ppm: number,
-  covers: (sample: Point) => boolean,
-  family: 'fan' | 'rotor',
-): { nozzleId: string; rotationDeg: number } | null {
-  const radius = radiusM * ppm * 0.78
-  const total = 24
-  let good = 0
-  let sx = 0
-  let sy = 0
-  for (let i = 0; i < total; i++) {
-    const bearing = (i / total) * 360
-    const sample = polar(point, radius, bearing)
-    if (!covers(sample)) continue
-    good += 1
-    const rad = (bearing * Math.PI) / 180
-    sx += Math.sin(rad)
-    sy += -Math.cos(rad)
-  }
-  if (good === 0) return null
-  const rotationDeg = (((Math.atan2(sx, -sy) * 180) / Math.PI) % 360 + 360) % 360
-  const frac = good / total
-  if (family === 'rotor') {
-    const nozzleId = frac >= 0.78 ? 'rotor360' : frac >= 0.42 ? 'rotor' : 'rotor90'
-    return { nozzleId, rotationDeg }
-  }
-  const nozzleId = frac >= 0.78 ? 'fan360' : frac >= 0.42 ? 'fan180' : 'fan90'
-  return { nozzleId, rotationDeg }
-}
-
-function headCoversPoint(head: HeadSpot, sample: Point, ppm: number): boolean {
-  const nozzle = nozzleById(head.nozzleId)
-  if (dist(head.point, sample) > nozzle.radiusM * ppm * 1.02) return false
-  if (nozzle.arcDeg >= 359) return true
-  return Math.abs(angleDeltaDeg(bearingOf(head.point, sample), head.rotationDeg)) <= nozzle.arcDeg / 2 + 3
-}
-
-function addHead(
-  heads: HeadSpot[],
-  point: Point,
-  partSet: Set<number>,
-  center: (key: number) => Point,
-  radiusM: number,
-  ppm: number,
-  covers: (sample: Point) => boolean,
-  family: 'fan' | 'rotor',
-  minSep: number,
-  inset?: { toward: Point; cellPx: number },
-): boolean {
-  let key = snapHeadKey(point, partSet, center)
-  if (key === null) return false
-  let snapped = center(key)
-  if (inset) {
-    const dx = inset.toward.x - snapped.x
-    const dy = inset.toward.y - snapped.y
-    const len = Math.hypot(dx, dy) || 1
-    const inner = snapHeadKey({ x: snapped.x + (dx / len) * inset.cellPx, y: snapped.y + (dy / len) * inset.cellPx }, partSet, center)
-    if (inner !== null) {
-      key = inner
-      snapped = center(inner)
-    }
-  }
-  if (heads.some((head) => dist(head.point, snapped) < minSep)) return false
-  const cover = pickNozzle(snapped, radiusM, ppm, covers, family)
-  if (!cover) return false
-  heads.push({ key, point: snapped, ...cover })
-  return true
-}
-
 function placeSprayHeads(opts: {
   part: number[]
   ppm: number
   cellPx: number
-  cellM: number
   cols: number
-  rows: number
   origin: Point
   center: (key: number) => Point
-  keyOf: (c: number, r: number) => number
+  holes?: Point[][]
 }): HeadSpot[] {
-  const { part, ppm, cellPx, cellM, cols, rows, origin, center, keyOf } = opts
+  const { part, ppm, cellPx, cols, origin, center, holes = [] } = opts
   if (part.length === 0) return []
   const partSet = new Set(part)
-  const points = part.map(center)
-  const { minSpan, maxSpan, angle, mid } = spansOf(points, ppm)
-  const area = part.length * cellM * cellM
-  const family: 'fan' | 'rotor' = minSpan >= 11 && maxSpan >= 14 && area >= 120 ? 'rotor' : 'fan'
-  const radiusM = family === 'rotor' ? ROTOR_M : FAN_M
-  const spacing = radiusM * HEAD_SPACING * ppm
-  const minSep = radiusM * MIN_HEAD_SEP * ppm
-  const covers = (sample: Point) => partSet.has(keyFromPoint(sample, origin, cellPx, cols, rows, keyOf))
+  const loops = maskLoops(part, cols)
+    .map((loop) => loop.map((point) => ({ x: origin.x + point.x * cellPx, y: origin.y + point.y * cellPx })))
+    .filter((loop) => loop.length >= 3)
+  loops.sort((a, b) => Math.abs(signedArea(b)) - Math.abs(signedArea(a)))
+  const outer = simplify(loops[0] ?? convexHull(part.map(center)), 0.8 * ppm)
+  const inner = loops.slice(1)
+    .map((loop) => simplify(loop, 0.8 * ppm))
+    .filter((loop) => loop.length >= 3 && polygonAreaPx(loop) / (ppm * ppm) >= 2)
+  const spots = placeSprayOnPolygon(outer, [...inner, ...holes], ppm)
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const key of part) {
+    const at = center(key)
+    minX = Math.min(minX, at.x)
+    minY = Math.min(minY, at.y)
+    maxX = Math.max(maxX, at.x)
+    maxY = Math.max(maxY, at.y)
+  }
   const heads: HeadSpot[] = []
-
-  const inset = { toward: mid, cellPx }
-  if (minSpan < radiusM * 0.7) {
-    const long = spansAlong(points, ppm, angle) >= spansAlong(points, ppm, angle + Math.PI / 2) ? angle : angle + Math.PI / 2
-    const dir = { x: Math.cos(long), y: Math.sin(long) }
-    const reach = (maxSpan * ppm) / 2 + spacing
-    for (let t = -reach; t <= reach + 1e-6; t += spacing) {
-      const point = { x: mid.x + dir.x * t, y: mid.y + dir.y * t }
-      const key = keyFromPoint(point, origin, cellPx, cols, rows, keyOf)
-      if (!partSet.has(key)) continue
-      addHead(heads, center(key), partSet, center, radiusM, ppm, covers, family, minSep)
+  for (const spot of spots) {
+    const point = {
+      x: Math.min(maxX, Math.max(minX, spot.point.x)),
+      y: Math.min(maxY, Math.max(minY, spot.point.y)),
     }
-  } else {
-    const traced = zoneRing(part, cols, cellPx).map((point) => ({ x: origin.x + point.x, y: origin.y + point.y }))
-    const ring = simplify(traced.length >= 3 ? traced : convexHull(points), 0.5 * ppm)
-    placeOnRing(heads, ring, spacing, partSet, center, radiusM, ppm, covers, family, minSep, inset)
+    const key = snapHeadKey(point, partSet, center)
+    if (key === null) continue
+    heads.push({ key, point, nozzleId: spot.nozzleId, rotationDeg: spot.rotationDeg })
   }
-
-  fillGaps(heads, part, partSet, center, radiusM, ppm, covers, family, minSep)
   return heads
-}
-
-function spansAlong(points: Point[], ppm: number, angle: number): number {
-  const c = Math.cos(angle)
-  const s = Math.sin(angle)
-  const mid = centroid(points)
-  let min = Infinity
-  let max = -Infinity
-  for (const point of points) {
-    const u = (point.x - mid.x) * c + (point.y - mid.y) * s
-    min = Math.min(min, u)
-    max = Math.max(max, u)
-  }
-  return (max - min) / ppm
-}
-
-function placeOnRing(
-  heads: HeadSpot[],
-  ring: Point[],
-  spacing: number,
-  partSet: Set<number>,
-  center: (key: number) => Point,
-  radiusM: number,
-  ppm: number,
-  covers: (sample: Point) => boolean,
-  family: 'fan' | 'rotor',
-  minSep: number,
-  inset?: { toward: Point; cellPx: number },
-): void {
-  if (ring.length < 3) return
-  const n = ring.length
-  const corner = new Array<boolean>(n).fill(false)
-  for (let i = 0; i < n; i++) {
-    const prev = ring[(i + n - 1) % n]
-    const cur = ring[i]
-    const next = ring[(i + 1) % n]
-    const a = Math.atan2(cur.y - prev.y, cur.x - prev.x)
-    const b = Math.atan2(next.y - cur.y, next.x - cur.x)
-    let turn = b - a
-    while (turn > Math.PI) turn -= Math.PI * 2
-    while (turn < -Math.PI) turn += Math.PI * 2
-    if (Math.abs(turn) > (35 * Math.PI) / 180) corner[i] = true
-  }
-  const anchors = corner.map((flag, i) => (flag ? i : -1)).filter((i) => i >= 0)
-  const joints = anchors.length >= 2 ? anchors : [...Array(n).keys()]
-  const placed: Point[] = []
-  for (const i of joints) {
-    const before = heads.length
-    addHead(heads, ring[i], partSet, center, radiusM, ppm, covers, family, minSep, inset)
-    placed.push(heads.length > before ? heads[heads.length - 1].point : ring[i])
-  }
-  for (let a = 0; a < placed.length; a++) {
-    const p0 = placed[a]
-    const p1 = placed[(a + 1) % placed.length]
-    const len = dist(p0, p1)
-    const extra = Math.max(0, Math.ceil(len / spacing) - 1)
-    if (extra === 0 || len < 1) continue
-    for (let k = 1; k <= extra; k++) {
-      const t = k / (extra + 1)
-      addHead(heads, { x: p0.x + (p1.x - p0.x) * t, y: p0.y + (p1.y - p0.y) * t }, partSet, center, radiusM, ppm, covers, family, minSep)
-    }
-  }
-}
-
-function fillGaps(
-  heads: HeadSpot[],
-  part: number[],
-  partSet: Set<number>,
-  center: (key: number) => Point,
-  radiusM: number,
-  ppm: number,
-  covers: (sample: Point) => boolean,
-  family: 'fan' | 'rotor',
-  minSep: number,
-): void {
-  for (let guard = 0; guard < 80 && heads.length < MAX_HEADS; guard++) {
-    const uncovered: number[] = []
-    for (const key of part) {
-      const point = center(key)
-      if (!heads.some((head) => headCoversPoint(head, point, ppm))) uncovered.push(key)
-    }
-    if (uncovered.length <= part.length * 0.05) break
-    let bestKey: number | null = null
-    let bestGain = 1
-    for (const key of uncovered) {
-      const point = center(key)
-      if (heads.some((head) => dist(head.point, point) < minSep)) continue
-      const cover = pickNozzle(point, radiusM, ppm, covers, family)
-      if (!cover) continue
-      const trial: HeadSpot = { key, point, ...cover }
-      let gain = 0
-      for (const other of uncovered) {
-        if (headCoversPoint(trial, center(other), ppm)) gain += 1
-      }
-      if (gain > bestGain) {
-        bestGain = gain
-        bestKey = key
-      }
-    }
-    if (bestKey === null) break
-    if (!addHead(heads, center(bestKey), partSet, center, radiusM, ppm, covers, family, minSep)) break
-  }
 }
 
 function clipLineToPolygon(ring: Point[], origin: Point, dir: Point): Point[][] {
@@ -1536,30 +1386,44 @@ function placeDripLines(ring: Point[], ppm: number): Point[] | null {
       laterals.push(a0 <= a1 ? seg : [seg[1], seg[0]])
     }
   }
+  const edgePad = 0.12 * ppm
+  const trim = (seg: Point[]): Point[] | null => {
+    const a = seg[0]
+    const b = seg[1]
+    const len = dist(a, b)
+    if (len < 0.5 * ppm + edgePad * 2) return null
+    const ux = (b.x - a.x) / len
+    const uy = (b.y - a.y) / len
+    return [
+      { x: a.x + ux * edgePad, y: a.y + uy * edgePad },
+      { x: b.x - ux * edgePad, y: b.y - uy * edgePad },
+    ]
+  }
   if (width < spacing * 0.6) {
     pushSegs(mid)
   } else {
-    const count = Math.max(1, Math.round(width / spacing))
-    const step = width / count
+    const inner = Math.max(0, width - edgePad * 2)
+    const count = Math.max(1, Math.round(inner / spacing))
+    const step = inner / count
     for (let i = 0; i < count; i++) {
-      const o = minO + (i + 0.5) * step
+      const o = minO + edgePad + (i + 0.5) * step
       pushSegs({ x: mid.x + nx * o, y: mid.y + ny * o })
     }
   }
-  if (laterals.length === 0) {
+  const trimmed = laterals.map(trim).filter((seg): seg is Point[] => Boolean(seg))
+  if (trimmed.length === 0) {
     const loop = dist(simplified[0], simplified[simplified.length - 1]) < 1e-6 ? simplified : [...simplified, simplified[0]]
     return loop
   }
-  laterals.sort((a, b) => {
+  trimmed.sort((a, b) => {
     const oa = (a[0].x - mid.x) * nx + (a[0].y - mid.y) * ny
     const ob = (b[0].x - mid.x) * nx + (b[0].y - mid.y) * ny
     return oa - ob
   })
   const path: Point[] = []
-  laterals.forEach((lat, index) => {
+  trimmed.forEach((lat, index) => {
     const pts = index % 2 === 0 ? lat : [lat[lat.length - 1], lat[0]]
-    if (path.length === 0) path.push(...pts)
-    else path.push(...pts)
+    path.push(...pts)
   })
   return path.length >= 2 ? path : null
 }
