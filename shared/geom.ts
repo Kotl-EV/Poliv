@@ -4,6 +4,11 @@ export function dist(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y)
 }
 
+/** Hit-test in screen pixels: world distance × zoom. */
+export function withinScreen(origin: Point, click: Point, k: number, screenPx: number): boolean {
+  return dist(origin, click) * k <= screenPx
+}
+
 export function polygonAreaPx(points: Point[]): number {
   if (points.length < 3) return 0
   let sum = 0

@@ -9,7 +9,7 @@
     "dev": "concurrently -n api,web -c green,cyan \"tsx watch server/src/index.ts\" \"vite --host 127.0.0.1\"",
     "dev:api": "tsx watch server/src/index.ts",
     "dev:web": "vite --host 127.0.0.1",
-    "test": "node --test shared/analyze.test.ts shared/plan.test.ts",
+    "test": "node --test shared/analyze.test.ts shared/plan.test.ts shared/geom.test.ts",
     "build": "vite build",
     "start": "tsx server/src/index.ts"
   },

@@ -3,13 +3,13 @@ import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 import { analyze } from '@shared/analyze.ts'
 import { asClimate, asSlope, asSoil, defaultDose, emptyDoc, SNAP_PX } from '@shared/doc.ts'
 import { exampleDoc } from '@shared/example.ts'
-import { dist } from '@shared/geom.ts'
+import { dist, withinScreen } from '@shared/geom.ts'
 import { nozzleById, NOZZLES } from '@shared/nozzles.ts'
 import { SERIES, type PipeSeriesId } from '@shared/pipes.ts'
 import type { Doc, Drip, Point, Source, Sprinkler, Valve, Zone, ZoneKind } from '@shared/types.ts'
 import { api, type User } from '../api'
 import { layoutIrrigation } from '@shared/plan.ts'
-import { Board, readHit, worldPoint, type Hit, type View } from '../editor/Board'
+import { Board, CLOSE_SCREEN_PX, readHit, worldPoint, type Hit, type View } from '../editor/Board'
 import { configurePdfWorker, renderPlanPdf } from '../pdf/readPlan'
 import { Spec } from '../editor/Spec'
 
@@ -121,11 +121,13 @@ export function EditorPage({
   const [planNote, setPlanNote] = useState('')
   const svgRef = useRef<SVGSVGElement>(null)
   const docRef = useRef(doc)
+  const draftRef = useRef<Point[]>([])
   const past = useRef<Doc[]>([])
   const ready = useRef(false)
   const drag = useRef<Hit | null>(null)
   const pan = useRef<{ x: number; y: number; view: View } | null>(null)
   docRef.current = doc
+  draftRef.current = draft
 
   const analysis = useMemo(() => analyze(doc), [doc])
   const board = contentSize(doc, imageSize)
@@ -194,7 +196,7 @@ export function EditorPage({
         return
       }
       if (event.key === 'Escape') {
-        setDraft([])
+        setDraftPoints([])
         setScalePoints([])
         setSelection(null)
       }
@@ -218,9 +220,21 @@ export function EditorPage({
     setDoc(next)
   }
 
+  function setDraftPoints(points: Point[]) {
+    draftRef.current = points
+    setDraft(points)
+  }
+
+  function nearDraftStart(point: Point): boolean {
+    const points = draftRef.current
+    if (points.length < 3) return false
+    return withinScreen(points[0], point, view.k, CLOSE_SCREEN_PX)
+  }
+
   function finishDraft() {
     const current = docRef.current
-    if (tool === 'zone' && draft.length >= 3) {
+    const points = draftRef.current
+    if (tool === 'zone' && points.length >= 3) {
       const zone: Zone = {
         id: uid('zone'),
         name: zoneKind === 'bed' ? 'Клумба' : zoneKind === 'path' ? 'Дорожка' : 'Газон',
@@ -229,23 +243,25 @@ export function EditorPage({
         soil: 'loam',
         slope: 'flat',
         climate: 'open',
-        points: draft,
+        points,
       }
       commit({ ...current, zones: [...current.zones, zone] })
       setSelection({ kind: 'zone', id: zone.id })
-      setDraft([])
+      setDraftPoints([])
+      return
     }
-    if (tool === 'pipe' && draft.length >= 2) {
-      const pipe = { id: uid('pipe'), points: draft }
+    if (tool === 'pipe' && points.length >= 2) {
+      const pipe = { id: uid('pipe'), points }
       commit({ ...current, pipes: [...current.pipes, pipe] })
       setSelection({ kind: 'pipe', id: pipe.id })
-      setDraft([])
+      setDraftPoints([])
+      return
     }
-    if (tool === 'drip' && draft.length >= 2) {
-      const drip: Drip = { id: uid('drip'), points: draft, spacingM: 0.3, emitterLph: 2 }
+    if (tool === 'drip' && points.length >= 2) {
+      const drip: Drip = { id: uid('drip'), points, spacingM: 0.3, emitterLph: 2 }
       commit({ ...current, drips: [...current.drips, drip] })
       setSelection({ kind: 'drip', id: drip.id })
-      setDraft([])
+      setDraftPoints([])
     }
   }
 
@@ -263,6 +279,11 @@ export function EditorPage({
 
   function onPointerDown(event: React.PointerEvent<SVGSVGElement>) {
     if (!svgRef.current) return
+    if (event.button === 2) {
+      event.preventDefault()
+      if (tool === 'zone' || tool === 'pipe' || tool === 'drip') finishDraft()
+      return
+    }
     event.currentTarget.setPointerCapture(event.pointerId)
     if (tool === 'pan' || event.button === 1) {
       pan.current = { x: event.clientX, y: event.clientY, view }
@@ -282,7 +303,10 @@ export function EditorPage({
       else setSelection(null)
       return
     }
-    const point = tool === 'scale' ? raw : snapTo(raw, [...targetsOf(doc), ...draft])
+    const snapTargets = tool === 'zone' && draftRef.current.length >= 3
+      ? [...targetsOf(doc), ...draftRef.current.slice(1)]
+      : [...targetsOf(doc), ...draftRef.current]
+    const point = tool === 'scale' ? raw : snapTo(raw, snapTargets)
     if (tool === 'source') {
       commit(withSourcePoint(doc, point))
       setSelection({ kind: 'source' })
@@ -314,15 +338,20 @@ export function EditorPage({
       setScalePoints((current) => (current.length >= 2 ? [point] : [...current, point]))
       return
     }
-    if ((tool === 'zone' || tool === 'pipe' || tool === 'drip') && event.detail === 2) {
-      finishDraft()
-      return
+    if (tool === 'zone' || tool === 'pipe' || tool === 'drip') {
+      if (event.detail >= 2) {
+        finishDraft()
+        return
+      }
+      const hit = readHit(event.target)
+      if (hit.kind === 'draft-close' || (tool === 'zone' && nearDraftStart(raw))) {
+        finishDraft()
+        return
+      }
+      const last = draftRef.current[draftRef.current.length - 1]
+      if (last && dist(raw, last) * view.k < 6) return
+      setDraftPoints([...draftRef.current, point])
     }
-    if (tool === 'zone' && draft.length >= 3 && dist(raw, draft[0]) <= SNAP_PX) {
-      finishDraft()
-      return
-    }
-    if (tool === 'zone' || tool === 'pipe' || tool === 'drip') setDraft((current) => [...current, point])
   }
 
   function onPointerMove(event: React.PointerEvent<SVGSVGElement>) {
@@ -415,7 +444,7 @@ export function EditorPage({
       if (!confirm('Заменить чертёж примером?')) return
     }
     commit(exampleDoc())
-    setDraft([])
+    setDraftPoints([])
     setSelection(null)
     setPlanNote('')
   }
@@ -430,7 +459,7 @@ export function EditorPage({
 
   function openStep(next: Step) {
     setStep(next)
-    setDraft([])
+    setDraftPoints([])
     setScalePoints([])
     setTool(next === 'sheet' && docRef.current.pxPerMeter ? 'pan' : STEP_DEFAULT_TOOL[next])
   }
@@ -488,7 +517,7 @@ export function EditorPage({
         ))}
         {stepTools.length > 0 && <div className="tool-gap" />}
         {TOOLS.filter((item) => stepTools.includes(item.id)).map((item) => (
-          <button key={item.id} className={tool === item.id ? 'tool active' : 'tool'} onClick={() => { setTool(item.id); setDraft([]) }}>
+          <button key={item.id} className={tool === item.id ? 'tool active' : 'tool'} onClick={() => { setTool(item.id); setDraftPoints([]) }}>
             {item.label}
           </button>
         ))}
@@ -526,8 +555,11 @@ export function EditorPage({
             ))}
           </select>
         )}
-        {(tool === 'zone' || tool === 'pipe' || tool === 'drip') && draft.length >= (tool === 'zone' ? 3 : 2) && (
-          <button className="tool" onClick={finishDraft}>{tool === 'zone' ? 'Замкнуть' : 'Готово'}</button>
+        {tool === 'zone' && (
+          <button className="primary" onClick={finishDraft} disabled={draft.length < 3}>Замкнуть</button>
+        )}
+        {(tool === 'pipe' || tool === 'drip') && draft.length >= 2 && (
+          <button className="primary" onClick={finishDraft}>Готово</button>
         )}
         {step !== 'spec' && <button className="tool" onClick={fit}>Вписать</button>}
         {step !== 'spec' && <button className="tool" onClick={loadExample}>Пример</button>}
@@ -562,7 +594,17 @@ export function EditorPage({
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
+          onContextMenu={(event) => {
+            event.preventDefault()
+            if (tool === 'zone' || tool === 'pipe' || tool === 'drip') finishDraft()
+          }}
         />
+        {tool === 'zone' && draft.length > 0 && (
+          <div className="draft-bar">
+            <span>Точек: {draft.length}</span>
+            <button className="primary" onClick={finishDraft} disabled={draft.length < 3}>Замкнуть контур</button>
+          </div>
+        )}
       </div>
       <div className="side">
         {error && <p className="error">{error}</p>}
@@ -576,6 +618,14 @@ export function EditorPage({
             </label>
             <button className="primary" onClick={applyScale} disabled={scalePoints.length < 2}>Применить</button>
             {doc.pxPerMeter && <p>Сейчас {doc.pxPerMeter.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} px = 1 м</p>}
+          </div>
+        )}
+        {tool === 'zone' && (
+          <div className="props">
+            <h2>Контур зоны</h2>
+            <p>Точек: {draft.length}. С трёх точек контур можно замкнуть.</p>
+            <button className="primary" onClick={finishDraft} disabled={draft.length < 3}>Замкнуть</button>
+            {draft.length > 0 && <button className="tool" onClick={() => setDraftPoints([])}>Сбросить точки</button>}
           </div>
         )}
         {planNote && <p className="hint">{planNote}</p>}
@@ -677,7 +727,7 @@ function stepHint(step: Step, doc: Doc, tool: Tool): string {
     return 'Масштаб задан. Дальше обведите зоны, которые нужно поливать.'
   }
   if (step === 'zones') return tool === 'zone'
-    ? 'Обведите газон, клумбу или дорожку по контуру. Замкните у первой точки, кнопкой или Enter. Дорожка не поливается.'
+    ? 'Ставьте точки по краю газона. С третьей точки появляется зелёный кружок на старте — кликните его, либо кнопку «Замкнуть контур», либо правую кнопку, либо Enter.'
     : 'Обведите области полива. Газон — веера, клумба — капля. Дорожку можно обвести, чтобы по ней не ставились дождеватели.'
   if (step === 'water') {
     if (!doc.source) return 'Поставьте точку, откуда приходит вода. Затем нажмите «Рассчитать схему» — трубы, дождеватели и клапаны появятся сами.'

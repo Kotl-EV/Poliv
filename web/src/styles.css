@@ -115,12 +115,32 @@ input, select {
 .tool.step { font-weight: 650; }
 .tools .primary { text-align: left; }
 .tool-gap { height: 8px; }
-.stage { min-width: 0; min-height: 0; background: #cfc6b6; }
+.stage { position: relative; min-width: 0; min-height: 0; background: #cfc6b6; }
+.draft-bar {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  background: #f7f3ea;
+  border: 1px solid #c9bfae;
+  padding: 8px 10px;
+  box-shadow: 0 10px 24px rgba(40, 32, 18, 0.14);
+}
+.draft-bar .primary:disabled { opacity: 0.45; }
 .board { width: 100%; height: 100%; display: block; touch-action: none; background: #cfc6b6; cursor: crosshair; }
 .paper { fill: #f4efe4; }
 .grid { stroke: rgba(28, 40, 34, 0.12); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .cover { fill: rgba(47, 122, 72, 0.16); stroke: #24633a; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .draft { fill: none; stroke: #1c2822; }
+.draft-fill { fill: rgba(63, 122, 72, 0.14); stroke: none; }
+.draft-fill.closing { fill: rgba(31, 107, 69, 0.28); }
+.draft-close-edge { fill: none; stroke: #1f6b45; }
+.draft-point { fill: #fffdf8; stroke: #1c2822; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.draft-start-hit { fill: rgba(31, 107, 69, 0.22); stroke: #1f6b45; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.draft-start.hot .draft-start-hit { fill: rgba(31, 107, 69, 0.42); }
+.draft-start-dot { fill: #1f6b45; stroke: #f7f3ea; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .node { fill: #fffdf8; stroke: #1c2822; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .node.selected, .source.selected, .handle { stroke: #b86a09; }
 .source { fill: #1f6b45; stroke: #143c28; stroke-width: 2; vector-effect: non-scaling-stroke; }

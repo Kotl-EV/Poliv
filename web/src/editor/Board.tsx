@@ -1,6 +1,8 @@
-import { forwardRef, type PointerEvent } from 'react'
-import { sectorPath } from '@shared/geom.ts'
+import { forwardRef, type MouseEvent, type PointerEvent } from 'react'
+import { dist, sectorPath } from '@shared/geom.ts'
 import type { Analysis, Doc, Point } from '@shared/types.ts'
+
+export const CLOSE_SCREEN_PX = 32
 
 export type View = { x: number; y: number; k: number }
 
@@ -15,6 +17,7 @@ export type Hit =
   | { kind: 'valve'; id: string }
   | { kind: 'drip'; id: string }
   | { kind: 'drip-point'; id: string; index: number }
+  | { kind: 'draft-close' }
 
 const ZONE_COLOR = {
   lawn: { fill: 'rgba(63, 122, 72, 0.28)', stroke: '#24633a' },
@@ -34,6 +37,7 @@ export function readHit(target: EventTarget | null): Hit {
   if (kind === 'pipe') return { kind, id }
   if (kind === 'valve') return { kind, id }
   if (kind === 'drip') return { kind, id }
+  if (kind === 'draft-close') return { kind }
   if (kind === 'zone-point' && Number.isInteger(index)) return { kind, id, index }
   if (kind === 'pipe-point' && Number.isInteger(index)) return { kind, id, index }
   if (kind === 'drip-point' && Number.isInteger(index)) return { kind, id, index }
@@ -74,6 +78,7 @@ export const Board = forwardRef<SVGSVGElement, {
   onPointerDown: (event: PointerEvent<SVGSVGElement>) => void
   onPointerMove: (event: PointerEvent<SVGSVGElement>) => void
   onPointerUp: (event: PointerEvent<SVGSVGElement>) => void
+  onContextMenu?: (event: MouseEvent<SVGSVGElement>) => void
 }>(function Board(props, ref) {
   const { doc, analysis, view, board, backgroundUrl, imageSize } = props
   const step = gridStep(doc.pxPerMeter ?? 50, view.k, Math.max(board.w, board.h))
@@ -87,6 +92,7 @@ export const Board = forwardRef<SVGSVGElement, {
       onPointerDown={props.onPointerDown}
       onPointerMove={props.onPointerMove}
       onPointerUp={props.onPointerUp}
+      onContextMenu={props.onContextMenu}
     >
       <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
         <rect x={0} y={0} width={board.w} height={board.h} className="paper" />
@@ -153,14 +159,65 @@ export const Board = forwardRef<SVGSVGElement, {
             />
           )),
         )}
-        {props.draft.length > 0 && (
-          <polyline
-            points={[...props.draft, ...(props.hover ? [props.hover] : [])].map((point) => `${point.x},${point.y}`).join(' ')}
-            className="draft"
-            strokeWidth={2 / view.k}
-            pointerEvents="none"
-          />
-        )}
+        {props.draft.length > 0 && (() => {
+          const start = props.draft[0]
+          const last = props.draft[props.draft.length - 1]
+          const canClose = props.draft.length >= 3
+          const closing = Boolean(canClose && props.hover && dist(props.hover, start) * view.k <= CLOSE_SCREEN_PX)
+          const line = closing
+            ? props.draft
+            : [...props.draft, ...(props.hover ? [props.hover] : [])]
+          const fill = canClose ? (closing ? props.draft : [...props.draft, ...(props.hover ? [props.hover] : [])]) : []
+          return (
+            <g className="draft-layer">
+              {fill.length >= 3 && (
+                <polygon
+                  points={fill.map((point) => `${point.x},${point.y}`).join(' ')}
+                  className={closing ? 'draft-fill closing' : 'draft-fill'}
+                  pointerEvents="none"
+                />
+              )}
+              <polyline
+                points={line.map((point) => `${point.x},${point.y}`).join(' ')}
+                className="draft"
+                strokeWidth={2 / view.k}
+                pointerEvents="none"
+              />
+              {canClose && (
+                <line
+                  x1={last.x}
+                  y1={last.y}
+                  x2={start.x}
+                  y2={start.y}
+                  className="draft-close-edge"
+                  strokeWidth={2 / view.k}
+                  strokeDasharray={`${7 / view.k} ${5 / view.k}`}
+                  pointerEvents="none"
+                />
+              )}
+              {props.draft.map((point, index) => (
+                index === 0 ? null : (
+                  <circle
+                    key={`draft-${index}`}
+                    cx={point.x}
+                    cy={point.y}
+                    r={4.5 / view.k}
+                    className="draft-point"
+                    pointerEvents="none"
+                  />
+                )
+              ))}
+              {canClose ? (
+                <g data-hit="draft-close" className={closing ? 'draft-start hot' : 'draft-start'}>
+                  <circle cx={start.x} cy={start.y} r={18 / view.k} className="draft-start-hit" />
+                  <circle cx={start.x} cy={start.y} r={6 / view.k} className="draft-start-dot" pointerEvents="none" />
+                </g>
+              ) : (
+                <circle cx={start.x} cy={start.y} r={5 / view.k} className="draft-point" pointerEvents="none" />
+              )}
+            </g>
+          )
+        })()}
         {doc.drips.map((drip) => (
           <polyline
             key={`${drip.id}-line`}
