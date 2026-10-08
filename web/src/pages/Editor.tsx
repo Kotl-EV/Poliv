@@ -4,15 +4,21 @@ import { analyze } from '@shared/analyze.ts'
 import { asClimate, asSlope, asSoil, defaultDose, emptyDoc, SNAP_PX } from '@shared/doc.ts'
 import { exampleDoc } from '@shared/example.ts'
 import {
+  circlePoints,
   closestOnSegment,
   controlFromHandle,
+  centroid,
   dist,
   midpoint,
+  mirrorAround,
   orthoFrom,
   polygonAreaPx,
+  rectPoints,
   ringLength,
   rotateAround,
+  scaleAround,
   snapToGrid,
+  strokeToPolygon,
   withinScreen,
 } from '@shared/geom.ts'
 import { DEFAULT_PPM, DEFAULT_SHEET_M, gridStepM, isWetKind, SURFACES, surfaceOf } from '@shared/landscape.ts'
@@ -27,7 +33,7 @@ import { Spec } from '../editor/Spec'
 
 configurePdfWorker(workerUrl)
 
-type Tool = 'select' | 'pan' | 'scale' | 'zone' | 'sprinkler' | 'pipe' | 'valve' | 'drip' | 'source'
+type Tool = 'select' | 'pan' | 'scale' | 'zone' | 'rect' | 'circle' | 'brush' | 'sprinkler' | 'pipe' | 'valve' | 'drip' | 'source'
 type Step = 'draw' | 'irrig' | 'layout' | 'spec'
 type Sel = { kind: 'sprinkler' | 'zone' | 'pipe' | 'source' | 'valve' | 'drip'; id?: string } | null
 
@@ -117,6 +123,7 @@ export function EditorPage({
   const [scaleMeters, setScaleMeters] = useState('5')
   const [zoneKind, setZoneKind] = useState<ZoneKind>('lawn')
   const [nozzleId, setNozzleId] = useState('fan180')
+  const [brushM, setBrushM] = useState(0.8)
   const [selection, setSelection] = useState<Sel>(null)
   const [view, setView] = useState<View>({ x: 24, y: 24, k: 1 })
   const [backgroundUrl, setBackgroundUrl] = useState<string | null>(null)
@@ -135,6 +142,9 @@ export function EditorPage({
   const pan = useRef<{ x: number; y: number; view: View } | null>(null)
   const click = useRef<{ hit: Hit; x: number; y: number; moved: boolean } | null>(null)
   const grab = useRef<Point | null>(null)
+  const shapeStart = useRef<Point | null>(null)
+  const brushing = useRef(false)
+  const clipboard = useRef<Zone | null>(null)
   const didFit = useRef(false)
   docRef.current = doc
   draftRef.current = draft
@@ -218,7 +228,24 @@ export function EditorPage({
         redo()
         return
       }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'd') {
+        event.preventDefault()
+        duplicateSelected()
+        return
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+        event.preventDefault()
+        copySelected()
+        return
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v') {
+        event.preventDefault()
+        pasteClipboard()
+        return
+      }
       if (event.key === 'Escape') {
+        shapeStart.current = null
+        brushing.current = false
         setDraftPoints([])
         setScalePoints([])
         setSelection(null)
@@ -263,6 +290,25 @@ export function EditorPage({
     setDraft(points)
   }
 
+  function addZone(points: Point[]) {
+    if (points.length < 3 || polygonAreaPx(points) < 36) return false
+    const current = docRef.current
+    const surface = surfaceOf(zoneKind)
+    const zone: Zone = {
+      id: uid('zone'),
+      name: surface.label,
+      kind: zoneKind,
+      doseMm: defaultDose(zoneKind),
+      soil: 'loam',
+      slope: 'flat',
+      climate: 'open',
+      points,
+    }
+    commit({ ...current, zones: [...current.zones, zone] })
+    setSelection({ kind: 'zone', id: zone.id })
+    return true
+  }
+
   function nearDraftStart(point: Point): boolean {
     const points = draftRef.current
     if (points.length < 3) return false
@@ -274,19 +320,7 @@ export function EditorPage({
     const points = draftRef.current
     try {
       if (tool === 'zone' && points.length >= 3) {
-        const surface = surfaceOf(zoneKind)
-        const zone: Zone = {
-          id: uid('zone'),
-          name: surface.label,
-          kind: zoneKind,
-          doseMm: defaultDose(zoneKind),
-          soil: 'loam',
-          slope: 'flat',
-          climate: 'open',
-          points,
-        }
-        commit({ ...current, zones: [...current.zones, zone] })
-        setSelection({ kind: 'zone', id: zone.id })
+        addZone(points)
         setDraftPoints([])
         return
       }
@@ -379,7 +413,7 @@ export function EditorPage({
       return
     }
 
-    const point = tool === 'scale' ? raw : worldSnap(raw, event.shiftKey)
+    const point = tool === 'scale' ? raw : worldSnap(raw, (tool === 'zone' || tool === 'pipe' || tool === 'drip') && event.shiftKey)
     if (tool === 'source') {
       commit(withSourcePoint(doc, point))
       setSelection({ kind: 'source' })
@@ -409,6 +443,18 @@ export function EditorPage({
     }
     if (tool === 'scale') {
       setScalePoints((current) => (current.length >= 2 ? [point] : [...current, point]))
+      return
+    }
+    if (tool === 'rect' || tool === 'circle') {
+      event.currentTarget.setPointerCapture(event.pointerId)
+      shapeStart.current = point
+      setDraftPoints(tool === 'rect' ? rectPoints(point, point) : circlePoints(point, { x: point.x + 1, y: point.y }))
+      return
+    }
+    if (tool === 'brush') {
+      event.currentTarget.setPointerCapture(event.pointerId)
+      brushing.current = true
+      setDraftPoints([point])
       return
     }
     if (tool === 'zone' || tool === 'pipe' || tool === 'drip') {
@@ -443,9 +489,18 @@ export function EditorPage({
       return
     }
     const rawMove = worldPoint(event, svgRef.current, view)
-    const drawing = tool === 'zone' || tool === 'pipe' || tool === 'drip'
-    const point = drawing ? worldSnap(rawMove, event.shiftKey) : rawMove
+    const drawing = tool === 'zone' || tool === 'pipe' || tool === 'drip' || tool === 'rect' || tool === 'circle' || tool === 'brush'
+    const point = drawing ? worldSnap(rawMove, (tool === 'zone' || tool === 'pipe' || tool === 'drip') && event.shiftKey) : rawMove
     setHover(point)
+    if (shapeStart.current && (tool === 'rect' || tool === 'circle')) {
+      setDraftPoints(tool === 'rect' ? rectPoints(shapeStart.current, point, event.shiftKey) : circlePoints(shapeStart.current, point))
+      return
+    }
+    if (brushing.current && tool === 'brush') {
+      const last = draftRef.current[draftRef.current.length - 1]
+      if (!last || dist(last, point) * view.k > 3) setDraftPoints([...draftRef.current, point])
+      return
+    }
     if (click.current && (Math.abs(event.clientX - click.current.x) > 3 || Math.abs(event.clientY - click.current.y) > 3)) {
       click.current.moved = true
     }
@@ -466,6 +521,34 @@ export function EditorPage({
   }
 
   function onPointerUp(event: React.PointerEvent<SVGSVGElement>) {
+    if (pan.current) {
+      pan.current = null
+      drag.current = null
+      click.current = null
+      grab.current = null
+      return
+    }
+    if (shapeStart.current && (tool === 'rect' || tool === 'circle')) {
+      const pts = draftRef.current
+      shapeStart.current = null
+      addZone(pts)
+      setDraftPoints([])
+      drag.current = null
+      click.current = null
+      grab.current = null
+      return
+    }
+    if (tool === 'brush' && brushing.current) {
+      brushing.current = false
+      if (draftRef.current.length > 0) {
+        addZone(strokeToPolygon(draftRef.current, (brushM * ppm) / 2))
+        setDraftPoints([])
+      }
+      drag.current = null
+      click.current = null
+      grab.current = null
+      return
+    }
     const active = drag.current
     const tap = click.current
     drag.current = null
@@ -567,6 +650,8 @@ export function EditorPage({
 
   function openStep(next: Step) {
     setStep(next)
+    shapeStart.current = null
+    brushing.current = false
     setDraftPoints([])
     setScalePoints([])
     setTool(STEP_DEFAULT_TOOL[next])
@@ -602,22 +687,77 @@ export function EditorPage({
     setTool('select')
   }
 
-  function rotateSelected(deg: number) {
-    if (selection?.kind !== 'zone' || !selection.id) return
-    const zone = doc.zones.find((item) => item.id === selection.id)
+  function selectedZoneOf(): Zone | undefined {
+    if (selection?.kind !== 'zone' || !selection.id) return undefined
+    return docRef.current.zones.find((item) => item.id === selection.id)
+  }
+
+  function mapSelectedZone(next: (zone: Zone) => Zone) {
+    const zone = selectedZoneOf()
     if (!zone) return
-    const origin = {
-      x: zone.points.reduce((sum, point) => sum + point.x, 0) / zone.points.length,
-      y: zone.points.reduce((sum, point) => sum + point.y, 0) / zone.points.length,
-    }
+    const mapped = next(zone)
     commit({
-      ...doc,
-      zones: doc.zones.map((item) => item.id === zone.id ? {
-        ...item,
-        points: item.points.map((point) => rotateAround(point, origin, deg)),
-        bends: item.bends?.map((bend) => (bend ? rotateAround(bend, origin, deg) : null)),
-      } : item),
+      ...docRef.current,
+      zones: docRef.current.zones.map((item) => (item.id === zone.id ? mapped : item)),
     })
+  }
+
+  function rotateSelected(deg: number) {
+    mapSelectedZone((zone) => {
+      const origin = centroid(zone.points)
+      return {
+        ...zone,
+        points: zone.points.map((point) => rotateAround(point, origin, deg)),
+        bends: zone.bends?.map((bend) => (bend ? rotateAround(bend, origin, deg) : null)),
+      }
+    })
+  }
+
+  function flipSelected(axis: 'x' | 'y') {
+    mapSelectedZone((zone) => {
+      const origin = centroid(zone.points)
+      const flip = (point: Point) => mirrorAround(point, origin, axis)
+      return {
+        ...zone,
+        points: zone.points.map(flip),
+        bends: zone.bends?.map((bend) => (bend ? flip(bend) : null)),
+      }
+    })
+  }
+
+  function scaleSelected(k: number) {
+    mapSelectedZone((zone) => {
+      const origin = centroid(zone.points)
+      const points = zone.points.map((point) => scaleAround(point, origin, k))
+      if (polygonAreaPx(points) < 36) return zone
+      return {
+        ...zone,
+        points,
+        bends: zone.bends?.map((bend) => (bend ? scaleAround(bend, origin, k) : null)),
+      }
+    })
+  }
+
+  function copySelected() {
+    const zone = selectedZoneOf()
+    if (zone) clipboard.current = structuredClone(zone)
+  }
+
+  function duplicateSelected() {
+    const zone = selectedZoneOf()
+    if (!zone) return
+    const copy = shiftZone({ ...structuredClone(zone), id: uid('zone') }, 28, 28)
+    commit({ ...docRef.current, zones: [...docRef.current.zones, copy] })
+    setSelection({ kind: 'zone', id: copy.id })
+  }
+
+  function pasteClipboard() {
+    const zone = clipboard.current
+    if (!zone) return
+    const copy = shiftZone({ ...structuredClone(zone), id: uid('zone') }, 28, 28)
+    clipboard.current = copy
+    commit({ ...docRef.current, zones: [...docRef.current.zones, copy] })
+    setSelection({ kind: 'zone', id: copy.id })
   }
 
   if (!loaded) return <div className="boot">{error || 'Загрузка проекта…'}</div>
@@ -654,13 +794,32 @@ export function EditorPage({
             <button className={tool === 'select' ? 'tool active' : 'tool'} onClick={() => { setTool('select'); setDraftPoints([]) }}>Выбор</button>
             <button className={tool === 'pan' ? 'tool active' : 'tool'} onClick={() => setTool('pan')}>Рука</button>
             <button className={tool === 'zone' ? 'tool active' : 'tool'} onClick={() => { setTool('zone'); setDraftPoints([]) }}>Полигон</button>
+            <button className={tool === 'rect' ? 'tool active' : 'tool'} onClick={() => { setTool('rect'); setDraftPoints([]) }}>Прямоугольник</button>
+            <button className={tool === 'circle' ? 'tool active' : 'tool'} onClick={() => { setTool('circle'); setDraftPoints([]) }}>Круг</button>
+            <button className={tool === 'brush' ? 'tool active' : 'tool'} onClick={() => { setTool('brush'); setDraftPoints([]) }}>Кисть</button>
+            {tool === 'brush' && (
+              <div className="brush-sizes">
+                {[0.4, 0.8, 1.6].map((width) => (
+                  <button
+                    key={width}
+                    className={brushM === width ? 'tool active' : 'tool'}
+                    onClick={() => setBrushM(width)}
+                  >
+                    {width} м
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="tool-gap" />
             <p className="tool-label">Поверхность</p>
             {SURFACES.map((surface) => (
               <button
                 key={surface.id}
                 className={zoneKind === surface.id ? 'swatch active' : 'swatch'}
-                onClick={() => { setZoneKind(surface.id); setTool('zone') }}
+                onClick={() => {
+                  setZoneKind(surface.id)
+                  if (tool !== 'rect' && tool !== 'circle' && tool !== 'brush') setTool('zone')
+                }}
               >
                 <i className={`chip ${surface.pattern}`} />
                 {surface.label}
@@ -730,8 +889,10 @@ export function EditorPage({
           imageSize={imageSize}
           draft={draft}
           draftKind={zoneKind}
+          sketch={tool === 'rect' || tool === 'circle' || tool === 'brush' ? tool : 'poly'}
+          brushWidth={brushM * ppm}
           showOk={(tool === 'zone' && draft.length >= 3) || ((tool === 'pipe' || tool === 'drip') && draft.length >= 2)}
-          hover={tool === 'zone' || tool === 'pipe' || tool === 'drip' || tool === 'scale' ? hover : null}
+          hover={tool === 'zone' || tool === 'pipe' || tool === 'drip' || tool === 'scale' || tool === 'rect' || tool === 'circle' || tool === 'brush' ? hover : null}
           scalePoints={scalePoints}
           selectionId={selection?.id ?? null}
           selectionKind={selection?.kind ?? null}
@@ -788,7 +949,12 @@ export function EditorPage({
                 {surface.label}
               </button>
             ))}
-            <button className="tool" onClick={() => rotateSelected(90)}>↻ 90°</button>
+            <button className="tool" onClick={() => rotateSelected(90)} title="Повернуть">↻ 90°</button>
+            <button className="tool" onClick={() => flipSelected('x')} title="Отразить по горизонтали">↔</button>
+            <button className="tool" onClick={() => flipSelected('y')} title="Отразить по вертикали">↕</button>
+            <button className="tool" onClick={() => scaleSelected(1.1)} title="Крупнее">＋</button>
+            <button className="tool" onClick={() => scaleSelected(0.9)} title="Мельче">−</button>
+            <button className="tool" onClick={duplicateSelected} title="Копия, Ctrl+D">Копия</button>
             <button className="tool" onClick={removeSelection}>Удалить</button>
           </div>
         )}
@@ -826,6 +992,9 @@ export function EditorPage({
         {draft.length > 0 && hoverLen > 0 && <span>Сторона {hoverLen.toFixed(2)} м</span>}
         {selectedZone && <span>{surfaceOf(selectedZone.kind).label}: {zoneArea.toFixed(1)} м² · периметр {zonePerim.toFixed(1)} м</span>}
         {tool === 'zone' && draft.length === 0 && <span>Полигон: кликайте по контуру. С третьей точки на конце линии нажмите OK.</span>}
+        {tool === 'rect' && <span>Прямоугольник: тяните от угла. Shift — квадрат.</span>}
+        {tool === 'circle' && <span>Круг: тяните от центра.</span>}
+        {tool === 'brush' && <span>Кисть: рисуйте зажатой кнопкой, как у дорожек в IRRISketch. Esc — отмена.</span>}
         {step === 'irrig' && !doc.source && <span>Поставьте источник воды, затем «Рассчитать схему».</span>}
       </footer>
     </main>

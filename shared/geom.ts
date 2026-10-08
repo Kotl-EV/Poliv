@@ -177,6 +177,112 @@ export function centroid(points: Point[]): Point {
   return { x: x / points.length, y: y / points.length }
 }
 
+export function scaleAround(point: Point, origin: Point, k: number): Point {
+  return {
+    x: origin.x + (point.x - origin.x) * k,
+    y: origin.y + (point.y - origin.y) * k,
+  }
+}
+
+export function mirrorAround(point: Point, origin: Point, axis: 'x' | 'y'): Point {
+  if (axis === 'x') return { x: 2 * origin.x - point.x, y: point.y }
+  return { x: point.x, y: 2 * origin.y - point.y }
+}
+
+export function rectPoints(a: Point, b: Point, square = false): Point[] {
+  let dx = b.x - a.x
+  let dy = b.y - a.y
+  if (square) {
+    const s = Math.max(Math.abs(dx), Math.abs(dy))
+    dx = (dx === 0 ? 1 : Math.sign(dx)) * s
+    dy = (dy === 0 ? 1 : Math.sign(dy)) * s
+  }
+  return [
+    { x: a.x, y: a.y },
+    { x: a.x + dx, y: a.y },
+    { x: a.x + dx, y: a.y + dy },
+    { x: a.x, y: a.y + dy },
+  ]
+}
+
+export function circlePoints(center: Point, edge: Point, count = 24): Point[] {
+  const r = dist(center, edge)
+  if (!(r > 0) || count < 3) return []
+  const n = Math.max(8, count)
+  const out: Point[] = []
+  for (let i = 0; i < n; i++) out.push(polar(center, r, (i / n) * 360))
+  return out
+}
+
+function unit(vector: Point): Point {
+  const len = Math.hypot(vector.x, vector.y)
+  if (len < 1e-9) return { x: 0, y: 0 }
+  return { x: vector.x / len, y: vector.y / len }
+}
+
+function sideNormal(vector: Point): Point {
+  const u = unit(vector)
+  return { x: -u.y, y: u.x }
+}
+
+/** Outline of a thick freehand stroke — brush path becomes a polygon. */
+export function strokeToPolygon(points: Point[], radius: number): Point[] {
+  if (!(radius > 0)) return []
+  const line: Point[] = []
+  for (const point of points) {
+    const last = line[line.length - 1]
+    if (!last || dist(last, point) > radius * 0.12) line.push(point)
+  }
+  if (line.length === 0) return []
+  if (line.length === 1) return circlePoints(line[0], { x: line[0].x + radius, y: line[0].y }, 20)
+
+  function offsetAt(index: number, side: 1 | -1): Point {
+    const cur = line[index]
+    const prev = line[index - 1]
+    const next = line[index + 1]
+    const a = prev ? subPoints(cur, prev) : subPoints(next, cur)
+    const b = next ? subPoints(next, cur) : subPoints(cur, prev)
+    const n1 = sideNormal(a)
+    const n2 = sideNormal(b)
+    let nx = n1.x + n2.x
+    let ny = n1.y + n2.y
+    const len = Math.hypot(nx, ny)
+    if (len < 0.25) {
+      nx = n1.x
+      ny = n1.y
+    } else {
+      nx /= len
+      ny /= len
+    }
+    const miter = Math.min(3, 1 / Math.max(0.35, Math.abs(n1.x * nx + n1.y * ny)))
+    return { x: cur.x + nx * radius * miter * side, y: cur.y + ny * radius * miter * side }
+  }
+
+  function cap(origin: Point, forward: Point): Point[] {
+    const u = unit(forward)
+    const out: Point[] = []
+    for (let i = 1; i <= 7; i++) {
+      const t = (i / 8) * Math.PI
+      out.push({
+        x: origin.x + (-u.y * Math.cos(t) + u.x * Math.sin(t)) * radius,
+        y: origin.y + (u.x * Math.cos(t) + u.y * Math.sin(t)) * radius,
+      })
+    }
+    return out
+  }
+
+  const left = line.map((_, index) => offsetAt(index, 1))
+  const right = line.map((_, index) => offsetAt(index, -1))
+  const end = line[line.length - 1]
+  const start = line[0]
+  return [
+    ...left,
+    ...cap(end, subPoints(end, line[line.length - 2])),
+    ...right.slice().reverse(),
+    ...cap(start, subPoints(start, line[1])),
+  ]
+}
+
 export function sectorPath(origin: Point, radius: number, rotationDeg: number, arcDeg: number): string {
   if (radius <= 0) return ''
   if (arcDeg >= 359.9) {

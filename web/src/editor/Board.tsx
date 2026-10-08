@@ -1,5 +1,5 @@
 import { forwardRef, type MouseEvent, type PointerEvent } from 'react'
-import { dist, handleFromControl, midpoint, sectorPath, zonePathD } from '@shared/geom.ts'
+import { centroid, dist, handleFromControl, midpoint, sectorPath, zonePathD } from '@shared/geom.ts'
 import { DEFAULT_PPM, gridStepM, surfaceOf } from '@shared/landscape.ts'
 import type { Analysis, Doc, Point, Zone, ZoneKind } from '@shared/types.ts'
 
@@ -74,6 +74,8 @@ export const Board = forwardRef<SVGSVGElement, {
   imageSize: { w: number; h: number } | null
   draft: Point[]
   draftKind: ZoneKind
+  sketch: 'poly' | 'rect' | 'circle' | 'brush'
+  brushWidth: number
   showOk: boolean
   hover: Point | null
   scalePoints: Point[]
@@ -186,6 +188,8 @@ export const Board = forwardRef<SVGSVGElement, {
           kind={props.draftKind}
           view={view}
           ppm={ppm}
+          sketch={props.sketch}
+          brushWidth={props.brushWidth}
           showOk={props.showOk}
           onFinish={props.onFinishDraft}
         />
@@ -294,6 +298,8 @@ function DraftLayer({
   kind,
   view,
   ppm,
+  sketch,
+  brushWidth,
   showOk,
   onFinish,
 }: {
@@ -302,22 +308,29 @@ function DraftLayer({
   kind: ZoneKind
   view: View
   ppm: number
+  sketch: 'poly' | 'rect' | 'circle' | 'brush'
+  brushWidth: number
   showOk: boolean
   onFinish?: () => void
 }) {
   const start = points[0]
   const last = points[points.length - 1]
-  const canClose = points.length >= 3
+  const vertexEdit = sketch === 'poly'
+  const canClose = vertexEdit && points.length >= 3
   const closing = Boolean(canClose && hover && dist(hover, start) * view.k <= CLOSE_SCREEN_PX)
-  const line = points.length === 0
-    ? []
-    : closing
-      ? points
-      : [...points, ...(hover ? [hover] : [])]
+  const shapeFill = sketch === 'rect' || sketch === 'circle'
+  const line = sketch === 'poly'
+    ? (points.length === 0 ? [] : closing ? points : [...points, ...(hover ? [hover] : [])])
+    : points
   const surface = surfaceOf(kind)
-  const preview = canClose ? (closing ? points : [...points, ...(hover ? [hover] : [])]) : []
+  const preview = shapeFill && points.length >= 3
+    ? points
+    : canClose
+      ? (closing ? points : [...points, ...(hover ? [hover] : [])])
+      : []
   const s = 4.5 / view.k
   const okR = 22 / view.k
+  const showVerts = sketch === 'poly' || sketch === 'rect'
   return (
     <g className="draft-layer">
       {preview.length >= 3 && (
@@ -328,7 +341,19 @@ function DraftLayer({
           pointerEvents="none"
         />
       )}
-      {line.length >= 2 && (
+      {sketch === 'brush' && line.length >= 1 && (
+        <polyline
+          points={line.map((point) => `${point.x},${point.y}`).join(' ')}
+          className="draft-brush"
+          stroke={surface.stroke}
+          strokeWidth={brushWidth}
+          fill="none"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          pointerEvents="none"
+        />
+      )}
+      {sketch !== 'brush' && line.length >= 2 && (
         <polyline
           points={line.map((point) => `${point.x},${point.y}`).join(' ')}
           className="draft"
@@ -348,10 +373,19 @@ function DraftLayer({
           pointerEvents="none"
         />
       )}
-      {line.slice(0, -1).map((point, index) => (
+      {sketch === 'poly' && line.slice(0, -1).map((point, index) => (
         <DimLabel key={`d-${index}`} a={point} b={line[index + 1]} ppm={ppm} k={view.k} />
       ))}
-      {points.map((point, index) => (
+      {sketch === 'rect' && points.length === 4 && (
+        <>
+          <DimLabel a={points[0]} b={points[1]} ppm={ppm} k={view.k} />
+          <DimLabel a={points[1]} b={points[2]} ppm={ppm} k={view.k} />
+        </>
+      )}
+      {sketch === 'circle' && points.length >= 3 && start && last && (
+        <DimLabel a={centroid(points)} b={points[0]} ppm={ppm} k={view.k} />
+      )}
+      {showVerts && points.map((point, index) => (
         <rect
           key={`draft-${index}`}
           data-hit={index === 0 && canClose ? 'draft-close' : undefined}
@@ -363,7 +397,7 @@ function DraftLayer({
           pointerEvents={index === points.length - 1 && showOk ? 'none' : undefined}
         />
       ))}
-      {hover && !closing && (
+      {hover && !closing && sketch === 'poly' && (
         <rect
           x={hover.x - s}
           y={hover.y - s}

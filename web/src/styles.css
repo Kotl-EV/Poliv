@@ -249,6 +249,7 @@ input, select {
 .tool.step { font-weight: 650; }
 .tools .primary { text-align: left; }
 .tool-gap { height: 8px; }
+.brush-sizes { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; }
 .stage { position: relative; isolation: isolate; min-width: 0; min-height: 0; background: #cfc6b6; }
 .draft-bar {
   position: absolute;
@@ -272,6 +273,7 @@ input, select {
 .mid-handle { fill: #fffdf8; stroke: #1f6b45; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .cover { fill: rgba(47, 122, 72, 0.16); stroke: #24633a; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .draft { fill: none; stroke: #1c2822; }
+.draft-brush { fill: none; opacity: 0.55; }
 .draft-fill { fill: rgba(63, 122, 72, 0.14); stroke: none; }
 .draft-fill.closing { fill: rgba(31, 107, 69, 0.28); }
 .draft-close-edge { fill: none; stroke: #1f6b45; }

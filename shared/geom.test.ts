@@ -2,12 +2,18 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { SNAP_PX } from './doc.ts'
 import {
+  circlePoints,
   controlFromHandle,
   dist,
   handleFromControl,
   midpoint,
+  mirrorAround,
   nearestScreen,
+  polygonAreaPx,
+  rectPoints,
+  scaleAround,
   snapToGrid,
+  strokeToPolygon,
   withinScreen,
   zonePathD,
 } from './geom.ts'
@@ -51,4 +57,32 @@ test('vertex snap stays within a few screen pixels and ignores far corners', () 
   const near = { x: 104, y: 100 }
   assert.equal(nearestScreen(click, [far], 0.6, 8), null)
   assert.deepEqual(nearestScreen(click, [near], 0.6, 8), near)
+})
+
+test('rect from a corner keeps that corner and shift makes a square', () => {
+  const pts = rectPoints({ x: 10, y: 10 }, { x: 40, y: 20 })
+  assert.equal(pts.length, 4)
+  assert.deepEqual(pts[2], { x: 40, y: 20 })
+  const square = rectPoints({ x: 0, y: 0 }, { x: 10, y: 4 }, true)
+  assert.equal(Math.abs(square[2].x - square[0].x), Math.abs(square[2].y - square[0].y))
+})
+
+test('circle around a centre has equal radii', () => {
+  const c = { x: 50, y: 50 }
+  const pts = circlePoints(c, { x: 50, y: 30 }, 16)
+  assert.equal(pts.length, 16)
+  for (const point of pts) assert.ok(Math.abs(dist(c, point) - 20) < 1e-6)
+})
+
+test('a brush stroke becomes a closed outline with area', () => {
+  const poly = strokeToPolygon([{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 10 }], 5)
+  assert.ok(poly.length >= 8)
+  assert.ok(polygonAreaPx(poly) > 200)
+})
+
+test('scale and mirror keep the centroid', () => {
+  const origin = { x: 10, y: 10 }
+  assert.deepEqual(scaleAround({ x: 14, y: 10 }, origin, 2), { x: 18, y: 10 })
+  assert.deepEqual(mirrorAround({ x: 14, y: 8 }, origin, 'x'), { x: 6, y: 8 })
+  assert.deepEqual(mirrorAround({ x: 14, y: 8 }, origin, 'y'), { x: 14, y: 12 })
 })
