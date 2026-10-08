@@ -45,3 +45,11 @@ export function isWetKind(kind: ZoneKind): boolean {
 
 export const DEFAULT_PPM = 20
 export const DEFAULT_SHEET_M = { w: 80, h: 60 }
+
+/** Visible millimetre-paper step, metres. Snap uses the same step. */
+export function gridStepM(k: number, ppm: number): number {
+  const pxPerM = k * ppm
+  if (pxPerM >= 12) return 1
+  if (pxPerM >= 5) return 5
+  return 10
+}

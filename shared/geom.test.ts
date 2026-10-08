@@ -6,6 +6,7 @@ import {
   dist,
   handleFromControl,
   midpoint,
+  nearestScreen,
   snapToGrid,
   withinScreen,
   zonePathD,
@@ -42,4 +43,12 @@ test('a midpoint handle on the chord keeps the edge straight', () => {
 test('closed zone path ends with Z', () => {
   const d = zonePathD([{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }], null, true)
   assert.equal(d.includes('Z'), true)
+})
+
+test('vertex snap stays within a few screen pixels and ignores far corners', () => {
+  const click = { x: 100, y: 100 }
+  const far = { x: 160, y: 100 }
+  const near = { x: 104, y: 100 }
+  assert.equal(nearestScreen(click, [far], 0.6, 8), null)
+  assert.deepEqual(nearestScreen(click, [near], 0.6, 8), near)
 })

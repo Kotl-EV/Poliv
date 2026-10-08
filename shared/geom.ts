@@ -65,6 +65,24 @@ export function snapToGrid(point: Point, step: number): Point {
   }
 }
 
+export function orthoFrom(origin: Point, point: Point): Point {
+  if (Math.abs(point.x - origin.x) >= Math.abs(point.y - origin.y)) return { x: point.x, y: origin.y }
+  return { x: origin.x, y: point.y }
+}
+
+export function nearestScreen(point: Point, targets: Point[], k: number, screenPx: number): Point | null {
+  let best: Point | null = null
+  let bestD = screenPx
+  for (const target of targets) {
+    const d = dist(point, target) * k
+    if (d <= bestD) {
+      best = target
+      bestD = d
+    }
+  }
+  return best
+}
+
 export function closestOnSegment(point: Point, a: Point, b: Point): { point: Point; t: number; distance: number } {
   const ab = subPoints(b, a)
   const len2 = ab.x * ab.x + ab.y * ab.y

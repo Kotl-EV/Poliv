@@ -1,9 +1,9 @@
 import { forwardRef, type MouseEvent, type PointerEvent } from 'react'
 import { dist, handleFromControl, midpoint, sectorPath, zonePathD } from '@shared/geom.ts'
-import { DEFAULT_PPM, surfaceOf } from '@shared/landscape.ts'
+import { DEFAULT_PPM, gridStepM, surfaceOf } from '@shared/landscape.ts'
 import type { Analysis, Doc, Point, Zone, ZoneKind } from '@shared/types.ts'
 
-export const CLOSE_SCREEN_PX = 32
+export const CLOSE_SCREEN_PX = 14
 
 export type View = { x: number; y: number; k: number }
 
@@ -294,14 +294,18 @@ function DraftLayer({
   view: View
   ppm: number
 }) {
-  if (points.length === 0) return null
   const start = points[0]
   const last = points[points.length - 1]
   const canClose = points.length >= 3
   const closing = Boolean(canClose && hover && dist(hover, start) * view.k <= CLOSE_SCREEN_PX)
-  const line = closing ? points : [...points, ...(hover ? [hover] : [])]
+  const line = points.length === 0
+    ? []
+    : closing
+      ? points
+      : [...points, ...(hover ? [hover] : [])]
   const surface = surfaceOf(kind)
   const preview = canClose ? (closing ? points : [...points, ...(hover ? [hover] : [])]) : []
+  const s = 4.5 / view.k
   return (
     <g className="draft-layer">
       {preview.length >= 3 && (
@@ -312,12 +316,14 @@ function DraftLayer({
           pointerEvents="none"
         />
       )}
-      <polyline
-        points={line.map((point) => `${point.x},${point.y}`).join(' ')}
-        className="draft"
-        strokeWidth={2 / view.k}
-        pointerEvents="none"
-      />
+      {line.length >= 2 && (
+        <polyline
+          points={line.map((point) => `${point.x},${point.y}`).join(' ')}
+          className="draft"
+          strokeWidth={2 / view.k}
+          pointerEvents="none"
+        />
+      )}
       {canClose && (
         <line
           x1={last.x}
@@ -334,37 +340,23 @@ function DraftLayer({
         <DimLabel key={`d-${index}`} a={point} b={line[index + 1]} ppm={ppm} k={view.k} />
       ))}
       {points.map((point, index) => (
-        index === 0 ? null : (
-          <rect
-            key={`draft-${index}`}
-            x={point.x - 4.5 / view.k}
-            y={point.y - 4.5 / view.k}
-            width={9 / view.k}
-            height={9 / view.k}
-            className="draft-point"
-            pointerEvents="none"
-          />
-        )
-      ))}
-      {canClose ? (
-        <g data-hit="draft-close" className={closing ? 'draft-start hot' : 'draft-start'}>
-          <circle cx={start.x} cy={start.y} r={18 / view.k} className="draft-start-hit" />
-          <rect
-            x={start.x - 5 / view.k}
-            y={start.y - 5 / view.k}
-            width={10 / view.k}
-            height={10 / view.k}
-            className="draft-start-dot"
-            pointerEvents="none"
-          />
-        </g>
-      ) : (
         <rect
-          x={start.x - 5 / view.k}
-          y={start.y - 5 / view.k}
-          width={10 / view.k}
-          height={10 / view.k}
-          className="draft-point"
+          key={`draft-${index}`}
+          data-hit={index === 0 && canClose ? 'draft-close' : undefined}
+          x={point.x - s}
+          y={point.y - s}
+          width={s * 2}
+          height={s * 2}
+          className={index === 0 && closing ? 'draft-point closing' : 'draft-point'}
+        />
+      ))}
+      {hover && !closing && (
+        <rect
+          x={hover.x - s}
+          y={hover.y - s}
+          width={s * 2}
+          height={s * 2}
+          className="snap-cursor"
           pointerEvents="none"
         />
       )}
@@ -412,7 +404,7 @@ function ZoneHandles({ zone, view, ppm }: { zone: Zone; view: View; ppm: number 
 function DimLabel({ a, b, control, ppm, k }: { a: Point; b: Point; control?: Point | null; ppm: number; k: number }) {
   const mid = control ? handleFromControl(a, b, control) : midpoint(a, b)
   const length = (control ? dist(a, control) + dist(control, b) : dist(a, b)) / ppm
-  if (length < 0.15) return null
+  if (length < 0.25) return null
   const label = length >= 10 ? length.toFixed(1) : length.toFixed(2)
   const nx = -(b.y - a.y)
   const ny = b.x - a.x
@@ -436,7 +428,7 @@ function DimLabel({ a, b, control, ppm, k }: { a: Point; b: Point; control?: Poi
 }
 
 function MillimetreGrid({ width, height, ppm, k }: { width: number; height: number; ppm: number; k: number }) {
-  const minorM = ppm * k >= 12 ? 1 : ppm * k >= 5 ? 5 : 10
+  const minorM = gridStepM(k, ppm)
   const majorM = minorM >= 5 ? 10 : 5
   const minor = ticks(width, minorM * ppm)
   const major = ticks(width, majorM * ppm)
