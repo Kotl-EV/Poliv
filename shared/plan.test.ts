@@ -344,6 +344,31 @@ test('a large lawn uses rotors and covers most of the grass', () => {
   assert.equal(analysis.warnings.some((item) => item.includes('не стоит на трубе')), false)
 })
 
+test('a lawn with a bed does not pack overlapping heads', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 10
+  doc.zones = [
+    zone('lawn', 'lawn', 100, 80, 200, 140),
+    zone('bed', 'bed', 160, 130, 50, 40),
+  ]
+  doc.source = { x: 60, y: 150, pressureBar: 3, flowLimitLph: null }
+  const next = layoutIrrigation(doc)
+  assert.ok(next)
+  if (!next) return
+  const heads = next.sprinklers
+  assert.ok(heads.length >= 4)
+  assert.ok(heads.length <= 10, `${heads.length} heads around a 5×4 m bed`)
+  for (let i = 0; i < heads.length; i++) {
+    for (let j = i + 1; j < heads.length; j++) {
+      const a = heads[i]
+      const b = heads[j]
+      const gap = Math.hypot(a.x - b.x, a.y - b.y) / 10
+      assert.ok(gap >= 0.5 * Math.min(a.radiusM, b.radiusM) - 0.05, `heads ${gap.toFixed(2)} m apart`)
+    }
+  }
+  assert.ok(coveredShare(next.zones[0].points, heads, 10) >= 0.78)
+})
+
 test('a small lawn uses fan nozzles', () => {
   const doc = emptyDoc()
   doc.pxPerMeter = 10
