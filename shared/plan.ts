@@ -1,5 +1,6 @@
 import { SNAP_PX, defaultDose, emptyDoc } from './doc.ts'
-import { dist, pointInPolygon, polygonAreaPx } from './geom.ts'
+import { placeDripOnPolygon } from './drip.ts'
+import { dist, outlineOf, pointInPolygon, polygonAreaPx } from './geom.ts'
 import { isDripKind, isObstacleKind, isSprayKind, isWetKind } from './landscape.ts'
 import { nozzleById } from './nozzles.ts'
 import { placeSprayOnPolygon, ringsOverlap } from './spray.ts'
@@ -9,14 +10,14 @@ export type Rgb = [number, number, number]
 export type InkRole = 'structure' | 'hatch' | 'plant' | 'bed' | 'grid' | 'stipple'
 export type InkSeg = { a: Point; b: Point; role: InkRole }
 
-const DRIP_SPACING_M = 0.35
 const MAX_HEADS = 120
+const MAX_DRIPS = 48
 const STATION_LPH = 1500
 const MIN_LAWN_M2 = 8
 const MIN_BED_M2 = 2.5
 
 type HeadSpot = { key: number; point: Point; nozzleId: string; rotationDeg: number }
-type DripSpot = { key: number; points: Point[] }
+type DripSpot = { key: number; points: Point[]; spacingM: number; emitterLph: number }
 
 /** Подпись «Масштаб 1:200» на листе. */
 export function sheetScaleRatio(text: string): number | null {
@@ -292,11 +293,14 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
 
   const drips: DripSpot[] = []
   for (const ring of bedRings) {
-    const path = placeDripLines(ring, ppm)
-    if (!path || path.length < 2) continue
-    const spot = nearestKey(path[0], allowed, center)
-    if (spot === null) continue
-    drips.push({ key: spot, points: [center(spot), ...path] })
+    const holes = buildings.filter((building) => ringsOverlap(ring, building))
+    const runs = placeDripOnPolygon(ring, holes, ppm, { kind: 'bed', soil: 'loam' })
+    for (const run of runs) {
+      if (drips.length >= MAX_DRIPS || run.points.length < 2) continue
+      const spot = nearestKey(run.points[0], allowed, center)
+      if (spot === null) continue
+      drips.push({ key: spot, points: [center(spot), ...run.points], spacingM: run.spacingM, emitterLph: run.emitterLph })
+    }
   }
 
   if (heads.length === 0 && drips.length === 0) return null
@@ -337,10 +341,7 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
 
   const consumers = [
     ...keptHeads.map((head) => ({ key: head.key, flow: nozzleById(head.nozzleId).flowLph, kind: 'spray' as const })),
-    ...keptDrips.map((drip) => {
-      const lengthM = polylinePx(drip.points) / ppm
-      return { key: drip.key, flow: Math.max(1, Math.round(lengthM / 0.3)) * 2, kind: 'drip' as const }
-    }),
+    ...keptDrips.map((drip) => ({ key: drip.key, flow: dripFlow(drip, ppm), kind: 'drip' as const })),
   ]
   const zoneRuntime = new Map<string, number>()
   for (const zone of zones) {
@@ -354,8 +355,7 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
       if (pointInPolygon(head.point, zone.points)) flow += nozzleById(head.nozzleId).flowLph
     }
     for (const drip of keptDrips) {
-      const lengthM = polylinePx(drip.points) / ppm
-      if (pointInPolygon(centroid(drip.points), zone.points)) flow += Math.max(1, Math.round(lengthM / 0.3)) * 2
+      if (pointInPolygon(centroid(drip.points), zone.points)) flow += dripFlow(drip, ppm)
     }
     zoneRuntime.set(zone.id, flow > 0 ? (zone.doseMm / (flow / area)) * 60 : 0)
   }
@@ -491,7 +491,7 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
       flowLph: nozzle.flowLph,
     }
   })
-  doc.drips = finalDrips.map((drip) => ({ id: ids('drip'), points: drip.points, spacingM: 0.3, emitterLph: 2 }))
+  doc.drips = finalDrips.map((drip) => ({ id: ids('drip'), points: drip.points, spacingM: drip.spacingM, emitterLph: drip.emitterLph }))
   doc.valves = valveKeys.map((key, index) => ({ id: ids('valve'), name: `Клапан ${index + 1}`, ...center(key) }))
   doc.pipes = treePipes(pipes, SNAP_PX, ids)
   return doc
@@ -585,11 +585,18 @@ export function layoutIrrigation(doc: Doc): Doc | null {
   for (const zone of doc.zones) {
     if (!isDripKind(zone.kind) || zone.points.length < 3) continue
     if (polygonAreaPx(zone.points) / (ppm * ppm) < MIN_BED_M2) continue
-    const path = placeDripLines(zone.points, ppm)
-    if (!path || path.length < 2) continue
-    const spot = nearestKey(path[0], allowed, center)
-    if (spot === null) continue
-    drips.push({ key: spot, points: [center(spot), ...path] })
+    const ring = outlineOf(zone.points, zone.bends)
+    const holes = doc.zones
+      .filter((other) => other.id !== zone.id && (isObstacleKind(other.kind) || isSprayKind(other.kind)))
+      .filter((other) => ringsOverlap(zone.points, other.points))
+      .map((other) => outlineOf(other.points, other.bends))
+    const runs = placeDripOnPolygon(ring, holes, ppm, { kind: zone.kind, soil: zone.soil })
+    for (const run of runs) {
+      if (drips.length >= MAX_DRIPS || run.points.length < 2) continue
+      const spot = nearestKey(run.points[0], allowed, center)
+      if (spot === null) continue
+      drips.push({ key: spot, points: [center(spot), ...run.points], spacingM: run.spacingM, emitterLph: run.emitterLph })
+    }
   }
 
   if (heads.length === 0 && drips.length === 0) return null
@@ -630,10 +637,7 @@ export function layoutIrrigation(doc: Doc): Doc | null {
 
   const consumers = [
     ...keptHeads.map((head) => ({ key: head.key, flow: nozzleById(head.nozzleId).flowLph, kind: 'spray' as const })),
-    ...keptDrips.map((drip) => {
-      const lengthM = polylinePx(drip.points) / ppm
-      return { key: drip.key, flow: Math.max(1, Math.round(lengthM / 0.3)) * 2, kind: 'drip' as const }
-    }),
+    ...keptDrips.map((drip) => ({ key: drip.key, flow: dripFlow(drip, ppm), kind: 'drip' as const })),
   ]
   const zoneRuntime = new Map<string, number>()
   for (const zone of doc.zones) {
@@ -647,8 +651,7 @@ export function layoutIrrigation(doc: Doc): Doc | null {
       if (pointInPolygon(head.point, zone.points)) flow += nozzleById(head.nozzleId).flowLph
     }
     for (const drip of keptDrips) {
-      const lengthM = polylinePx(drip.points) / ppm
-      if (pointInPolygon(centroid(drip.points), zone.points)) flow += Math.max(1, Math.round(lengthM / 0.3)) * 2
+      if (pointInPolygon(centroid(drip.points), zone.points)) flow += dripFlow(drip, ppm)
     }
     zoneRuntime.set(zone.id, flow > 0 ? (zone.doseMm / (flow / area)) * 60 : 0)
   }
@@ -784,7 +787,7 @@ export function layoutIrrigation(doc: Doc): Doc | null {
         flowLph: nozzle.flowLph,
       }
     }),
-    drips: finalDrips.map((drip) => ({ id: ids('drip'), points: drip.points, spacingM: 0.3, emitterLph: 2 })),
+    drips: finalDrips.map((drip) => ({ id: ids('drip'), points: drip.points, spacingM: drip.spacingM, emitterLph: drip.emitterLph })),
     valves: valveKeys.map((key, index) => ({ id: ids('valve'), name: `Клапан ${index + 1}`, ...center(key) })),
     pipes: treePipes(pipes, SNAP_PX, ids),
   }
@@ -1247,30 +1250,6 @@ function wetMask(point: Point, zones: { kind: ZoneKind; points: Point[] }[]): 's
   return null
 }
 
-function spansOf(points: Point[], ppm: number): { minSpan: number; maxSpan: number; angle: number; mid: Point } {
-  const angle = principal(points)
-  const mid = centroid(points)
-  const c = Math.cos(angle)
-  const s = Math.sin(angle)
-  let minU = Infinity
-  let maxU = -Infinity
-  let minV = Infinity
-  let maxV = -Infinity
-  for (const point of points) {
-    const dx = point.x - mid.x
-    const dy = point.y - mid.y
-    const u = dx * c + dy * s
-    const v = -dx * s + dy * c
-    minU = Math.min(minU, u)
-    maxU = Math.max(maxU, u)
-    minV = Math.min(minV, v)
-    maxV = Math.max(maxV, v)
-  }
-  const spanU = (maxU - minU) / ppm
-  const spanV = (maxV - minV) / ppm
-  return { minSpan: Math.min(spanU, spanV), maxSpan: Math.max(spanU, spanV), angle, mid }
-}
-
 function snapHeadKey(point: Point, partSet: Set<number>, center: (key: number) => Point): number | null {
   let best: number | null = null
   let bestD = Infinity
@@ -1327,105 +1306,6 @@ function placeSprayHeads(opts: {
     heads.push({ key, point, nozzleId: spot.nozzleId, rotationDeg: spot.rotationDeg })
   }
   return heads
-}
-
-function clipLineToPolygon(ring: Point[], origin: Point, dir: Point): Point[][] {
-  const hits: { t: number; point: Point }[] = []
-  for (let i = 0; i < ring.length; i++) {
-    const a = ring[i]
-    const b = ring[(i + 1) % ring.length]
-    const sx = b.x - a.x
-    const sy = b.y - a.y
-    const rxs = dir.x * sy - dir.y * sx
-    if (Math.abs(rxs) < 1e-9) continue
-    const qpx = a.x - origin.x
-    const qpy = a.y - origin.y
-    const t = (qpx * sy - qpy * sx) / rxs
-    const u = (qpx * dir.y - qpy * dir.x) / rxs
-    if (u < -1e-4 || u > 1 + 1e-4) continue
-    hits.push({ t, point: { x: origin.x + dir.x * t, y: origin.y + dir.y * t } })
-  }
-  hits.sort((a, b) => a.t - b.t)
-  const uniq: { t: number; point: Point }[] = []
-  for (const hit of hits) {
-    if (!uniq.length || Math.abs(hit.t - uniq[uniq.length - 1].t) > 1e-4) uniq.push(hit)
-  }
-  const segs: Point[][] = []
-  for (let i = 0; i + 1 < uniq.length; i++) {
-    const t = (uniq[i].t + uniq[i + 1].t) / 2
-    const mid = { x: origin.x + dir.x * t, y: origin.y + dir.y * t }
-    if (pointInPolygon(mid, ring)) segs.push([uniq[i].point, uniq[i + 1].point])
-  }
-  return segs
-}
-
-function placeDripLines(ring: Point[], ppm: number): Point[] | null {
-  const simplified = simplify(ring, 0.45 * ppm)
-  if (simplified.length < 3) return null
-  const { minSpan, maxSpan, angle, mid } = spansOf(simplified, ppm)
-  const spacing = DRIP_SPACING_M * ppm
-  const ux = Math.cos(angle)
-  const uy = Math.sin(angle)
-  const nx = -uy
-  const ny = ux
-  let minO = Infinity
-  let maxO = -Infinity
-  for (const point of simplified) {
-    const o = (point.x - mid.x) * nx + (point.y - mid.y) * ny
-    minO = Math.min(minO, o)
-    maxO = Math.max(maxO, o)
-  }
-  const width = maxO - minO
-  const laterals: Point[][] = []
-  const pushSegs = (origin: Point) => {
-    const segs = clipLineToPolygon(simplified, origin, { x: ux, y: uy })
-    for (const seg of segs) {
-      if (dist(seg[0], seg[1]) < 0.4 * ppm) continue
-      const a0 = (seg[0].x - mid.x) * ux + (seg[0].y - mid.y) * uy
-      const a1 = (seg[1].x - mid.x) * ux + (seg[1].y - mid.y) * uy
-      laterals.push(a0 <= a1 ? seg : [seg[1], seg[0]])
-    }
-  }
-  const edgePad = 0.12 * ppm
-  const trim = (seg: Point[]): Point[] | null => {
-    const a = seg[0]
-    const b = seg[1]
-    const len = dist(a, b)
-    if (len < 0.5 * ppm + edgePad * 2) return null
-    const ux = (b.x - a.x) / len
-    const uy = (b.y - a.y) / len
-    return [
-      { x: a.x + ux * edgePad, y: a.y + uy * edgePad },
-      { x: b.x - ux * edgePad, y: b.y - uy * edgePad },
-    ]
-  }
-  if (width < spacing * 0.6) {
-    pushSegs(mid)
-  } else {
-    const inner = Math.max(0, width - edgePad * 2)
-    const count = Math.max(1, Math.round(inner / spacing))
-    const step = inner / count
-    for (let i = 0; i < count; i++) {
-      const o = minO + edgePad + (i + 0.5) * step
-      pushSegs({ x: mid.x + nx * o, y: mid.y + ny * o })
-    }
-  }
-  const trimmed = laterals.map(trim).filter((seg): seg is Point[] => Boolean(seg))
-  if (trimmed.length === 0) {
-    const loop = dist(simplified[0], simplified[simplified.length - 1]) < 1e-6 ? simplified : [...simplified, simplified[0]]
-    return loop
-  }
-  trimmed.sort((a, b) => {
-    const oa = (a[0].x - mid.x) * nx + (a[0].y - mid.y) * ny
-    const ob = (b[0].x - mid.x) * nx + (b[0].y - mid.y) * ny
-    return oa - ob
-  })
-  const path: Point[] = []
-  trimmed.forEach((lat, index) => {
-    const pts = index % 2 === 0 ? lat : [lat[lat.length - 1], lat[0]]
-    path.push(...pts)
-  })
-  return path.length >= 2 ? path : null
 }
 
 function zoneRing(keys: number[], cols: number, cellPx: number): Point[] {
@@ -1544,21 +1424,6 @@ function douglas(points: Point[], tol: number): Point[] {
   }
   if (max <= tol) return [points[0], points[end]]
   return [...douglas(points.slice(0, index + 1), tol).slice(0, -1), ...douglas(points.slice(index), tol)]
-}
-
-function principal(points: Point[]): number {
-  const mid = centroid(points)
-  let xx = 0
-  let xy = 0
-  let yy = 0
-  for (const point of points) {
-    const x = point.x - mid.x
-    const y = point.y - mid.y
-    xx += x * x
-    xy += x * y
-    yy += y * y
-  }
-  return 0.5 * Math.atan2(2 * xy, xx - yy)
 }
 
 function nearestKey(point: Point, keys: Set<number>, at: (key: number) => Point, avoid: Point[] = [], minDist = 0): number | null {
@@ -1775,4 +1640,10 @@ function polylinePx(points: Point[]): number {
   let sum = 0
   for (let i = 1; i < points.length; i++) sum += dist(points[i - 1], points[i])
   return sum
+}
+
+function dripFlow(drip: DripSpot, ppm: number): number {
+  const lengthM = polylinePx(drip.points) / ppm
+  const spacing = drip.spacingM > 0 ? drip.spacingM : 0.3
+  return Math.max(1, Math.round(lengthM / spacing)) * drip.emitterLph
 }
