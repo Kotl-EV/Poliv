@@ -39,6 +39,9 @@ test('scheme svg has the lawn, heads, pipes, legend and scale', () => {
   assert.equal(pages[0].name, 'Схема')
   assert.equal(pages[1].name, 'Спецификация')
   assert.match(pages[1].svg, /Спецификация/)
+  assert.match(pages[1].svg, /К ЗАКУПКЕ/)
+  assert.match(pages[1].svg, /Сопло веерное 4,5 м, 180°/)
+  assert.match(pages[1].svg, /Корпус выдвижной/)
   assert.match(pages[1].svg, /ПЭ/)
 })
 
@@ -131,6 +134,39 @@ test('a car and a scale bar reach the printed sheet', () => {
   assert.match(svg, /fill="#3e4c5e"/)
   assert.match(svg, /rotate\(90\)/)
   assert.match(svg, /4 м/)
+})
+
+test('a long specification continues on the next page', () => {
+  const doc = emptyDoc()
+  doc.zones = Array.from({ length: 70 }, (_, index) => ({
+    id: `z${index + 1}`,
+    name: index === 69 ? 'Клумба-последняя' : `Клумба ${index + 1}`,
+    kind: 'bed' as const,
+    points: [{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 40 }],
+    doseMm: 4,
+    soil: 'loam' as const,
+    slope: 'flat' as const,
+    climate: 'open' as const,
+  }))
+  doc.sprinklers = [{
+    id: 's',
+    nozzleId: 'fan180',
+    x: 10,
+    y: 10,
+    radiusM: 4.5,
+    arcDeg: 180,
+    rotationDeg: 0,
+    flowLph: 360,
+  }]
+  const pages = buildSheetPages(doc, analyze(doc), { title: 'Длинный', date: '01.01.2026', paper: 'a4' })
+  assert.ok(pages.length >= 3)
+  assert.equal(pages[1].name, 'Спецификация')
+  assert.match(pages[1].svg, /К ЗАКУПКЕ/)
+  assert.equal(pages[1].svg.includes('Клумба-последняя'), false)
+  const rest = pages.slice(2)
+  assert.match(rest.map((page) => page.svg).join('\n'), /Клумба-последняя/)
+  assert.match(rest[0].svg, /продолжение/)
+  assert.match(rest.map((page) => page.svg).join('\n'), /ТРАНШЕЯ/)
 })
 
 test('jpeg pages become a pdf with one image per page', () => {

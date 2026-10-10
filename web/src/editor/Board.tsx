@@ -3,7 +3,8 @@ import type { BrushTip } from '@shared/clip.ts'
 import { emitterPoints } from '@shared/drip.ts'
 import { fixtureGlyph } from '@shared/fixtures.ts'
 import { crownFill, formOf, plantGlyph, plantPaint } from '@shared/plants.ts'
-import { centroid, dist, handleFromControl, midpoint, polar, sectorPath, zonePathD, zoneShapeD } from '@shared/geom.ts'
+import { centroid, coverPath, dist, handleFromControl, midpoint, polar, sectorPath, stripHandlePoint, zonePathD, zoneShapeD } from '@shared/geom.ts'
+import { nozzleById } from '@shared/nozzles.ts'
 import { DEFAULT_PPM, gridStepM, hatchOf, honeycomb, surfaceOf } from '@shared/landscape.ts'
 import { pipeWeight } from '@shared/pipes.ts'
 import { funnyPoints, pipeTags } from '@shared/pipeview.ts'
@@ -223,12 +224,11 @@ export const Board = forwardRef<SVGSVGElement, {
           />
         ))}
         {doc.sprinklers.map((sprinkler) => {
-          const radius = ppm * sprinkler.radiusM
           const selected = selectedSprinkler?.id === sprinkler.id
           return (
             <path
               key={`${sprinkler.id}-cover`}
-              d={sectorPath(sprinkler, radius, sprinkler.rotationDeg, sprinkler.arcDeg)}
+              d={coverPath(sprinkler, ppm, nozzleById(sprinkler.nozzleId))}
               className={selected ? 'cover selected' : 'cover'}
               pointerEvents="none"
             />
@@ -717,6 +717,18 @@ function DraftLayer({
 }
 
 function SprinklerHandles({ sprinkler, ppm, k }: { sprinkler: Sprinkler; ppm: number; k: number }) {
+  const nozzle = nozzleById(sprinkler.nozzleId)
+  if (nozzle.pattern === 'strip' && nozzle.widthM && nozzle.strip) {
+    const side = nozzle.strip === 'left' ? 'left' : nozzle.strip === 'right' ? 'right' : 'center'
+    const forward = Math.max(ppm * (sprinkler.radiusM || 1.5), 24 / k)
+    const mid = stripHandlePoint(sprinkler, sprinkler.rotationDeg, forward, nozzle.widthM * ppm, side)
+    return (
+      <g className="sprinkler-handles">
+        <line x1={sprinkler.x} y1={sprinkler.y} x2={mid.x} y2={mid.y} className="sprinkler-ray" />
+        <circle data-hit="sprinkler-rot" data-id={sprinkler.id} cx={mid.x} cy={mid.y} r={11 / k} className="handle rot-handle" />
+      </g>
+    )
+  }
   const throwR = Math.max(ppm * (sprinkler.radiusM || 4.5), 24 / k)
   const handleR = Math.min(throwR, 72 / k)
   const mid = polar(sprinkler, handleR, sprinkler.rotationDeg)

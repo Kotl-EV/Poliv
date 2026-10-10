@@ -1,3 +1,4 @@
+import { nozzleById, type Nozzle } from './nozzles.ts'
 import type { Point } from './types.ts'
 
 export function dist(a: Point, b: Point): number {
@@ -149,10 +150,12 @@ export function aimSprinkler(
 }
 
 export function pointInSpray(
-  head: { x: number; y: number; radiusM: number; arcDeg: number; rotationDeg: number },
+  head: { x: number; y: number; radiusM: number; arcDeg: number; rotationDeg: number; nozzleId?: string },
   point: Point,
   ppm: number,
 ): boolean {
+  const strip = head.nozzleId ? stripOf(nozzleById(head.nozzleId)) : null
+  if (strip) return pointInStrip(head, head.rotationDeg, head.radiusM * ppm, strip.widthPx(ppm), strip.side, point)
   const radius = head.radiusM * ppm
   if (!(radius > 0) || dist(head, point) > radius * 1.02) return false
   if (head.arcDeg >= 359) return false
@@ -550,6 +553,83 @@ function offsetCollapsed(original: Point[], result: Point[], delta: number): boo
   }
   if (checks === 0) return true
   return hits === 0
+}
+
+type StripSide = 'center' | 'left' | 'right'
+
+function stripOf(nozzle: Nozzle): { side: StripSide; widthPx: (ppm: number) => number } | null {
+  if (nozzle.pattern !== 'strip' || !nozzle.widthM || !nozzle.strip) return null
+  const side: StripSide = nozzle.strip === 'left' ? 'left' : nozzle.strip === 'right' ? 'right' : 'center'
+  return { side, widthPx: (ppm) => nozzle.widthM! * ppm }
+}
+
+export function coverPath(
+  head: { x: number; y: number; rotationDeg: number; radiusM: number; arcDeg: number },
+  ppm: number,
+  nozzle: Nozzle,
+): string {
+  const strip = stripOf(nozzle)
+  if (strip) return stripPath(head, head.rotationDeg, head.radiusM * ppm, strip.widthPx(ppm), strip.side)
+  return sectorPath(head, head.radiusM * ppm, head.rotationDeg, head.arcDeg)
+}
+
+export function pointInStrip(
+  origin: Point,
+  rotationDeg: number,
+  forwardPx: number,
+  widthPx: number,
+  side: StripSide,
+  point: Point,
+): boolean {
+  const local = stripLocal(origin, rotationDeg, point)
+  if (local.along < -forwardPx * 0.02 || local.along > forwardPx * 1.02) return false
+  if (side === 'left') return local.across <= widthPx * 0.02 && local.across >= -widthPx * 1.02
+  if (side === 'right') return local.across >= -widthPx * 0.02 && local.across <= widthPx * 1.02
+  const half = widthPx / 2
+  return local.across >= -half * 1.02 && local.across <= half * 1.02
+}
+
+export function stripHandlePoint(
+  origin: Point,
+  rotationDeg: number,
+  forwardPx: number,
+  widthPx: number,
+  side: StripSide,
+): Point {
+  const across = side === 'left' ? -widthPx / 2 : side === 'right' ? widthPx / 2 : 0
+  return stripWorld(origin, rotationDeg, across, forwardPx)
+}
+
+function stripPath(origin: Point, rotationDeg: number, forwardPx: number, widthPx: number, side: StripSide): string {
+  const across0 = side === 'left' ? -widthPx : side === 'right' ? 0 : -widthPx / 2
+  const across1 = side === 'left' ? 0 : side === 'right' ? widthPx : widthPx / 2
+  const corners = [
+    stripWorld(origin, rotationDeg, across0, 0),
+    stripWorld(origin, rotationDeg, across1, 0),
+    stripWorld(origin, rotationDeg, across1, forwardPx),
+    stripWorld(origin, rotationDeg, across0, forwardPx),
+  ]
+  return `M ${corners[0].x} ${corners[0].y} L ${corners[1].x} ${corners[1].y} L ${corners[2].x} ${corners[2].y} L ${corners[3].x} ${corners[3].y} Z`
+}
+
+function stripLocal(origin: Point, rotationDeg: number, point: Point): { across: number; along: number } {
+  const aim = (rotationDeg * Math.PI) / 180
+  const fx = Math.sin(aim)
+  const fy = -Math.cos(aim)
+  const rx = Math.cos(aim)
+  const ry = Math.sin(aim)
+  const dx = point.x - origin.x
+  const dy = point.y - origin.y
+  return { across: dx * rx + dy * ry, along: dx * fx + dy * fy }
+}
+
+function stripWorld(origin: Point, rotationDeg: number, across: number, along: number): Point {
+  const aim = (rotationDeg * Math.PI) / 180
+  const fx = Math.sin(aim)
+  const fy = -Math.cos(aim)
+  const rx = Math.cos(aim)
+  const ry = Math.sin(aim)
+  return { x: origin.x + rx * across + fx * along, y: origin.y + ry * across + fy * along }
 }
 
 export function sectorPath(origin: Point, radius: number, rotationDeg: number, arcDeg: number): string {

@@ -180,7 +180,28 @@ input, select {
 }
 .tool-fly select, .tool-panel select { width: 100%; }
 .nozzle-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.nozzle-grid.arcs { grid-template-columns: repeat(5, 1fr); }
+.nozzle-grid.modes { grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)); }
 .nozzle-grid .tool { text-align: center; padding: 6px 2px; font-size: 12px; }
+.pick-now { margin: 0; font-size: 13px; font-weight: 650; line-height: 1.35; }
+.irrig-fly { overflow: hidden; min-height: 0; }
+.fly-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.gear-pin {
+  flex: 0 1 auto;
+  max-height: 46%;
+  overflow: auto;
+  border-top: 1px solid #e0d6c6;
+  margin: 2px -8px -8px;
+  padding: 4px 8px 8px;
+}
+.gear-copy { width: 100%; margin-top: 8px; }
 .tool-label {
   margin: 8px 0 2px;
   font-size: 11px;
@@ -406,6 +427,10 @@ input, select {
 .spec table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .spec td { border-bottom: 1px solid #e4dccb; padding: 4px 0; }
 .spec td:last-child { text-align: right; }
+.gear { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.gear td { border-bottom: 1px solid #e4dccb; padding: 3px 0; vertical-align: top; }
+.gear td:last-child { text-align: right; white-space: nowrap; padding-left: 8px; }
+.gear-block .hint { margin-top: 8px; }
 .props { display: grid; gap: 8px; margin-bottom: 16px; }
 .hint { margin: 0 0 10px; color: #5c564c; font-size: 12px; line-height: 1.35; }
 .plain { margin: 0; padding-left: 18px; }
@@ -445,6 +470,7 @@ input, select {
   }
   .rail-go, .rail-shape { margin-top: 0; }
   .tool-fly, .tool-panel { width: 100%; max-height: 240px; }
+  .tool-fly.irrig-fly { max-height: min(440px, 52vh); }
   .tools {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));

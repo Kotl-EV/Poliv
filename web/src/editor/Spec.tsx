@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { asClimate, asSlope, asSoil, defaultDose } from '@shared/doc.ts'
+import { gearHint, gearList, gearText } from '@shared/gear.ts'
 import { dist } from '@shared/geom.ts'
 import { sleeveLengthM } from '@shared/join.ts'
 import { SURFACES } from '@shared/landscape.ts'
@@ -32,6 +34,77 @@ function programText(analysis: Analysis): string {
 function meters(value: number | null, digits = 1): string {
   if (value === null) return '—'
   return value.toLocaleString('ru-RU', { maximumFractionDigits: digits })
+}
+
+export function GearBlock({
+  doc,
+  analysis,
+  empty = false,
+  compact = false,
+}: {
+  doc: Doc
+  analysis: Analysis
+  empty?: boolean
+  compact?: boolean
+}) {
+  const gear = gearList(doc, analysis)
+  const hint = gearHint(doc)
+  const [copied, setCopied] = useState<'idle' | 'done' | 'fail'>('idle')
+  if (gear.lines.length === 0 && !empty) return null
+  return (
+    <div className="gear-block">
+      {compact ? <p className="tool-label">К закупке</p> : <h3>К закупке</h3>}
+      <table className="gear">
+        <tbody>
+          {gear.lines.length === 0 && <tr><td>Поставьте дождеватели, каплю или трубы — здесь соберётся список к закупке.</td></tr>}
+          {gear.lines.map((line) => (
+            <tr key={line.name}>
+              <td>{line.name}</td>
+              <td>{line.qty}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {gear.notes.map((note) => <p key={note} className="warn">{note}</p>)}
+      {hint && <p className="hint">{hint}</p>}
+      {gear.lines.length > 0 && (
+        <button type="button" className="primary gear-copy" onClick={() => copyGear(gearText(gear), setCopied)}>
+          {copied === 'done' ? 'Скопировано' : copied === 'fail' ? 'Не вышло' : 'Скопировать'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+async function copyGear(text: string, setCopied: (state: 'idle' | 'done' | 'fail') => void) {
+  const ok = await writeClipboard(text)
+  setCopied(ok ? 'done' : 'fail')
+  window.setTimeout(() => setCopied('idle'), 1600)
+}
+
+async function writeClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {
+    // Запасной путь ниже: буфер бывает закрыт вне https.
+  }
+  try {
+    const area = document.createElement('textarea')
+    area.value = text
+    area.setAttribute('readonly', '')
+    area.style.position = 'fixed'
+    area.style.left = '-9999px'
+    document.body.append(area)
+    area.select()
+    const ok = document.execCommand('copy')
+    area.remove()
+    return ok
+  } catch {
+    return false
+  }
 }
 
 export function Spec({
@@ -159,13 +232,30 @@ export function Spec({
             </select>
           </label>
           <label>
-            Радиус, м
-            <input type="number" min={0.3} max={30} step={0.1} value={sprinkler.radiusM} onChange={(event) => onSprinkler(sprinkler.id, { radiusM: Number(event.target.value) })} />
+            Высота корпуса, см
+            <select
+              aria-label="Высота корпуса"
+              value={sprinkler.riseCm ?? 10}
+              onChange={(event) => {
+                const rise = Number(event.target.value)
+                onSprinkler(sprinkler.id, { riseCm: rise === 15 || rise === 30 ? rise : undefined })
+              }}
+            >
+              <option value={10}>10</option>
+              <option value={15}>15</option>
+              <option value={30}>30</option>
+            </select>
           </label>
           <label>
-            Сектор, °
-            <input type="number" min={1} max={360} value={sprinkler.arcDeg} onChange={(event) => onSprinkler(sprinkler.id, { arcDeg: Number(event.target.value) })} />
+            {nozzleById(sprinkler.nozzleId).pattern === 'strip' ? 'Длина вперёд, м' : 'Радиус, м'}
+            <input type="number" min={0.3} max={30} step={0.1} value={sprinkler.radiusM} onChange={(event) => onSprinkler(sprinkler.id, { radiusM: Number(event.target.value) })} />
           </label>
+          {nozzleById(sprinkler.nozzleId).pattern !== 'strip' && (
+            <label>
+              Сектор, °
+              <input type="number" min={1} max={360} value={sprinkler.arcDeg} onChange={(event) => onSprinkler(sprinkler.id, { arcDeg: Number(event.target.value) })} />
+            </label>
+          )}
           <label>
             Поворот, °
             <input type="number" min={0} max={359} value={Math.round(sprinkler.rotationDeg)} onChange={(event) => onSprinkler(sprinkler.id, { rotationDeg: Number(event.target.value) })} />
@@ -281,6 +371,7 @@ export function Spec({
       {analysis.warnings.map((warning) => (
         <p key={warning} className="warn">{warning}</p>
       ))}
+      <GearBlock doc={doc} analysis={analysis} empty />
       <h3>Зоны</h3>
       <table>
         <tbody>

@@ -42,6 +42,8 @@ export type Sprinkler = {
   arcDeg: number
   rotationDeg: number
   flowLph: number
+  /** Высота выдвижения корпуса. Пусто — 10 см. */
+  riseCm?: 15 | 30
 }
 
 /** Магистраль идёт от источника к клапанам, зональная — от клапана к дождевателям. */

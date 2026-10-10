@@ -5,6 +5,7 @@ import {
   aimSprinkler,
   bearingDeg,
   pickSprinkler,
+  pointInStrip,
   circlePoints,
   controlFromHandle,
   dist,
@@ -137,6 +138,16 @@ test('a click on the spray or on the head picks that sprinkler over the lawn', (
   assert.equal(pickSprinkler(heads, { x: 100, y: 120 }, 1, ppm), 'a')
   assert.equal(pickSprinkler(heads, { x: 300, y: 100 }, 1, ppm), 'b')
   assert.equal(pickSprinkler(heads, { x: 300, y: 130 }, 1, ppm), null)
+})
+
+test('a side strip covers a rectangle in front of the head', () => {
+  const origin = { x: 0, y: 0 }
+  assert.equal(pointInStrip(origin, 0, 15, 90, 'center', { x: 0, y: -10 }), true)
+  assert.equal(pointInStrip(origin, 0, 15, 90, 'center', { x: 0, y: -20 }), false)
+  assert.equal(pointInStrip(origin, 0, 15, 90, 'center', { x: 40, y: -10 }), true)
+  assert.equal(pointInStrip(origin, 0, 15, 90, 'center', { x: 50, y: -10 }), false)
+  assert.equal(pointInStrip(origin, 0, 45, 15, 'left', { x: -10, y: -20 }), true)
+  assert.equal(pointInStrip(origin, 0, 45, 15, 'left', { x: 10, y: -20 }), false)
 })
 
 test('dragging the mid handle turns the sector, edge handles change the arc', () => {

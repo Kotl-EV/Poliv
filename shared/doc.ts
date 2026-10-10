@@ -191,6 +191,8 @@ export function parseDoc(value: unknown): Doc | null {
       return null
     }
     if (radiusM <= 0 || radiusM > 40 || arcDeg <= 0 || arcDeg > 360 || flowLph < 0 || flowLph > 20_000) return null
+    const riseRaw = num((item as { riseCm?: unknown }).riseCm)
+    const riseCm = riseRaw === 15 || riseRaw === 30 ? riseRaw : undefined
     sprinklers.push({
       id,
       nozzleId: nozzleById(nozzleId).id === nozzleId ? nozzleId : nozzleById(nozzleId).id,
@@ -200,6 +202,7 @@ export function parseDoc(value: unknown): Doc | null {
       arcDeg,
       rotationDeg,
       flowLph,
+      ...(riseCm ? { riseCm } : {}),
     })
   }
 

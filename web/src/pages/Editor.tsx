@@ -37,7 +37,7 @@ import { fixtureGlyph, fixtureKinds, fixtureSpec, FIXTURE_GROUPS, groupOf } from
 import { DEFAULT_PPM, DEFAULT_SHEET_M, gridStepM, hatchOf, hatchesFor, HATCHES, INKS, isDripKind, isSprayKind, isWetKind, SURFACES, surfaceOf } from '@shared/landscape.ts'
 import { crownFill, formOf, formsFor, plantGlyph, plantPaint } from '@shared/plants.ts'
 import { DEFAULT_SHEET_LAYERS, PAPERS, type PaperId, type SheetLayers } from '@shared/sheet.ts'
-import { nozzleById, nozzlesOf, type Nozzle, type NozzleKind } from '@shared/nozzles.ts'
+import { nozzleById, nozzlesOf, rotorMark, type Nozzle, type NozzleKind, type NozzlePattern } from '@shared/nozzles.ts'
 import { SERIES, type PipeSeriesId } from '@shared/pipes.ts'
 import type { Doc, Drip, Fixture, FixtureKind, HatchId, Hydrant, Measure, Note, Pipe, PipeRole, Plant, PlantForm, PlantKind, Point, Sleeve, Source, Sprinkler, Valve, ValveBox, Zone, ZoneKind } from '@shared/types.ts'
 import { api, type User } from '../api'
@@ -46,7 +46,7 @@ import { layoutIrrigation } from '@shared/plan.ts'
 import { Board, readHit, worldPoint, type Hit, type View } from '../editor/Board'
 import { exportProjectSheets } from '../pdf/exportSheet'
 import { configurePdfWorker, renderPlanPdf } from '../pdf/readPlan'
-import { Spec } from '../editor/Spec'
+import { GearBlock, Spec } from '../editor/Spec'
 
 configurePdfWorker(workerUrl)
 
@@ -216,6 +216,7 @@ export function EditorPage({
   const [scaleMeters, setScaleMeters] = useState('5')
   const [zoneKind, setZoneKind] = useState<ZoneKind>('lawn')
   const [nozzleId, setNozzleId] = useState('fan180')
+  const [riseCm, setRiseCm] = useState<10 | 15 | 30>(10)
   const [pipeRole, setPipeRole] = useState<PipeRole>('main')
   const [brushM, setBrushM] = useState(0.8)
   const [brushTip, setBrushTip] = useState<BrushTip>('round')
@@ -802,6 +803,7 @@ export function EditorPage({
         arcDeg: nozzle.arcDeg,
         rotationDeg: 0,
         flowLph: nozzle.flowLph,
+        ...(nozzle.kind !== 'bubbler' && riseCm !== 10 ? { riseCm } : {}),
       }
       commit({ ...doc, sprinklers: [...doc.sprinklers, sprinkler] })
       setSelection({ kind: 'sprinkler', id: sprinkler.id })
@@ -1208,7 +1210,7 @@ export function EditorPage({
       && !(current.plants ?? []).some((plant) => pointInZone(plant, zone.points, zone.holes)),
     )
     const plantNote = bare.length ? ' Капля идёт к деревьям и кустам. Поставьте растение на пустую клумбу.' : ''
-    setPlanNote(`Дождевателей: ${next.sprinklers.length}. Клапанов: ${next.valves.length}. Капельных линий: ${next.drips.length}.${plantNote}`)
+    setPlanNote(`Дождевателей: ${next.sprinklers.length}. Клапанов: ${next.valves.length}. Капельных линий: ${next.drips.length}. Список к закупке слева.${plantNote}`)
     setStatus('Сохранено')
     setTool('select')
   }
@@ -2163,24 +2165,31 @@ export function EditorPage({
               </RailButton>
               <button className="rail-go" onClick={runLayout}>Схема</button>
             </div>
-            <div className="tool-fly">
-              {tool === 'sprinkler' && <NozzleFly kind={headKind} nozzleId={nozzleId} onPick={setNozzleId} />}
-              {tool === 'box' && <p className="hint">Коробка для нескольких клапанов. Клапан рядом садится в свободный слот.</p>}
-              {tool === 'hydrant' && <p className="hint">Точка на трубе. В спецификации на этом конце стоит гидрант.</p>}
-              {tool === 'sleeve' && <p className="hint">Два клика по концам. Длина попадёт в спецификацию.</p>}
-              {tool === 'pipe' && (
-                <p className="hint">{pipeRole === 'main' ? 'Магистраль толще и идёт к клапанам.' : 'Зональная тоньше и идёт от клапана к дождевателям. Подходящие подсвечены.'}</p>
-              )}
-              <p className="tool-label">Трубы</p>
-              <select
-                value={doc.pipeSeries}
-                aria-label="Ряд труб"
-                onChange={(event) => setDoc((current) => ({ ...current, pipeSeries: event.target.value as PipeSeriesId }))}
-              >
-                {SERIES.map((series) => (
-                  <option key={series.id} value={series.id}>{series.name}</option>
-                ))}
-              </select>
+            <div className="tool-fly irrig-fly">
+              <div className="fly-scroll">
+                {tool === 'sprinkler' && (
+                  <NozzleFly kind={headKind} nozzleId={nozzleId} riseCm={riseCm} onPick={setNozzleId} onRise={setRiseCm} />
+                )}
+                {tool === 'box' && <p className="hint">Коробка для нескольких клапанов. Клапан рядом садится в свободный слот.</p>}
+                {tool === 'hydrant' && <p className="hint">Точка на трубе. В спецификации на этом конце стоит гидрант.</p>}
+                {tool === 'sleeve' && <p className="hint">Два клика по концам. Длина попадёт в спецификацию.</p>}
+                {tool === 'pipe' && (
+                  <p className="hint">{pipeRole === 'main' ? 'Магистраль толще и идёт к клапанам.' : 'Зональная тоньше и идёт от клапана к дождевателям. Подходящие подсвечены.'}</p>
+                )}
+              </div>
+              <div className="gear-pin">
+                <p className="tool-label">Трубы</p>
+                <select
+                  value={doc.pipeSeries}
+                  aria-label="Ряд труб"
+                  onChange={(event) => setDoc((current) => ({ ...current, pipeSeries: event.target.value as PipeSeriesId }))}
+                >
+                  {SERIES.map((series) => (
+                    <option key={series.id} value={series.id}>{series.name}</option>
+                  ))}
+                </select>
+                <GearBlock doc={doc} analysis={analysis} compact />
+              </div>
             </div>
           </>
         )}
@@ -2229,7 +2238,7 @@ export function EditorPage({
         )}
         {step === 'spec' && (
           <div className="tool-panel">
-            <p className="hint">Спецификация справа. Вернитесь в «Полив», если нужно пересчитать схему.</p>
+            <p className="hint">Список к закупке справа. «Скопировать» кладёт его в буфер. Печать дописывает продолжение, если строк много.</p>
           </div>
         )}
       </aside>
@@ -2800,6 +2809,7 @@ function cleanSprinkler(item: Sprinkler, patch: Partial<Sprinkler>): Sprinkler {
   if (!(next.arcDeg > 0) || next.arcDeg > 360) next.arcDeg = item.arcDeg
   if (!(next.flowLph >= 0) || next.flowLph > 20_000) next.flowLph = item.flowLph
   if (!Number.isFinite(next.rotationDeg)) next.rotationDeg = item.rotationDeg
+  if (next.riseCm !== 15 && next.riseCm !== 30) delete next.riseCm
   return next
 }
 
@@ -3174,33 +3184,151 @@ function shapeZone(zone: Zone, points: Point[], holes?: Point[][]): Zone {
 }
 
 const HEAD_COPY: Record<NozzleKind, { title: string; hint: string }> = {
-  fan: { title: 'Форсунка', hint: 'Короткий веер. Сектор и радиус в рядке ниже.' },
-  rotator: { title: 'Ротатор', hint: 'Средняя дальность, осадки ниже, чем у веера.' },
-  rotor: { title: 'Ротор', hint: 'Дальняя струя для большого газона.' },
+  fan: { title: 'Форсунка', hint: 'Фиксированный сектор, регулируемое сопло или полоса вдоль края.' },
+  rotator: { title: 'Ротатор', hint: 'Сектор крутится на сопле. Есть угол 45–105° и полосы.' },
+  rotor: { title: 'Ротор', hint: 'Номер сопла — обычный номер при 3 бар. Сектор крутится на корпусе.' },
   bubbler: { title: 'Баблер', hint: 'Заливает лунку у куста или дерева. Радиус потом меняется в свойствах.' },
 }
 
-function NozzleFly({ kind, nozzleId, onPick }: { kind: NozzleKind; nozzleId: string; onPick: (id: string) => void }) {
+const SHELVES: { id: NozzlePattern; label: string }[] = [
+  { id: 'fixed', label: 'Фикс.' },
+  { id: 'adjust', label: 'Регул.' },
+  { id: 'corner', label: 'Угол' },
+  { id: 'strip', label: 'Полоса' },
+  { id: 'low', label: 'Низкий' },
+]
+
+function NozzleFly({
+  kind,
+  nozzleId,
+  riseCm,
+  onPick,
+  onRise,
+}: {
+  kind: NozzleKind
+  nozzleId: string
+  riseCm: 10 | 15 | 30
+  onPick: (id: string) => void
+  onRise: (rise: 10 | 15 | 30) => void
+}) {
   const list = nozzlesOf(kind)
-  const radii = [...new Set(list.map((item) => item.radiusM))]
   const copy = HEAD_COPY[kind]
+  const current = list.find((item) => item.id === nozzleId) ?? list[0]
+  const shelf = current.pattern ?? 'fixed'
+  const modes = SHELVES.filter((mode) => list.some((item) => (item.pattern ?? 'fixed') === mode.id))
+  const pool = list.filter((item) => (item.pattern ?? 'fixed') === shelf)
+  const radii = uniqueRadii(pool)
+  const arcs = pool.filter((item) => item.radiusM === current.radiusM).sort((a, b) => a.arcDeg - b.arcDeg)
+
+  function chooseShelf(next: NozzlePattern) {
+    if (next === shelf) return
+    const nextPool = list.filter((item) => (item.pattern ?? 'fixed') === next)
+    onPick(matchNozzle(nextPool, current.radiusM, current.arcDeg).id)
+  }
+
+  function chooseRadius(radius: number) {
+    onPick(matchNozzle(pool.filter((item) => item.radiusM === radius), radius, current.arcDeg).id)
+  }
+
+  function chooseArc(arc: number) {
+    const hit = pool.find((item) => item.radiusM === current.radiusM && item.arcDeg === arc)
+    if (hit) onPick(hit.id)
+  }
+
   return (
     <>
       <p className="tool-label">{copy.title}</p>
+      <p className="pick-now">{placeName(current, riseCm)}</p>
       <p className="hint">{copy.hint}</p>
-      {radii.map((radius) => (
-        <div key={radius}>
-          <p className="tool-label">{metres(radius)} м</p>
+      {kind !== 'bubbler' && (
+        <>
+          <p className="tool-label">Высота корпуса</p>
           <div className="nozzle-grid">
-            {list.filter((item) => item.radiusM === radius).map((item) => (
-              <button key={item.id} type="button" className={nozzleId === item.id ? 'tool active' : 'tool'} onClick={() => onPick(item.id)}>
-                {nozzleChip(item)}
-              </button>
+            {([10, 15, 30] as const).map((cm) => (
+              <button key={cm} type="button" className={riseCm === cm ? 'tool active' : 'tool'} onClick={() => onRise(cm)}>{cm} см</button>
             ))}
           </div>
-        </div>
-      ))}
+        </>
+      )}
+      {kind === 'bubbler' ? (
+        <>
+          <p className="tool-label">Расход</p>
+          <ChipRow items={list} nozzleId={current.id} onPick={onPick} />
+        </>
+      ) : (
+        <>
+          {modes.length > 1 && (
+            <div className="nozzle-grid modes">
+              {modes.map((mode) => (
+                <button key={mode.id} type="button" className={shelf === mode.id ? 'tool active' : 'tool'} onClick={() => chooseShelf(mode.id)}>
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {shelf === 'strip' ? (
+            <ChipRow items={pool} nozzleId={current.id} onPick={onPick} />
+          ) : shelf === 'corner' ? (
+            <p className="hint">Сектор от 45° до 105°.</p>
+          ) : (
+            <>
+              <div className="nozzle-grid">
+                {radii.map((radius) => (
+                  <button key={radius} type="button" className={current.radiusM === radius ? 'tool active' : 'tool'} onClick={() => chooseRadius(radius)}>
+                    {metres(radius)} м
+                  </button>
+                ))}
+              </div>
+              {arcs.length > 1 && (
+                <div className="nozzle-grid arcs">
+                  {arcs.map((item) => (
+                    <button key={item.id} type="button" className={current.arcDeg === item.arcDeg ? 'tool active' : 'tool'} onClick={() => chooseArc(item.arcDeg)}>
+                      {item.arcDeg}°
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
     </>
+  )
+}
+
+function matchNozzle(pool: Nozzle[], radius: number, arc: number): Nozzle {
+  return pool.find((item) => item.radiusM === radius && item.arcDeg === arc)
+    ?? pool.find((item) => item.radiusM === radius && item.arcDeg === 180)
+    ?? pool.find((item) => item.arcDeg === 180)
+    ?? pool[0]
+}
+
+function uniqueRadii(items: Nozzle[]): number[] {
+  const out: number[] = []
+  for (const item of items) if (!out.includes(item.radiusM)) out.push(item.radiusM)
+  return out
+}
+
+function placeName(nozzle: Nozzle, rise: 10 | 15 | 30): string {
+  if (nozzle.kind === 'bubbler') return nozzle.name
+  if (nozzle.kind !== 'rotor') return `${nozzle.name} · корпус ${rise} см`
+  const mark = rotorMark(nozzle.radiusM, nozzle.pattern === 'low')
+  const code = mark.code.replace('.', ',')
+  const shelf = Number.isInteger(mark.radiusM) ? String(mark.radiusM) : String(mark.radiusM).replace('.', ',')
+  const thrown = Math.abs(nozzle.radiusM - mark.radiusM) < 0.35 ? '' : `, вылет ${metres(nozzle.radiusM).replace('.', ',')} м`
+  const low = nozzle.pattern === 'low' ? ', низкий угол' : ''
+  return `Сопло №${code}${low}, ${shelf} м${thrown} · ${nozzle.arcDeg}° · корпус ${rise} см`
+}
+
+function ChipRow({ items, nozzleId, onPick }: { items: Nozzle[]; nozzleId: string; onPick: (id: string) => void }) {
+  return (
+    <div className="nozzle-grid">
+      {items.map((item) => (
+        <button key={item.id} type="button" className={nozzleId === item.id ? 'tool active' : 'tool'} onClick={() => onPick(item.id)}>
+          {nozzleChip(item)}
+        </button>
+      ))}
+    </div>
   )
 }
 
@@ -3210,6 +3338,14 @@ function nozzleChip(item: Nozzle): string {
     const text = Number.isInteger(litres) ? String(litres) : litres.toFixed(1)
     return item.arcDeg >= 359 ? `${text} л` : `${text} л ${item.arcDeg}°`
   }
+  if (item.pattern === 'strip') {
+    if (item.strip === 'side') return 'бок'
+    if (item.strip === 'end') return 'торец'
+    if (item.strip === 'left') return 'лево'
+    return 'право'
+  }
+  if (item.pattern === 'adjust') return `${metres(item.radiusM)} м`
+  if (item.pattern === 'corner') return '45–105°'
   return item.arcDeg >= 359 ? '360°' : `${item.arcDeg}°`
 }
 

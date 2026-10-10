@@ -2,7 +2,9 @@ import { emitterPoints } from './drip.ts'
 import { fixtureMarkup } from './fixtures.ts'
 import { plantMarkup } from './plants.ts'
 import { gridStepM, surfaceOf, SURFACES, DEFAULT_PPM, DEFAULT_SHEET_M, hatchOf, honeycomb } from './landscape.ts'
-import { sectorPath, zoneShapeD } from './geom.ts'
+import { coverPath, zoneShapeD } from './geom.ts'
+import { nozzleById } from './nozzles.ts'
+import { gearHint, gearList } from './gear.ts'
 import { sleeveLengthM } from './join.ts'
 import { funnyPoints, pipeTags } from './pipeview.ts'
 import { pipeWeight } from './pipes.ts'
@@ -129,7 +131,7 @@ export function contentBounds(doc: Doc, underlay?: { w: number; h: number } | nu
 export function buildSheetPages(doc: Doc, analysis: Analysis, opts: SheetOpts): SheetPage[] {
   const layers = { ...DEFAULT_SHEET_LAYERS, ...opts.layers }
   const pages = [schemePage(doc, analysis, { ...opts, layers })]
-  if (opts.includeSpec !== false) pages.push(specPage(doc, analysis, opts))
+  if (opts.includeSpec !== false) pages.push(...specPages(doc, analysis, opts))
   return pages
 }
 
@@ -191,9 +193,8 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
   }
   if (layers.spray) {
     for (const head of doc.sprinklers) {
-      const radius = ppm * head.radiusM
       parts.push(
-        `<path d="${xml(sectorPath(head, radius, head.rotationDeg, head.arcDeg))}" fill="rgba(47,122,72,0.18)" stroke="#24633a" stroke-width="${fmt(1 / k)}"/>`,
+        `<path d="${xml(coverPath(head, ppm, nozzleById(head.nozzleId)))}" fill="rgba(47,122,72,0.18)" stroke="#24633a" stroke-width="${fmt(1 / k)}"/>`,
       )
     }
   }
@@ -282,16 +283,29 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
   }
 }
 
-function specPage(doc: Doc, analysis: Analysis, opts: SheetOpts): SheetPage {
+type SpecLine = { title?: string; cells: string[] }
+
+function specPages(doc: Doc, analysis: Analysis, opts: SheetOpts): SheetPage[] {
   const paper = paperOf(opts.paper)
   const widthPx = mmToPx(paper.wMm)
   const heightPx = mmToPx(paper.hMm)
-  const m = (n: number) => mmToPx(n)
-  const margin = m(12)
-  const date = opts.date ?? isoDate()
-  const lines: { title?: string; cells: string[] }[] = []
+  const margin = mmToPx(12)
+  const packed = packSpec(specLines(doc, analysis), heightPx, margin)
+  return packed.map((lines, index) => specSheet(lines, opts, paper, widthPx, heightPx, margin, index))
+}
+
+function specLines(doc: Doc, analysis: Analysis): SpecLine[] {
+  const lines: SpecLine[] = []
   const pushTitle = (title: string) => lines.push({ title, cells: [] })
   const push = (...cells: string[]) => lines.push({ cells })
+  const gear = gearList(doc, analysis)
+  if (gear.lines.length) {
+    pushTitle('К закупке')
+    for (const line of gear.lines) push(line.name, line.qty)
+    for (const note of gear.notes) push(note)
+    const hint = gearHint(doc)
+    if (hint) push(hint)
+  }
   pushTitle('Зоны')
   if (analysis.zones.length === 0) push('Зон нет')
   for (const zone of analysis.zones) {
@@ -345,18 +359,57 @@ function specPage(doc: Doc, analysis: Analysis, opts: SheetOpts): SheetPage {
     push(analysis.stations.length > 0 ? 'Станции друг за другом' : 'Один запуск', `${num(analysis.programMin, 1)} мин`)
   }
   for (const warning of analysis.warnings) push('!', warning)
+  return lines
+}
 
+function packSpec(lines: SpecLine[], heightPx: number, margin: number): SpecLine[][] {
+  const bottom = heightPx - margin - 16
+  const start = margin + 36
+  const pages: SpecLine[][] = []
+  let page: SpecLine[] = []
+  let y = start
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const need = specLineHeight(line)
+    const next = lines[i + 1]
+    const follow = line.title && next && !next.title ? specLineHeight(next) : 0
+    if (page.length > 0 && y + need + follow > bottom) {
+      pages.push(page)
+      page = []
+      y = start
+    }
+    page.push(line)
+    y += need
+  }
+  if (page.length) pages.push(page)
+  return pages.length ? pages : [[]]
+}
+
+function specLineHeight(line: SpecLine): number {
+  return line.title ? 26 : 18
+}
+
+function specSheet(
+  lines: SpecLine[],
+  opts: SheetOpts,
+  paper: { wMm: number; hMm: number },
+  widthPx: number,
+  heightPx: number,
+  margin: number,
+  index: number,
+): SheetPage {
+  const date = opts.date ?? isoDate()
   const rowH = 18
-  const colX = [margin, margin + m(70), margin + m(130), margin + m(190)]
+  const colX = [margin, margin + mmToPx(70), margin + mmToPx(130), margin + mmToPx(190)]
   let y = margin + 36
+  const continued = index > 0 ? ', продолжение' : ''
   const body: string[] = []
   body.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${widthPx}" height="${heightPx}" viewBox="0 0 ${widthPx} ${heightPx}">`)
   body.push(`<rect width="${widthPx}" height="${heightPx}" fill="#f7f3ea"/>`)
   body.push(`<rect x="${margin}" y="${margin}" width="${widthPx - margin * 2}" height="${heightPx - margin * 2}" fill="none" stroke="#1c2822" stroke-width="1.4"/>`)
-  body.push(`<text x="${margin + 8}" y="${margin + 22}" font-size="16" font-weight="700" font-family="Segoe UI, PT Sans, Arial, sans-serif">Спецификация — ${xml(opts.title)}</text>`)
+  body.push(`<text x="${margin + 8}" y="${margin + 22}" font-size="16" font-weight="700" font-family="Segoe UI, PT Sans, Arial, sans-serif">Спецификация — ${xml(opts.title)}${xml(continued)}</text>`)
   body.push(`<text x="${widthPx - margin - 8}" y="${margin + 22}" font-size="11" text-anchor="end" fill="#5c564c" font-family="Segoe UI, PT Sans, Arial, sans-serif">${xml(date)}</text>`)
   for (const line of lines) {
-    if (y > heightPx - margin - 16) break
     if (line.title) {
       y += 8
       body.push(`<text x="${margin + 8}" y="${y}" font-size="11" font-weight="700" letter-spacing="0.06em" font-family="Segoe UI, PT Sans, Arial, sans-serif">${xml(line.title.toUpperCase())}</text>`)
@@ -370,7 +423,7 @@ function specPage(doc: Doc, analysis: Analysis, opts: SheetOpts): SheetPage {
   }
   body.push('</svg>')
   return {
-    name: 'Спецификация',
+    name: index === 0 ? 'Спецификация' : `Спецификация ${index + 1}`,
     svg: body.join(''),
     widthPx,
     heightPx,

@@ -4,6 +4,14 @@ import { emptyDoc, parseDoc } from './doc.ts'
 import { hatchOf } from './landscape.ts'
 import type { Zone } from './types.ts'
 
+test('a 15 or 30 cm riser stays on the head and 10 cm stays the default', () => {
+  const head = { id: 's', nozzleId: 'fan180', x: 1, y: 2, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 360 }
+  assert.equal(parseDoc({ ...emptyDoc(), sprinklers: [{ ...head, riseCm: 30 }] })?.sprinklers[0].riseCm, 30)
+  assert.equal(parseDoc({ ...emptyDoc(), sprinklers: [{ ...head, riseCm: 15 }] })?.sprinklers[0].riseCm, 15)
+  assert.equal(parseDoc({ ...emptyDoc(), sprinklers: [{ ...head, riseCm: 10 }] })?.sprinklers[0].riseCm, undefined)
+  assert.equal(parseDoc({ ...emptyDoc(), sprinklers: [head] })?.sprinklers[0].riseCm, undefined)
+})
+
 test('grid snap is off by default and only on when the user turns it on', () => {
   assert.equal(emptyDoc().snapGrid, false)
   assert.equal(parseDoc(emptyDoc())?.snapGrid, false)
