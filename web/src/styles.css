@@ -54,6 +54,7 @@ input, select {
 }
 .error { color: #8d2b1f; margin: 0; }
 .warn { color: #7a4b10; background: #f3e4c4; padding: 8px; margin: 8px 0 0; }
+button.warn { display: block; width: 100%; text-align: left; border: 0; cursor: pointer; font: inherit; }
 .note { color: #5c564c; font-size: 13px; }
 
 .desk { min-height: 100vh; }

@@ -69,6 +69,21 @@ export function emitterPoints(points: Point[], spacingM: number, ppm: number): P
   return out
 }
 
+/** Кольцо капельниц: центр в точке курсора, линия проходит через узел на подводе. */
+export function dripRingPoints(anchor: Point, center: Point, steps = 24): Point[] | null {
+  const radius = dist(anchor, center)
+  if (radius < 4) return null
+  const a0 = Math.atan2(anchor.y - center.y, anchor.x - center.x)
+  const points: Point[] = []
+  for (let i = 0; i <= steps; i++) {
+    const angle = a0 + (i / steps) * Math.PI * 2
+    points.push({ x: center.x + Math.cos(angle) * radius, y: center.y + Math.sin(angle) * radius })
+  }
+  points[0] = { x: anchor.x, y: anchor.y }
+  points[points.length - 1] = { x: anchor.x, y: anchor.y }
+  return points
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
 }

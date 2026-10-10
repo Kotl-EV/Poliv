@@ -2,6 +2,7 @@ import { DEFAULT_PPM, DEFAULT_SHEET_M, HATCHES, surfaceOf } from './landscape.ts
 import { parseFixtureKind } from './fixtures.ts'
 import { parsePlantForm } from './plants.ts'
 import { nozzleById } from './nozzles.ts'
+import { parseProgram } from './program.ts'
 import { DEFAULT_SERIES, seriesById } from './pipes.ts'
 import type { Climate, Doc, Drip, Fixture, HatchId, Hydrant, Measure, Note, Pipe, Plant, PlantKind, Point, Sleeve, Slope, Soil, Source, Sprinkler, Trench, Valve, ValveBox, Zone, ZoneKind } from './types.ts'
 
@@ -255,6 +256,8 @@ export function parseDoc(value: unknown): Doc | null {
   const snapVertex = raw.snapVertex !== false
   if (raw.ortho !== undefined && typeof raw.ortho !== 'boolean') return null
   const ortho = raw.ortho === true
+  const program = parseProgram(raw.program)
+  if (program === null) return null
   let anchor: Point | undefined
   if (raw.anchor !== undefined && raw.anchor !== null) {
     const place = point(raw.anchor)
@@ -286,6 +289,7 @@ export function parseDoc(value: unknown): Doc | null {
     snapVertex,
     ortho,
     ...(anchor ? { anchor } : {}),
+    ...(program ? { program } : {}),
   }
 }
 
@@ -350,6 +354,12 @@ function parseNotes(value: unknown): Note[] | null {
     const color = parseHex(item.color)
     if (color === null) return null
     if (item.bold !== undefined && typeof item.bold !== 'boolean') return null
+    let leader: Point | undefined
+    if (item.leader !== undefined) {
+      const tip = point(item.leader)
+      if (!tip) return null
+      leader = tip
+    }
     notes.push({
       id,
       x,
@@ -358,6 +368,7 @@ function parseNotes(value: unknown): Note[] | null {
       sizeM,
       ...(color ? { color } : {}),
       ...(item.bold === true ? { bold: true } : {}),
+      ...(leader ? { leader } : {}),
     })
   }
   return notes
@@ -403,7 +414,14 @@ function parsePlants(value: unknown): Plant[] | null {
     if (radiusM < 0.2 || radiusM > 8) return null
     const form = parsePlantForm(item.form, kind)
     if (form === null) return null
-    plants.push({ id, kind, x, y, radiusM, ...(form ? { form } : {}) })
+    let rotationDeg: number | undefined
+    if (item.rotationDeg !== undefined) {
+      const turn = num(item.rotationDeg)
+      if (turn === null) return null
+      const norm = ((turn % 360) + 360) % 360
+      if (norm !== 0) rotationDeg = norm
+    }
+    plants.push({ id, kind, x, y, radiusM, ...(form ? { form } : {}), ...(rotationDeg !== undefined ? { rotationDeg } : {}) })
   }
   return plants
 }
@@ -517,7 +535,9 @@ function parseDrips(value: unknown): Drip[] | null {
     const emitterLph = num(item.emitterLph)
     if (!id || !pts || spacingM === null || emitterLph === null) return null
     if (spacingM < 0.05 || spacingM > 2 || emitterLph < 0.2 || emitterLph > 40) return null
-    drips.push({ id, points: pts, spacingM, emitterLph })
+    const bareRaw = (item as { bare?: unknown }).bare
+    if (bareRaw !== undefined && typeof bareRaw !== 'boolean') return null
+    drips.push({ id, points: pts, spacingM, emitterLph, ...(bareRaw === true ? { bare: true } : {}) })
   }
   return drips
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 import { analyze } from '@shared/analyze.ts'
+import { dripRingPoints } from '@shared/drip.ts'
 import { brushOutline, clipRegions, mirrorAcross, splitRegion, type BrushTip, type ClipOp } from '@shared/clip.ts'
 import { asClimate, asSlope, asSoil, defaultDose, emptyDoc, SNAP_PX } from '@shared/doc.ts'
 import { exampleDoc } from '@shared/example.ts'
@@ -14,9 +15,18 @@ import {
   centroid,
   dist,
   flattenRing,
+  headsAlong,
+  mirrorHeading,
+  mirrorNozzleId,
+  sideInto,
+  sideOfPoint,
+  seatOnZone,
   mapToSize,
   midpoint,
   mirrorAround,
+  nearestOnPolyline,
+  resizeEdge,
+  filletVertex,
   nearestScreen,
   normDeg,
   offsetRing,
@@ -37,12 +47,14 @@ import { fixtureGlyph, fixtureKinds, fixtureSpec, FIXTURE_GROUPS, groupOf } from
 import { DEFAULT_PPM, DEFAULT_SHEET_M, gridStepM, hatchOf, hatchesFor, HATCHES, INKS, isDripKind, isSprayKind, isWetKind, SURFACES, surfaceOf } from '@shared/landscape.ts'
 import { crownFill, formOf, formsFor, plantGlyph, plantPaint } from '@shared/plants.ts'
 import { DEFAULT_SHEET_LAYERS, PAPERS, type PaperId, type SheetLayers } from '@shared/sheet.ts'
-import { nozzleById, nozzlesOf, rotorMark, type Nozzle, type NozzleKind, type NozzlePattern } from '@shared/nozzles.ts'
+import { nozzleById, nozzlesOf, rotorMark, sectorForPlace, type Nozzle, type NozzleKind, type NozzlePattern } from '@shared/nozzles.ts'
+import { programOf, withProgram } from '@shared/program.ts'
 import { SERIES, type PipeSeriesId } from '@shared/pipes.ts'
-import type { Doc, Drip, Fixture, FixtureKind, HatchId, Hydrant, Measure, Note, Pipe, PipeRole, Plant, PlantForm, PlantKind, Point, Sleeve, Source, Sprinkler, Valve, ValveBox, Zone, ZoneKind } from '@shared/types.ts'
+import type { Doc, Drip, Fixture, FixtureKind, HatchId, Hydrant, Measure, Note, Pipe, PipeRole, PlanIssue, Plant, PlantForm, PlantKind, Point, Sleeve, Source, Sprinkler, Valve, ValveBox, Zone, ZoneKind } from '@shared/types.ts'
 import { api, type User } from '../api'
 import { draftHeadFlow, joinableHeads, sleeveLengthM, stickTarget, valveSlot } from '@shared/join.ts'
 import { layoutIrrigation } from '@shared/plan.ts'
+import { dripTags } from '@shared/pipeview.ts'
 import { Board, readHit, worldPoint, type Hit, type View } from '../editor/Board'
 import { exportProjectSheets } from '../pdf/exportSheet'
 import { configurePdfWorker, renderPlanPdf } from '../pdf/readPlan'
@@ -68,7 +80,7 @@ type Clip =
   | { kind: 'drip'; item: Drip }
   | { kind: 'dim'; item: Measure }
 type Fav = { kind: 'tree' | 'bush'; form: PlantForm } | { kind: 'fixture'; form: FixtureKind }
-type LineOp = 'slice' | 'mirror'
+type LineOp = 'slice' | 'mirror' | 'head-mirror'
 
 const ALIGN_SIDES: { id: AlignSide; label: string }[] = [
   { id: 'left', label: 'Слева' },
@@ -137,7 +149,10 @@ function targetsOf(doc: Doc): Point[] {
   for (const drip of doc.drips) points.push(...drip.points)
   for (const pipe of doc.pipes) points.push(...pipe.points)
   for (const zone of doc.zones) points.push(...zone.points)
-  for (const note of doc.notes ?? []) points.push(note)
+  for (const note of doc.notes ?? []) {
+    points.push(note)
+    if (note.leader) points.push(note.leader)
+  }
   for (const plant of doc.plants ?? []) points.push(plant)
   for (const fixture of doc.fixtures ?? []) points.push(fixture)
   for (const box of doc.boxes ?? []) points.push(box)
@@ -161,6 +176,7 @@ function collectVertices(doc: Doc): Point[] {
   for (const hydrant of doc.hydrants ?? []) points.push({ x: hydrant.x, y: hydrant.y })
   for (const sleeve of doc.sleeves ?? []) points.push(sleeve.a, sleeve.b)
   for (const measure of doc.measures ?? []) points.push(measure.a, measure.b)
+  for (const note of doc.notes ?? []) if (note.leader) points.push(note.leader)
   return points
 }
 
@@ -176,6 +192,7 @@ function vertexAt(doc: Doc, hit: Hit): Point | null {
     if (!sleeve) return null
     return hit.index === 0 ? sleeve.a : sleeve.b
   }
+  if (hit.kind === 'note-leader') return (doc.notes ?? []).find((item) => item.id === hit.id)?.leader ?? null
   return null
 }
 
@@ -233,9 +250,14 @@ export function EditorPage({
   const [offsetM, setOffsetM] = useState('0.5')
   const [sizeW, setSizeW] = useState('1')
   const [sizeH, setSizeH] = useState('1')
+  const [edgePick, setEdgePick] = useState<{ id: string; index: number } | null>(null)
+  const [edgeM, setEdgeM] = useState('')
+  const [vertexPick, setVertexPick] = useState<{ id: string; index: number } | null>(null)
+  const [filletM, setFilletM] = useState('')
   const [boolPick, setBoolPick] = useState<ClipOp | null>(null)
   const [lineOp, setLineOp] = useState<LineOp | null>(null)
   const [anchorPick, setAnchorPick] = useState(false)
+  const [leaderNote, setLeaderNote] = useState<string | null>(null)
   const [alignPick, setAlignPick] = useState<AlignSide | null>(null)
   const [linePts, setLinePts] = useState<Point[]>([])
   const [selection, setSelection] = useState<Sel>(null)
@@ -248,11 +270,26 @@ export function EditorPage({
   const [planNote, setPlanNote] = useState('')
   const [paper, setPaper] = useState<PaperId>('a4')
   const [sheetLayers, setSheetLayers] = useState<SheetLayers>(DEFAULT_SHEET_LAYERS)
+  const [dripBare, setDripBare] = useState(false)
+  const [along, setAlong] = useState(false)
+  const [alongSide, setAlongSide] = useState<1 | -1>(1)
+  const [alongDensity, setAlongDensity] = useState<'rare' | 'usual' | 'dense'>('usual')
+  const [alongHeld, setAlongHeld] = useState(false)
+  const [ringOn, setRingOn] = useState(false)
+  const [branchOn, setBranchOn] = useState(false)
   const [includeSpec, setIncludeSpec] = useState(true)
   const [printBusy, setPrintBusy] = useState(false)
   const svgRef = useRef<SVGSVGElement>(null)
   const docRef = useRef(doc)
   const draftRef = useRef<Point[]>([])
+  const dripBareRef = useRef(false)
+  const alongRef = useRef(false)
+  const alongSideRef = useRef<1 | -1>(1)
+  const edgeUndo = useRef(false)
+  const alongDensityRef = useRef<'rare' | 'usual' | 'dense'>('usual')
+  const ringRef = useRef<{ dripId: string; anchor: Point | null; center: Point | null } | null>(null)
+  const branchRef = useRef<string | null>(null)
+  const spaceRef = useRef(false)
   const past = useRef<Doc[]>([])
   const future = useRef<Doc[]>([])
   const ready = useRef(false)
@@ -272,6 +309,10 @@ export function EditorPage({
   const didFit = useRef(false)
   docRef.current = doc
   draftRef.current = draft
+  dripBareRef.current = dripBare
+  alongRef.current = along
+  alongSideRef.current = alongSide
+  alongDensityRef.current = alongDensity
 
   const analysis = useMemo(() => analyze(doc), [doc])
   const board = contentSize(doc, imageSize)
@@ -285,6 +326,15 @@ export function EditorPage({
     setSizeW((box.w / ppm).toFixed(2))
     setSizeH((box.h / ppm).toFixed(2))
   }, [sizeZoneId, ppm])
+
+  useEffect(() => {
+    const drawing = tool === 'zone' || tool === 'pipe' || tool === 'drip' || (tool === 'sprinkler' && along) || ringOn
+    if (!drawing && draftRef.current.length) setDraftPoints([])
+    if (tool !== 'drip' && branchRef.current) {
+      branchRef.current = null
+      setBranchOn(false)
+    }
+  }, [tool, along, ringOn])
 
   useEffect(() => {
     if (tool === 'dim') return
@@ -408,12 +458,28 @@ export function EditorPage({
           setAnchorPick(false)
           return
         }
+        if (leaderNote) {
+          setLeaderNote(null)
+          return
+        }
         if (dimRef.current.length) {
           setDim([])
           return
         }
         if (sleeveRef.current.length) {
           setSleeve([])
+          return
+        }
+        if (ringRef.current) {
+          ringRef.current = null
+          setRingOn(false)
+          setDraftPoints([])
+          return
+        }
+        if (branchRef.current) {
+          branchRef.current = null
+          setBranchOn(false)
+          setDraftPoints([])
           return
         }
         shapeStart.current = null
@@ -436,13 +502,25 @@ export function EditorPage({
         const clip = lastMark.current
         if (clip) placeClip(clip)
       }
+      if (event.key === ' ' || event.code === 'Space') {
+        event.preventDefault()
+        spaceRef.current = true
+        return
+      }
       if (event.key === 'Delete' || event.key === 'Backspace') {
         event.preventDefault()
         removeSelection()
       }
     }
+    const onUp = (event: KeyboardEvent) => {
+      if (event.key === ' ' || event.code === 'Space') spaceRef.current = false
+    }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keyup', onUp)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('keyup', onUp)
+    }
   })
 
   function remember(current = docRef.current) {
@@ -505,6 +583,14 @@ export function EditorPage({
   }
 
   function finishDraft() {
+    if (ringRef.current?.anchor && ringRef.current.center) {
+      commitRing(ringRef.current.anchor, ringRef.current.center)
+      return
+    }
+    if (tool === 'sprinkler' && alongRef.current) {
+      placeAlong(draftRef.current)
+      return
+    }
     const current = docRef.current
     const points = draftRef.current
     try {
@@ -523,15 +609,145 @@ export function EditorPage({
         return
       }
       if (tool === 'drip' && points.length >= 2) {
-        const drip: Drip = { id: uid('drip'), points, spacingM: 0.3, emitterLph: 2 }
+        const drip: Drip = {
+          id: uid('drip'),
+          points,
+          spacingM: 0.3,
+          emitterLph: 2,
+          ...(dripBareRef.current ? { bare: true } : {}),
+        }
         commit({ ...current, drips: [...current.drips, drip] })
         setSelection({ kind: 'drip', id: drip.id })
         laid({ kind: 'drip', item: drip })
+        branchRef.current = null
+        setBranchOn(false)
         setDraftPoints([])
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось замкнуть контур')
     }
+  }
+
+  function placeAlong(points: Point[]) {
+    const nozzle = nozzleById(nozzleId)
+    const current = docRef.current
+    const ppmNow = current.pxPerMeter && current.pxPerMeter > 0 ? current.pxPerMeter : DEFAULT_PPM
+    const factor = alongDensityRef.current === 'rare' ? 1.05 : alongDensityRef.current === 'dense' ? 0.65 : 0.85
+    const spots = headsAlong(points, Math.max(8, nozzle.radiusM * ppmNow * factor), alongSideRef.current)
+    if (!spots.length) {
+      setPlanNote('Линия слишком короткая для ряда.')
+      return
+    }
+    if (current.sprinklers.length + spots.length > 2000) {
+      setPlanNote('На чертеже уже 2000 форсунок')
+      return
+    }
+    const heads: Sprinkler[] = spots.map((spot) => ({
+      id: uid('s'),
+      nozzleId: nozzle.id,
+      x: spot.x,
+      y: spot.y,
+      radiusM: nozzle.radiusM,
+      arcDeg: nozzle.arcDeg,
+      rotationDeg: spot.rotationDeg,
+      flowLph: nozzle.flowLph,
+      ...(nozzle.kind !== 'bubbler' && riseCm !== 10 ? { riseCm } : {}),
+    }))
+    commit({ ...current, sprinklers: [...current.sprinklers, ...heads] })
+    setSelection({ kind: 'sprinkler', id: heads[heads.length - 1].id })
+    laid({ kind: 'sprinkler', item: heads[heads.length - 1] })
+    setDraftPoints([])
+    setAlongHeld(false)
+    setPlanNote(`Вдоль кромки: ${heads.length}. Сектор ${nozzle.arcDeg}°.`)
+  }
+
+  function commitRing(anchor: Point, center: Point) {
+    const parentId = ringRef.current?.dripId ?? ''
+    const points = dripRingPoints(anchor, center)
+    if (!points) {
+      setPlanNote('Кольцо слишком маленькое.')
+      return
+    }
+    const current = docRef.current
+    if (current.drips.length >= 400) {
+      setPlanNote('На чертеже уже 400 трубок')
+      return
+    }
+    const ppmNow = current.pxPerMeter && current.pxPerMeter > 0 ? current.pxPerMeter : DEFAULT_PPM
+    const emitterLph = dist(anchor, center) / ppmNow > 0.7 ? 4 : 2
+    const drip: Drip = { id: uid('drip'), points, spacingM: 0.3, emitterLph }
+    commit({ ...current, drips: [...current.drips, drip] })
+    laid({ kind: 'drip', item: drip })
+    const parent = parentId && docRef.current.drips.some((item) => item.id === parentId) ? parentId : ''
+    setDraftPoints([])
+    if (parent) {
+      ringRef.current = { dripId: parent, anchor: null, center: null }
+      setRingOn(true)
+      setSelection({ kind: 'drip', id: parent })
+      setPlanNote(emitterLph === 4
+        ? 'Кольцо дерева, 4 л/ч. Следующее: клик по трубке, затем центр. Esc заканчивает.'
+        : 'Кольцо куста, 2 л/ч. Следующее: клик по трубке, затем центр. Esc заканчивает.')
+      return
+    }
+    ringRef.current = null
+    setRingOn(false)
+    setSelection({ kind: 'drip', id: drip.id })
+    setPlanNote(emitterLph === 4 ? 'Кольцо дерева, 4 л/ч.' : 'Кольцо куста, 2 л/ч.')
+  }
+
+  function armRing() {
+    if (selection?.kind !== 'drip' || !selection.id) return
+    if (ringRef.current?.dripId === selection.id) {
+      ringRef.current = null
+      setRingOn(false)
+      setDraftPoints([])
+      return
+    }
+    branchRef.current = null
+    setBranchOn(false)
+    ringRef.current = { dripId: selection.id, anchor: null, center: null }
+    setRingOn(true)
+    setDraftPoints([])
+    setPlanNote('Кольцо: кликните узел на трубке, затем точку в центре растения.')
+  }
+
+  function armBranch() {
+    if (selection?.kind !== 'drip' || !selection.id) return
+    if (branchRef.current === selection.id) {
+      branchRef.current = null
+      setBranchOn(false)
+      setDraftPoints([])
+      return
+    }
+    const drip = docRef.current.drips.find((item) => item.id === selection.id)
+    if (!drip?.points.length) return
+    ringRef.current = null
+    setRingOn(false)
+    branchRef.current = selection.id
+    setBranchOn(true)
+    dripBareRef.current = true
+    setDripBare(true)
+    setTool('drip')
+    setDraftPoints([])
+    setPlanNote('Отвод: кликните трубку, откуда уходит ветка, затем ведите линию.')
+  }
+
+  function focusIssue(issue: PlanIssue) {
+    const current = docRef.current
+    let point: Point | null = null
+    if (issue.kind === 'sprinkler') point = current.sprinklers.find((item) => item.id === issue.id) ?? null
+    else if (issue.kind === 'drip') point = current.drips.find((item) => item.id === issue.id)?.points[0] ?? null
+    else point = current.valves.find((item) => item.id === issue.id) ?? null
+    setStep('irrig')
+    setTool('select')
+    setSelection({ kind: issue.kind, id: issue.id })
+    const pane = svgRef.current?.getBoundingClientRect()
+    if (!pane || !point) return
+    const spot = point
+    setView((v) => {
+      const k = Math.max(v.k, 1)
+      return { k, x: pane.width / 2 - spot.x * k, y: pane.height / 2 - spot.y * k }
+    })
   }
 
   function pickPipe(role: PipeRole) {
@@ -627,10 +843,60 @@ export function EditorPage({
   }
 
   function resolveBoardHit(hit: Hit, point: Point): Hit {
-    if (hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc' || hit.kind === 'draft-ok' || hit.kind === 'draft-close' || hit.kind === 'plant-size' || hit.kind === 'fixture-size') return hit
+    if (hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc' || hit.kind === 'draft-ok' || hit.kind === 'draft-close' || hit.kind === 'plant-size' || hit.kind === 'fixture-size' || hit.kind === 'note-leader') return hit
     const id = pickSprinkler(docRef.current.sprinklers, point, view.k, ppm)
     if (id) return { kind: 'sprinkler', id }
     return hit
+  }
+
+  function fittedSeat(nozzle: Nozzle, seat: { x: number; y: number; rotationDeg: number; arcDeg: number }) {
+    if (nozzle.kind === 'bubbler' || nozzle.pattern === 'strip') {
+      if (nozzle.arcDeg >= 359) return null
+      return {
+        x: seat.x,
+        y: seat.y,
+        rotationDeg: seat.rotationDeg,
+        nozzleId: nozzle.id,
+        arcDeg: nozzle.arcDeg,
+        radiusM: nozzle.radiusM,
+        flowLph: nozzle.flowLph,
+      }
+    }
+    const fit = sectorForPlace(nozzle, seat.arcDeg)
+    return { x: seat.x, y: seat.y, rotationDeg: seat.rotationDeg, ...fit }
+  }
+
+  function wetSeat(raw: Point, zones: Zone[]) {
+    const wet = zones.filter((zone) => isWetKind(zone.kind))
+    const k = Math.max(view.k, 0.06)
+    return seatOnZone(
+      raw,
+      wet.map((zone) => ({
+        points: zone.points,
+        bends: zone.bends,
+        holes: zone.holes,
+        spray: isSprayKind(zone.kind),
+      })),
+      18 / k,
+      14 / k,
+    )
+  }
+
+  function zoneCourse(hit: Hit): { points: Point[]; whole: boolean; zoneId: string } | null {
+    if (hit.kind !== 'zone-edge' && hit.kind !== 'zone') return null
+    const zone = docRef.current.zones.find((item) => item.id === hit.id)
+    if (!zone || zone.points.length < 2) return null
+    if (hit.kind === 'zone-edge') {
+      const a = zone.points[hit.index]
+      const b = zone.points[(hit.index + 1) % zone.points.length]
+      if (!a || !b) return null
+      const bend = zone.bends?.[hit.index] ?? null
+      const points = outlineOf([a, b], bend ? [bend] : null)
+      return points.length >= 2 ? { points, whole: false, zoneId: zone.id } : null
+    }
+    const ring = outlineOf(zone.points, zone.bends)
+    if (ring.length < 3) return null
+    return { points: [...ring, ring[0]], whole: true, zoneId: zone.id }
   }
 
   function onPointerDown(event: React.PointerEvent<SVGSVGElement>) {
@@ -643,13 +909,34 @@ export function EditorPage({
       pan.current = { x: event.clientX, y: event.clientY, view, button: 2, hit, moved: false }
       return
     }
-    if ((tool === 'zone' || tool === 'pipe' || tool === 'drip') && (hit.kind === 'draft-ok' || hit.kind === 'draft-close')) {
+    if ((tool === 'zone' || tool === 'pipe' || tool === 'drip' || (tool === 'sprinkler' && alongRef.current)) && (hit.kind === 'draft-ok' || hit.kind === 'draft-close')) {
       finishDraft()
       return
     }
     if (event.button === 1) {
       event.currentTarget.setPointerCapture(event.pointerId)
       pan.current = { x: event.clientX, y: event.clientY, view, button: 1, hit, moved: true }
+      return
+    }
+    if (ringRef.current) {
+      const ring = ringRef.current
+      const drip = docRef.current.drips.find((item) => item.id === ring.dripId)
+      if (!drip) {
+        ringRef.current = null
+        setRingOn(false)
+        return
+      }
+      if (!ring.anchor) {
+        const hitLine = nearestOnPolyline(raw, drip.points)
+        if (!hitLine || hitLine.distance > 18) {
+          setPlanNote('Кликните ближе к трубке.')
+          return
+        }
+        ringRef.current = { dripId: ring.dripId, anchor: hitLine.point, center: null }
+        setPlanNote('Теперь кликните центр растения.')
+        return
+      }
+      commitRing(ring.anchor, raw)
       return
     }
     if (boolPick) {
@@ -674,6 +961,7 @@ export function EditorPage({
         return
       }
       if (lineOp === 'slice') applySlice(next[0], next[1])
+      else if (lineOp === 'head-mirror') applyHeadMirror(next[0], next[1])
       else applyMirror(next[0], next[1])
       return
     }
@@ -681,6 +969,26 @@ export function EditorPage({
       commit({ ...docRef.current, anchor: worldSnap(raw, false) })
       setAnchorPick(false)
       setPlanNote('Якорь поставлен. Поворот, отражение и масштаб идут вокруг него.')
+      return
+    }
+    if (leaderNote) {
+      const note = (docRef.current.notes ?? []).find((item) => item.id === leaderNote)
+      if (!note) {
+        setLeaderNote(null)
+        return
+      }
+      let tip = worldSnap(raw, false)
+      if (lineLocked(event.shiftKey)) tip = orthoFrom(note, tip)
+      if (dist(note, tip) * view.k < 10) {
+        setPlanNote('Кликните дальше от подписи. Esc — отмена.')
+        return
+      }
+      setLeaderNote(null)
+      commit({
+        ...docRef.current,
+        notes: (docRef.current.notes ?? []).map((item) => (item.id === note.id ? { ...item, leader: tip } : item)),
+      })
+      setPlanNote('Стрелка смотрит в эту точку. Квадрат на острие можно перетащить.')
       return
     }
     if (alignPick) {
@@ -698,26 +1006,56 @@ export function EditorPage({
       setPlanNote('Кликните другой контур. Чтобы сесть на точку, сначала поставьте якорь.')
       return
     }
-    const drafting = (tool === 'zone' || tool === 'pipe' || tool === 'drip') && draftRef.current.length > 0
+    const alongDraw = tool === 'sprinkler' && alongRef.current
+    const drafting = ((tool === 'zone' || tool === 'pipe' || tool === 'drip') && draftRef.current.length > 0) || (alongDraw && draftRef.current.length > 0)
     const placingMark = (tool === 'dim' && hit.kind !== 'dim' && hit.kind !== 'dim-point')
       || (tool === 'sleeve' && hit.kind !== 'sleeve' && hit.kind !== 'sleeve-point')
-    const editHit = !placingMark && tool !== 'pipe' && (hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc' || hit.kind === 'zone-point' || hit.kind === 'zone-mid' || hit.kind === 'pipe-point' || hit.kind === 'drip-point' || hit.kind === 'sprinkler' || hit.kind === 'source' || hit.kind === 'valve' || hit.kind === 'box' || hit.kind === 'hydrant' || hit.kind === 'sleeve' || hit.kind === 'sleeve-point' || hit.kind === 'note' || hit.kind === 'plant' || hit.kind === 'plant-size' || hit.kind === 'fixture' || hit.kind === 'fixture-size' || hit.kind === 'dim' || hit.kind === 'dim-point')
+    const editHit = !placingMark && tool !== 'pipe' && !alongDraw && (hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc' || hit.kind === 'zone-point' || hit.kind === 'zone-mid' || hit.kind === 'pipe-point' || hit.kind === 'drip-point' || hit.kind === 'sprinkler' || hit.kind === 'source' || hit.kind === 'valve' || hit.kind === 'box' || hit.kind === 'hydrant' || hit.kind === 'sleeve' || hit.kind === 'sleeve-point' || hit.kind === 'note' || hit.kind === 'note-leader' || hit.kind === 'plant' || hit.kind === 'plant-size' || hit.kind === 'fixture' || hit.kind === 'fixture-size' || hit.kind === 'dim' || hit.kind === 'dim-point')
     if (!drafting && editHit) {
-      remember()
+      let dragging = hit
+      if (hit.kind === 'sprinkler' && spaceRef.current) {
+        const source = docRef.current.sprinklers.find((item) => item.id === hit.id)
+        if (!source) return
+        if (docRef.current.sprinklers.length >= 2000) {
+          setPlanNote('На чертеже уже 2000 форсунок')
+          return
+        }
+        const copy: Sprinkler = { ...structuredClone(source), id: uid('s') }
+        const next = { ...docRef.current, sprinklers: [...docRef.current.sprinklers, copy] }
+        remember()
+        docRef.current = next
+        setDoc(next)
+        laid({ kind: 'sprinkler', item: copy })
+        dragging = { kind: 'sprinkler', id: copy.id }
+        setPlanNote('Копия тянется. Отпустите кнопку, исходная остаётся.')
+      } else remember()
       event.currentTarget.setPointerCapture(event.pointerId)
-      drag.current = hit
+      drag.current = dragging
       if (hit.kind === 'plant-size' || hit.kind === 'fixture-size') stretch.current = null
       if (hit.kind === 'dim' || hit.kind === 'sleeve') grab.current = raw
-      click.current = { hit, x: event.clientX, y: event.clientY, moved: false }
-      setSelection(selectionFromHit(hit))
+      click.current = { hit: dragging, x: event.clientX, y: event.clientY, moved: false }
+      setSelection(selectionFromHit(dragging))
+      if (hit.kind === 'zone-point') {
+        setVertexPick({ id: hit.id, index: hit.index })
+        setEdgePick(null)
+        edgeUndo.current = false
+      }
       return
     }
-    if (!drafting && !placingMark && hit.kind === 'zone-edge') {
+    if (!drafting && !placingMark && !alongDraw && tool !== 'sprinkler' && hit.kind === 'zone-edge') {
       click.current = { hit, x: event.clientX, y: event.clientY, moved: false }
       setSelection({ kind: 'zone', id: hit.id })
+      const zone = docRef.current.zones.find((item) => item.id === hit.id)
+      const a = zone?.points[hit.index]
+      const b = zone ? zone.points[(hit.index + 1) % zone.points.length] : undefined
+      const scale = docRef.current.pxPerMeter && docRef.current.pxPerMeter > 0 ? docRef.current.pxPerMeter : DEFAULT_PPM
+      if (a && b) setEdgeM((dist(a, b) / scale).toFixed(2))
+      setEdgePick({ id: hit.id, index: hit.index })
+      setVertexPick(null)
+      edgeUndo.current = false
       return
     }
-    if (!drafting && !placingMark && hit.kind === 'zone' && selection?.kind === 'zone' && selection.id === hit.id) {
+    if (!drafting && !placingMark && !alongDraw && tool !== 'sprinkler' && hit.kind === 'zone' && selection?.kind === 'zone' && selection.id === hit.id) {
       remember()
       event.currentTarget.setPointerCapture(event.pointerId)
       drag.current = hit
@@ -793,16 +1131,53 @@ export function EditorPage({
       return
     }
     if (tool === 'sprinkler') {
+      if (alongRef.current) {
+        if (event.detail >= 2) {
+          finishDraft()
+          return
+        }
+        if (draftRef.current.length === 0 && (hit.kind === 'zone-edge' || (hit.kind === 'zone' && event.altKey))) {
+          const taken = zoneCourse(hit)
+          if (taken) {
+            if (event.altKey) event.preventDefault()
+            const zone = docRef.current.zones.find((item) => item.id === taken.zoneId)
+            const side = zone ? sideInto(taken.points, zone.points, zone.holes) : 1
+            alongSideRef.current = side
+            setAlongSide(side)
+            setAlongHeld(true)
+            setDraftPoints(taken.points)
+            setPlanNote(taken.whole
+              ? 'Контур зоны. Ряд смотрит внутрь. Двойной клик или Enter ставит.'
+              : 'Кромка зоны. Ряд смотрит внутрь. Двойной клик или Enter ставит.')
+            return
+          }
+        }
+        const vertex = worldSnap(raw, lineLocked(event.shiftKey))
+        const last = draftRef.current[draftRef.current.length - 1]
+        const canFinish = draftRef.current.length >= 2
+        if (canFinish && last && dist(raw, last) * view.k <= 28) {
+          finishDraft()
+          return
+        }
+        if (last && dist(vertex, last) * view.k < 4) return
+        setAlongHeld(false)
+        setHover(vertex)
+        setDraftPoints([...draftRef.current, vertex])
+        return
+      }
       const nozzle = nozzleById(nozzleId)
+      if (event.altKey) event.preventDefault()
+      const seat = event.altKey ? null : wetSeat(raw, docRef.current.zones)
+      const fitted = seat ? fittedSeat(nozzle, seat) : null
       const sprinkler: Sprinkler = {
         id: uid('s'),
-        nozzleId: nozzle.id,
-        x: point.x,
-        y: point.y,
-        radiusM: nozzle.radiusM,
-        arcDeg: nozzle.arcDeg,
-        rotationDeg: 0,
-        flowLph: nozzle.flowLph,
+        nozzleId: fitted?.nozzleId ?? nozzle.id,
+        x: fitted?.x ?? point.x,
+        y: fitted?.y ?? point.y,
+        radiusM: fitted?.radiusM ?? nozzle.radiusM,
+        arcDeg: fitted?.arcDeg ?? nozzle.arcDeg,
+        rotationDeg: fitted?.rotationDeg ?? 0,
+        flowLph: fitted?.flowLph ?? nozzle.flowLph,
         ...(nozzle.kind !== 'bubbler' && riseCm !== 10 ? { riseCm } : {}),
       }
       commit({ ...doc, sprinklers: [...doc.sprinklers, sprinkler] })
@@ -896,6 +1271,18 @@ export function EditorPage({
       return
     }
     if (tool === 'zone' || tool === 'pipe' || tool === 'drip') {
+      if (tool === 'drip' && branchRef.current && draftRef.current.length === 0) {
+        const host = docRef.current.drips.find((item) => item.id === branchRef.current)
+        const hitLine = host ? nearestOnPolyline(raw, host.points) : null
+        if (!hitLine || hitLine.distance > 18) {
+          setPlanNote('Кликните ближе к выбранной трубке.')
+          return
+        }
+        setHover(hitLine.point)
+        setDraftPoints([hitLine.point])
+        setPlanNote('Ведите отвод. Двойной клик или Enter заканчивает.')
+        return
+      }
       if (event.detail >= 2) {
         finishDraft()
         return
@@ -937,8 +1324,15 @@ export function EditorPage({
       return
     }
     const rawMove = worldPoint(event, svgRef.current, view)
-    const drawing = tool === 'zone' || tool === 'pipe' || tool === 'drip' || tool === 'rect' || tool === 'circle' || tool === 'brush' || tool === 'dim' || tool === 'sleeve'
-    let point = drawing ? worldSnap(rawMove, (tool === 'zone' || tool === 'pipe' || tool === 'drip') && lineLocked(event.shiftKey)) : rawMove
+    if (ringRef.current?.anchor) {
+      const anchor = ringRef.current.anchor
+      ringRef.current = { dripId: ringRef.current.dripId, anchor, center: rawMove }
+      setHover(rawMove)
+      setDraftPoints(dripRingPoints(anchor, rawMove) ?? [])
+      return
+    }
+    const drawing = tool === 'zone' || tool === 'pipe' || tool === 'drip' || tool === 'rect' || tool === 'circle' || tool === 'brush' || tool === 'dim' || tool === 'sleeve' || (tool === 'sprinkler' && along)
+    let point = drawing ? worldSnap(rawMove, (tool === 'zone' || tool === 'pipe' || tool === 'drip' || (tool === 'sprinkler' && along)) && lineLocked(event.shiftKey)) : rawMove
     if (lineOp && lineLocked(event.shiftKey) && lineRef.current.length === 1) point = orthoFrom(lineRef.current[0], rawMove)
     else if (lineOp) point = worldSnap(rawMove, false)
     else if (tool === 'dim' && lineLocked(event.shiftKey) && dimRef.current.length === 1) point = orthoFrom(dimRef.current[0], rawMove)
@@ -946,6 +1340,13 @@ export function EditorPage({
     if (tool === 'pipe') {
       const stuck = stickTarget(docRef.current, rawMove, pipeRole, draftRef.current, SNAP_PX)
       if (stuck) point = { x: stuck.x, y: stuck.y }
+    }
+    if (tool === 'sprinkler' && along && draftRef.current.length >= 2) {
+      const side = sideOfPoint(draftRef.current, rawMove, 10 / Math.max(view.k, 0.06))
+      if (side !== 0 && side !== alongSideRef.current) {
+        alongSideRef.current = side
+        setAlongSide(side)
+      }
     }
     setHover(point)
     if (shapeStart.current && (tool === 'rect' || tool === 'circle')) {
@@ -1017,7 +1418,7 @@ export function EditorPage({
       setDoc((current) => resizeMark(current, active, rawMove, scale, shift))
       return
     }
-    const vertexDrag = active.kind === 'zone-point' || active.kind === 'dim-point' || active.kind === 'sleeve-point'
+    const vertexDrag = active.kind === 'zone-point' || active.kind === 'dim-point' || active.kind === 'sleeve-point' || active.kind === 'note-leader'
     const snapped = vertexDrag
       ? worldSnap(rawMove, false, vertexAt(docRef.current, active))
       : (doc.snapGrid === true ? worldSnap(point) : point)
@@ -1072,11 +1473,16 @@ export function EditorPage({
     if (!tap || tap.moved) return
     if (tap.hit.kind === 'zone-point' && event.detail >= 2 && tap.hit.id) {
       commit(deleteZoneVertex(docRef.current, tap.hit.id, tap.hit.index))
+      setVertexPick(null)
       return
     }
-    if (tap.hit.kind === 'zone-edge' && tap.hit.id) {
+    if (tap.hit.kind === 'zone-edge' && tap.hit.id && event.detail >= 2) {
       const raw = svgRef.current ? worldPoint(event, svgRef.current, view) : null
-      if (raw) commit(insertZoneVertex(docRef.current, tap.hit.id, tap.hit.index, worldSnap(raw)))
+      if (raw) {
+        commit(insertZoneVertex(docRef.current, tap.hit.id, tap.hit.index, worldSnap(raw)))
+        setEdgePick(null)
+        edgeUndo.current = false
+      }
     }
   }
 
@@ -1172,6 +1578,7 @@ export function EditorPage({
     setSleeve([])
     setAnchorPick(false)
     setAlignPick(null)
+    setLeaderNote(null)
     setTool(STEP_DEFAULT_TOOL[next])
   }
 
@@ -1265,7 +1672,34 @@ export function EditorPage({
     setLineOp(null)
     setLine([])
     setAlignPick(null)
+    setLeaderNote(null)
     setAnchorPick((on) => !on)
+  }
+
+  function armLeader() {
+    if (!selectedNote) return
+    setBoolPick(null)
+    setLineOp(null)
+    setLine([])
+    setAlignPick(null)
+    setAnchorPick(false)
+    const id = selectedNote.id
+    setLeaderNote((current) => (current === id ? null : id))
+  }
+
+  function clearLeader() {
+    if (!selectedNote?.leader) return
+    const id = selectedNote.id
+    setLeaderNote(null)
+    commit({
+      ...docRef.current,
+      notes: (docRef.current.notes ?? []).map((item) => {
+        if (item.id !== id) return item
+        const next = { ...item }
+        delete next.leader
+        return next
+      }),
+    })
   }
 
   function armAlign(side: AlignSide) {
@@ -1431,6 +1865,60 @@ export function EditorPage({
     })
   }
 
+  function applyEdgeLength(raw: string) {
+    const pick = edgePick
+    if (!pick) return
+    const meters = Number(raw.replace(',', '.'))
+    if (!Number.isFinite(meters) || meters < 0.05 || meters > 500) return
+    const current = docRef.current
+    const zone = current.zones.find((item) => item.id === pick.id)
+    if (!zone) return
+    const scale = current.pxPerMeter && current.pxPerMeter > 0 ? current.pxPerMeter : DEFAULT_PPM
+    const resized = resizeEdge(zone.points, zone.bends, pick.index, meters * scale)
+    if (!resized) return
+    const nextZone: Zone = { ...zone, points: resized.points }
+    if (resized.bends) nextZone.bends = resized.bends
+    else delete nextZone.bends
+    const next = {
+      ...current,
+      zones: current.zones.map((item) => (item.id === zone.id ? nextZone : item)),
+    }
+    setError('')
+    if (!edgeUndo.current) {
+      edgeUndo.current = true
+      commit(next)
+    } else {
+      docRef.current = next
+      setDoc(next)
+    }
+  }
+
+  function applyFillet() {
+    const pick = vertexPick
+    if (!pick) return
+    const meters = Number(filletM.replace(',', '.'))
+    if (!Number.isFinite(meters) || meters < 0.05 || meters > 500) {
+      setError('Радиус скругления — от 0,05 м')
+      return
+    }
+    const current = docRef.current
+    const zone = current.zones.find((item) => item.id === pick.id)
+    if (!zone) return
+    const scale = current.pxPerMeter && current.pxPerMeter > 0 ? current.pxPerMeter : DEFAULT_PPM
+    const rounded = filletVertex(zone.points, zone.bends, pick.index, meters * scale)
+    if (!rounded) {
+      setError('Такой радиус не влезает в угол')
+      return
+    }
+    setError('')
+    setVertexPick(null)
+    setFilletM('')
+    commit({
+      ...current,
+      zones: current.zones.map((item) => (item.id === zone.id ? { ...item, points: rounded.points, bends: rounded.bends } : item)),
+    })
+  }
+
   function applyClip(op: ClipOp, otherId: string) {
     const subject = selectedZoneOf()
     const other = docRef.current.zones.find((item) => item.id === otherId)
@@ -1496,6 +1984,32 @@ export function EditorPage({
     setPlanNote('Копия отражена через линию')
     commit({ ...docRef.current, zones: [...docRef.current.zones, copy] })
     setSelection({ kind: 'zone', id: copy.id })
+  }
+
+  function applyHeadMirror(a: Point, b: Point) {
+    const id = selection?.kind === 'sprinkler' ? selection.id : ''
+    const head = docRef.current.sprinklers.find((item) => item.id === id)
+    if (!head) {
+      setPlanNote('Сначала выберите форсунку.')
+      return
+    }
+    if (docRef.current.sprinklers.length >= 2000) {
+      setPlanNote('На чертеже уже 2000 форсунок')
+      return
+    }
+    const spot = mirrorAcross(head, a, b)
+    const copy: Sprinkler = {
+      ...structuredClone(head),
+      id: uid('s'),
+      x: spot.x,
+      y: spot.y,
+      rotationDeg: mirrorHeading(head.rotationDeg, a, b),
+      nozzleId: mirrorNozzleId(head.nozzleId),
+    }
+    commit({ ...docRef.current, sprinklers: [...docRef.current.sprinklers, copy] })
+    setSelection({ kind: 'sprinkler', id: copy.id })
+    laid({ kind: 'sprinkler', item: copy })
+    setPlanNote('Форсунка отражена. Исходная осталась на месте.')
   }
 
   function rememberFav(item: Fav) {
@@ -1724,7 +2238,13 @@ export function EditorPage({
         setPlanNote('На чертеже уже 400 подписей')
         return null
       }
-      const copy: Note = { ...structuredClone(clip.item), id: uid('note'), x: clip.item.x + step, y: clip.item.y + step }
+      const copy: Note = {
+        ...structuredClone(clip.item),
+        id: uid('note'),
+        x: clip.item.x + step,
+        y: clip.item.y + step,
+        ...(clip.item.leader ? { leader: { x: clip.item.leader.x + step, y: clip.item.leader.y + step } } : {}),
+      }
       commit({ ...current, notes: [...(current.notes ?? []), copy] })
       setSelection({ kind: 'note', id: copy.id })
       setPlanNote('')
@@ -1851,6 +2371,14 @@ export function EditorPage({
   const pipeDiameters = selectedPipe
     ? [...new Set(analysis.segments.flatMap((item) => (item.pipeId === selectedPipe.id && item.odMm ? [item.odMm] : [])))]
     : []
+  const selectedDrip = selection?.kind === 'drip' ? doc.drips.find((item) => item.id === selection.id) : undefined
+  const dripMetres = selectedDrip ? dripTags([selectedDrip], ppm, 1)[0]?.text ?? null : null
+  const pipeLengthM = selectedPipe
+    ? analysis.segments.reduce<number | null>((sum, item) => {
+        if (item.pipeId !== selectedPipe.id || item.lengthM === null) return sum
+        return (sum ?? 0) + item.lengthM
+      }, null)
+    : null
   const shapeOn = isShapeTool(tool)
   const elementOn = tool === 'scale' || tool === 'dim' || anchorPick || (tool === 'fixture' && groupOf(fixtureKind) === 'mark')
   const objectOn = tool === 'fixture' && groupOf(fixtureKind) !== 'mark'
@@ -1869,6 +2397,37 @@ export function EditorPage({
   const joinIds = zoneDraft ? joinableHeads(doc, draft, SNAP_PX).map((head) => head.id) : []
   const snapMark = hover && doc.snapVertex !== false ? nearestScreen(hover, collectVertices(doc), view.k, 1.5) : null
   const hoverLen = draft.length > 0 && hover ? dist(draft[draft.length - 1], hover) / ppm : 0
+  const alongPreview = (() => {
+    if (tool !== 'sprinkler' || !along) return []
+    const nozzle = nozzleById(nozzleId)
+    const points = !alongHeld && hover ? [...draft, hover] : draft
+    if (points.length < 2) return []
+    const factor = alongDensity === 'rare' ? 1.05 : alongDensity === 'dense' ? 0.65 : 0.85
+    return headsAlong(points, Math.max(8, nozzle.radiusM * ppm * factor), alongSide).map((spot) => ({
+      x: spot.x,
+      y: spot.y,
+      rotationDeg: spot.rotationDeg,
+      radiusM: nozzle.radiusM,
+      arcDeg: nozzle.arcDeg,
+      nozzleId: nozzle.id,
+    }))
+  })()
+  const placePreview = (() => {
+    if (tool !== 'sprinkler' || along || lineOp || !hover) return null
+    const nozzle = nozzleById(nozzleId)
+    const seat = wetSeat(hover, doc.zones)
+    if (!seat) return null
+    const fitted = fittedSeat(nozzle, seat)
+    if (!fitted) return null
+    return {
+      x: fitted.x,
+      y: fitted.y,
+      rotationDeg: fitted.rotationDeg,
+      radiusM: fitted.radiusM,
+      arcDeg: fitted.arcDeg,
+      nozzleId: fitted.nozzleId,
+    }
+  })()
   const zoneArea = selectedZone ? zoneAreaPx(selectedZone.points, selectedZone.holes) / (ppm * ppm) : 0
   const zonePerim = selectedZone
     ? (ringLength(selectedZone.points, selectedZone.bends) + (selectedZone.holes ?? []).reduce((sum, hole) => sum + ringLength(hole), 0)) / ppm
@@ -2168,7 +2727,70 @@ export function EditorPage({
             <div className="tool-fly irrig-fly">
               <div className="fly-scroll">
                 {tool === 'sprinkler' && (
-                  <NozzleFly kind={headKind} nozzleId={nozzleId} riseCm={riseCm} onPick={setNozzleId} onRise={setRiseCm} />
+                  <>
+                    <NozzleFly kind={headKind} nozzleId={nozzleId} riseCm={riseCm} onPick={setNozzleId} onRise={setRiseCm} />
+                    <button
+                      className={along ? 'tool active' : 'tool'}
+                      onClick={() => {
+                        setAlong((value) => !value)
+                        setAlongHeld(false)
+                        setDraftPoints([])
+                      }}
+                    >
+                      Вдоль кромки
+                    </button>
+                    <button
+                      className={sheetLayers.headInfo ? 'tool active' : 'tool'}
+                      onClick={() => setSheetLayers((current) => ({ ...current, headInfo: !current.headInfo }))}
+                    >
+                      Подписи
+                    </button>
+                    <button
+                      className={sheetLayers.cover ? 'tool active' : 'tool'}
+                      onClick={() => setSheetLayers((current) => ({ ...current, cover: !current.cover }))}
+                    >
+                      Радиусы
+                    </button>
+                    {sheetLayers.headInfo && <p className="hint">Под каждой форсункой: радиус, сектор и расход. У выбранной подпись есть и без этого слоя.</p>}
+                    {!along && (
+                      <p className="hint">Клик у кромки сажает форсунку на контур. На ребре сектор 180°, на углу — по углу зоны. Полоса и баблер остаются своими. Alt ставит выбранное сопло в точку клика.</p>
+                    )}
+                    {along && (
+                      <>
+                        <div className="hatch-row">
+                          <button className={alongSide === 1 ? 'tool active' : 'tool'} onClick={() => setAlongSide(1)}>Слева</button>
+                          <button className={alongSide === -1 ? 'tool active' : 'tool'} onClick={() => setAlongSide(-1)}>Справа</button>
+                        </div>
+                        <div className="hatch-row">
+                          <button className={alongDensity === 'rare' ? 'tool active' : 'tool'} onClick={() => setAlongDensity('rare')}>Редко</button>
+                          <button className={alongDensity === 'usual' ? 'tool active' : 'tool'} onClick={() => setAlongDensity('usual')}>Обычно</button>
+                          <button className={alongDensity === 'dense' ? 'tool active' : 'tool'} onClick={() => setAlongDensity('dense')}>Плотно</button>
+                        </div>
+                        <p className="hint">Клик по ребру зоны берёт эту кромку, ряд смотрит внутрь. Уведите курсор на нужную сторону — ряд повернётся за ним. Alt и клик по зоне берёт весь контур. Двойной клик или Enter ставит ряд.</p>
+                      </>
+                    )}
+                  </>
+                )}
+                {tool === 'drip' && (
+                  <>
+                    <div className="hatch-row">
+                      <button className={dripBare ? 'tool' : 'tool active'} onClick={() => setDripBare(false)}>Капельницы</button>
+                      <button className={dripBare ? 'tool active' : 'tool'} onClick={() => setDripBare(true)}>Трубка</button>
+                    </div>
+                    <p className="hint">{dripBare ? 'Трубка без капельниц. Ею подводят воду к кольцу.' : 'Трубка с капельницами. Двойной клик или Enter заканчивает.'}</p>
+                  </>
+                )}
+                {selection?.kind === 'drip' && (
+                  <>
+                    <p className="tool-label">Выбранная трубка</p>
+                    <div className="hatch-row">
+                      <button className={ringOn ? 'tool active' : 'tool'} onClick={armRing}>Кольцо</button>
+                      <button className={branchOn ? 'tool active' : 'tool'} onClick={armBranch}>Отвод</button>
+                    </div>
+                    {ringOn && <p className="hint">Кольцо: кликните узел на трубке, затем центр растения. Следующие кольца — с той же трубки. Esc заканчивает.</p>}
+                    {branchOn && <p className="hint">Отвод: кликните трубку, откуда уходит ветка, затем ведите линию. Двойной клик или Enter заканчивает.</p>}
+                    {dripMetres && <p className="hint">{dripMetres}</p>}
+                  </>
                 )}
                 {tool === 'box' && <p className="hint">Коробка для нескольких клапанов. Клапан рядом садится в свободный слот.</p>}
                 {tool === 'hydrant' && <p className="hint">Точка на трубе. В спецификации на этом конце стоит гидрант.</p>}
@@ -2210,10 +2832,17 @@ export function EditorPage({
               ['underlay', 'Подложка'],
               ['grid', 'Сетка'],
               ['landscape', 'Ландшафт'],
+              ['names', 'Названия'],
+              ['area', 'Площадь'],
               ['spray', 'Дождеватели'],
+              ['cover', 'Радиусы'],
               ['pipes', 'Трубы'],
               ['drip', 'Капля'],
               ['fittings', 'Клапаны'],
+              ['precip', 'Осадки'],
+              ['runtime', 'Время'],
+              ['headInfo', 'Подписи'],
+              ['draft', 'Чертёж'],
             ] as const).map(([key, label]) => (
               <label key={key} className="layer">
                 <input
@@ -2228,6 +2857,21 @@ export function EditorPage({
               <input type="checkbox" checked={includeSpec} onChange={() => setIncludeSpec((value) => !value)} />
               Спецификация
             </label>
+            {sheetLayers.names && (
+              <p className="hint">Имя зоны в её середине. У выбранной зоны имя есть и без этого слоя.</p>
+            )}
+            {sheetLayers.area && (
+              <p className="hint">Площадь зоны в её середине. Без масштаба подписи нет.</p>
+            )}
+            {sheetLayers.precip && (
+              <p className="hint">Меньше 8 мм/ч — мало, 8–22 — норма, больше 22 — много. Серым остаются зоны без осадков.</p>
+            )}
+            {sheetLayers.runtime && (
+              <p className="hint">На зоне и на клапане: минуты и число циклов.</p>
+            )}
+            {sheetLayers.draft && (
+              <p className="hint">Лист без штриховок, чёрными линиями. Осадки на этом виде не закрашивают зоны.</p>
+            )}
             <div className="tool-gap" />
             <button className="primary" disabled={printBusy} onClick={() => runPrint('pdf')}>
               {printBusy ? 'Собираю…' : 'Скачать PDF'}
@@ -2258,11 +2902,19 @@ export function EditorPage({
           brushTip={brushTip}
           guide={linePts.length ? linePts : tool === 'dim' ? dimPts : tool === 'sleeve' ? sleevePts : []}
           snapMark={snapMark}
-          draftLine={tool === 'drip' ? 'drip' : tool === 'pipe' ? pipeRole : 'poly'}
+          draftLine={ringOn || tool === 'drip' ? 'drip' : tool === 'pipe' ? pipeRole : 'poly'}
           draftWarn={draftWarn}
           joinIds={joinIds}
-          showOk={(tool === 'zone' && draft.length >= 3) || ((tool === 'pipe' || tool === 'drip') && draft.length >= 2)}
-          hover={tool === 'zone' || tool === 'pipe' || tool === 'drip' || tool === 'scale' || tool === 'rect' || tool === 'circle' || tool === 'brush' || tool === 'dim' || tool === 'sleeve' ? hover : null}
+          names={sheetLayers.names}
+          area={sheetLayers.area}
+          precip={sheetLayers.precip}
+          headInfo={sheetLayers.headInfo}
+          cover={sheetLayers.cover}
+          runtime={sheetLayers.runtime}
+          alongPreview={alongPreview}
+          placePreview={placePreview}
+          showOk={!ringOn && ((tool === 'zone' && draft.length >= 3) || ((tool === 'pipe' || tool === 'drip' || (tool === 'sprinkler' && along)) && draft.length >= 2))}
+          hover={ringOn ? null : tool === 'zone' || tool === 'pipe' || tool === 'drip' || (tool === 'sprinkler' && along) || tool === 'scale' || tool === 'rect' || tool === 'circle' || tool === 'brush' || tool === 'dim' || tool === 'sleeve' ? hover : null}
           scalePoints={scalePoints}
           selectionId={selection?.id ?? null}
           selectionKind={selection?.kind ?? null}
@@ -2278,7 +2930,7 @@ export function EditorPage({
           onFinishDraft={finishDraft}
           onContextMenu={(event) => event.preventDefault()}
         />
-        {(tool === 'zone' || tool === 'pipe' || tool === 'drip') && draft.length >= (tool === 'zone' ? 3 : 2) && (
+        {!ringOn && (tool === 'zone' || tool === 'pipe' || tool === 'drip' || (tool === 'sprinkler' && along)) && draft.length >= (tool === 'zone' ? 3 : 2) && (
           <button
             type="button"
             className="ok-on-line"
@@ -2314,6 +2966,7 @@ export function EditorPage({
             <button className="tool" onClick={() => rotateSelected(15)} title="По часовой">↻ 15°</button>
             <button className="tool" onClick={() => rotateSelected(90)} title="Повернуть на 90°">↻ 90°</button>
             <button className="tool" onClick={duplicateSelected} title="Копия, Ctrl+D">Копия</button>
+            <button className={lineOp === 'head-mirror' ? 'tool active' : 'tool'} onClick={() => armLine('head-mirror')} title="Отразить копию через два клика">Зеркало</button>
             <button className="tool" onClick={removeSelection}>Удалить</button>
           </div>
         )}
@@ -2385,6 +3038,8 @@ export function EditorPage({
                 Жирный
               </button>
             </span>
+            <button className={leaderNote === selectedNote.id ? 'tool active' : 'tool'} onClick={armLeader} title="Стрелка в точку">Выноска</button>
+            {selectedNote.leader && <button className="tool" onClick={clearLeader}>Убрать выноску</button>}
             <button className="tool" onClick={duplicateSelected} title="Копия, Ctrl+D">Копия</button>
             <button className="tool" onClick={removeSelection}>Удалить</button>
           </div>
@@ -2408,6 +3063,34 @@ export function EditorPage({
                 }}
               />
             </label>
+            <label className="inline">
+              °
+              <input
+                value={String(Math.round(selectedPlant.rotationDeg ?? 0))}
+                aria-label="Поворот растения, градусы"
+                onChange={(event) => {
+                  const turn = Number(event.target.value.replace(',', '.'))
+                  if (!Number.isFinite(turn)) return
+                  setDoc((current) => ({
+                    ...current,
+                    plants: (current.plants ?? []).map((item) => (
+                      item.id === selectedPlant.id ? withSpin(item, turn) : item
+                    )),
+                  }))
+                }}
+              />
+            </label>
+            <button
+              className="tool"
+              onClick={() => commit({
+                ...docRef.current,
+                plants: (docRef.current.plants ?? []).map((item) => (
+                  item.id === selectedPlant.id ? withSpin(item, (item.rotationDeg ?? 0) + 90) : item
+                )),
+              })}
+            >
+              ↻ 90°
+            </button>
             <button className="tool" onClick={duplicateSelected} title="Копия, Ctrl+D">Копия</button>
             <button className="tool" onClick={removeSelection}>Удалить</button>
           </div>
@@ -2469,6 +3152,7 @@ export function EditorPage({
             <button className={selectedPipe.role === 'zone' ? 'tool' : 'tool active'} onClick={() => assignPipe(selectedPipe.id, 'main')}>Магистраль</button>
             <button className={selectedPipe.role === 'zone' ? 'tool active' : 'tool'} onClick={() => assignPipe(selectedPipe.id, 'zone')}>Зональная</button>
             {pipeDiameters.length > 0 && <span>{pipeDiameters.map((od) => `Ø${od}`).join(' · ')}</span>}
+            {pipeLengthM !== null && <span>{pipeLengthM.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} м</span>}
             <button className="tool" onClick={duplicateSelected} title="Копия, Ctrl+D">Копия</button>
             <button className="tool" onClick={removeSelection}>Удалить</button>
           </div>
@@ -2608,6 +3292,40 @@ export function EditorPage({
             <button className="tool" onClick={() => applyOffset(1)} title="Раздуть контур">Наружу</button>
             <button className="tool" onClick={parallelCopy} title="Новый контур снаружи, на величину смещения">Копия наружу</button>
             <button className="tool" onClick={() => applyOffset(-1)} title="Сжать контур">Внутрь</button>
+            {edgePick?.id === selectedZone.id && (
+              <label className="inline">
+                ребро, м
+                <input
+                  value={edgeM}
+                  aria-label="Длина ребра, м"
+                  onChange={(event) => {
+                    const value = event.target.value
+                    setEdgeM(value)
+                    applyEdgeLength(value)
+                  }}
+                />
+              </label>
+            )}
+            {vertexPick?.id === selectedZone.id && (
+              <label className="inline">
+                угол, м
+                <input
+                  value={filletM}
+                  aria-label="Радиус скругления, м"
+                  placeholder="0,5"
+                  onChange={(event) => setFilletM(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      applyFillet()
+                    }
+                  }}
+                />
+              </label>
+            )}
+            {vertexPick?.id === selectedZone.id && (
+              <button className="tool" onClick={applyFillet}>Скруглить</button>
+            )}
             <label className="inline">
               ширина
               <input value={sizeW} onChange={(event) => setSizeW(event.target.value)} aria-label="Ширина, м" />
@@ -2687,7 +3405,9 @@ export function EditorPage({
               boxes: (current.boxes ?? []).map((item) => (item.id === id ? { ...item, name: name.trim() ? name.slice(0, 80) : item.name } : item)),
             }))}
             onTrench={(patch) => setDoc((current) => ({ ...current, trench: cleanTrench(current.trench, patch) }))}
+            onFocus={focusIssue}
             onDelete={removeSelection}
+            onProgram={(patch) => setDoc((current) => ({ ...current, program: withProgram(programOf(current), patch) }))}
           />
         </div>
       )}
@@ -2696,13 +3416,24 @@ export function EditorPage({
         {planNote && <span>{planNote}</span>}
         {hover && <span>X {(hover.x / ppm).toFixed(2)} м · Y {(hover.y / ppm).toFixed(2)} м</span>}
         {draft.length > 0 && hoverLen > 0 && <span>Сторона {hoverLen.toFixed(2)} м</span>}
+        {alongPreview.length > 0 && <span>В ряду {alongPreview.length}</span>}
+        {tool === 'sprinkler' && !along && draft.length === 0 && lineOp !== 'head-mirror' && (
+          <span>Клик у кромки сажает форсунку на контур. На ребре сектор 180°, на углу — по углу зоны. Alt оставляет выбранное сопло.</span>
+        )}
         {selectedZone && <span>{surfaceOf(selectedZone.kind).label}: {zoneArea.toFixed(1)} м² · периметр {zonePerim.toFixed(1)} м</span>}
+        {edgePick && selectedZone && edgePick.id === selectedZone.id && (
+          <span>Длина ребра в метрах слева. Двойной клик по ребру добавляет вершину.</span>
+        )}
+        {vertexPick && selectedZone && vertexPick.id === selectedZone.id && (
+          <span>Радиус скругления в метрах слева. Двойной клик по вершине убирает её.</span>
+        )}
         {tool === 'zone' && draft.length === 0 && <span>Полигон: кликайте по контуру. С третьей точки на конце линии нажмите OK.</span>}
         {tool === 'rect' && <span>Прямоугольник: тяните от угла. Shift — квадрат.</span>}
         {tool === 'circle' && diameterM.trim() && <span>Круг: клик ставит окружность этого диаметра, от 0,4 до 80 м.</span>}
         {tool === 'circle' && !diameterM.trim() && <span>Круг: тяните от центра. Диаметр слева ставит круг одним кликом.</span>}
         {tool === 'dim' && <span>Размер: два клика. Shift и кнопка ⊥ держат линию прямой. Концы можно перетащить.</span>}
         {anchorPick && <span>Якорь: кликните точку. Поворот, отражение и масштаб пойдут вокруг неё. Esc — отмена.</span>}
+        {leaderNote && <span>Выноска: кликните, куда смотрит стрелка. Shift и кнопка ⊥ держат её прямой. Esc — отмена.</span>}
         {tool === 'brush' && <span>Кисть: круг, квадрат или треугольник. Рисуйте зажатой кнопкой. Esc — отмена.</span>}
         {boolPick === 'union' && <span>Объединение: кликните второй контур. Он впитается в выбранный.</span>}
         {boolPick === 'diff' && <span>Вычитание: кликните контур, который вырезать. Он останется на месте.</span>}
@@ -2710,6 +3441,8 @@ export function EditorPage({
         {boolPick === 'xor' && <span>Исключение: кликните второй контур. Общая часть исчезнет.</span>}
         {lineOp === 'slice' && <span>Разрезать: два клика через контур. Shift и кнопка ⊥ держат линию прямой. Esc — отмена.</span>}
         {lineOp === 'mirror' && <span>Зеркало: два клика по оси. Появится отражённая копия.</span>}
+        {lineOp === 'head-mirror' && <span>Зеркало форсунки: два клика по оси. Исходная остаётся. Угловая полоса меняется на парную. Esc — отмена.</span>}
+        {selectedSprinkler && draft.length === 0 && lineOp !== 'head-mirror' && <span>Пробел и перетаскивание тянет копию форсунки.</span>}
         {alignPick && <span>Выравнивание: кликните контур-образец. Клик по пустому месту сажает эту сторону на якорь. Esc — отмена.</span>}
         {tool === 'text' && !lineOp && <span>Текст: клик ставит подпись. Потом её можно перетащить и переписать.</span>}
         {tool === 'pipe' && pipeRole === 'main' && <span>Магистраль: кликайте от источника к клапанам. Линия жирная. Со второй точки нажмите OK.</span>}
@@ -2718,7 +3451,7 @@ export function EditorPage({
         {zoneDraft && liveFlow > 0 && <span>На линии {Math.round(liveFlow)} л/ч{draftWarn ? ', выше лимита' : ''}</span>}
         {tool === 'box' && <span>Клапанный бокс: клик ставит коробку. Следующий клапан рядом садится в свободный слот.</span>}
         {tool === 'hydrant' && <span>Гидрант: клик ставит точку. На узле трубы он попадает в спецификацию.</span>}
-        {tool === 'sleeve' && <span>Гильза: два клика. Shift и кнопка ⊥ держат линию прямой. Длина попадёт в спецификацию.</span>}
+        {tool === 'sleeve' && <span>Гильза: два клика. Shift и кнопка ⊥ держат линию прямой. Длина пишется у линии и в спецификации.</span>}
         {tool === 'tree' && !lineOp && <span>Дерево: выберите крону слева и кликните на чертёж. Радиус задаётся у выбранного дерева.</span>}
         {tool === 'bush' && !lineOp && <span>Куст: выберите форму слева и кликните на чертёж. Капельницы расчёта встанут к нему.</span>}
         {step === 'irrig' && !doc.source && <span>Поставьте источник воды, затем «Рассчитать схему».</span>}
@@ -2771,6 +3504,7 @@ function cleanDrip(item: Drip, patch: Partial<Drip>): Drip {
   const next = { ...item, ...patch }
   if (!(next.spacingM >= 0.05) || next.spacingM > 2) next.spacingM = item.spacingM
   if (!(next.emitterLph >= 0.2) || next.emitterLph > 40) next.emitterLph = item.emitterLph
+  if (next.bare !== true) delete next.bare
   return next
 }
 
@@ -2784,7 +3518,7 @@ function selectionFromHit(hit: Hit): Sel {
   if (hit.kind === 'box') return { kind: 'box', id: hit.id }
   if (hit.kind === 'hydrant') return { kind: 'hydrant', id: hit.id }
   if (hit.kind === 'sleeve' || hit.kind === 'sleeve-point') return { kind: 'sleeve', id: hit.id }
-  if (hit.kind === 'note') return { kind: 'note', id: hit.id }
+  if (hit.kind === 'note' || hit.kind === 'note-leader') return { kind: 'note', id: hit.id }
   if (hit.kind === 'plant' || hit.kind === 'plant-size') return { kind: 'plant', id: hit.id }
   if (hit.kind === 'fixture' || hit.kind === 'fixture-size') return { kind: 'fixture', id: hit.id }
   if (hit.kind === 'dim' || hit.kind === 'dim-point') return { kind: 'dim', id: hit.id }
@@ -2946,6 +3680,12 @@ function moveHit(doc: Doc, hit: Hit, point: Point): Doc {
   if (hit.kind === 'note') {
     return { ...doc, notes: (doc.notes ?? []).map((item) => (item.id === hit.id ? { ...item, x: point.x, y: point.y } : item)) }
   }
+  if (hit.kind === 'note-leader') {
+    return {
+      ...doc,
+      notes: (doc.notes ?? []).map((item) => (item.id === hit.id ? { ...item, leader: { x: point.x, y: point.y } } : item)),
+    }
+  }
   if (hit.kind === 'plant') {
     return { ...doc, plants: (doc.plants ?? []).map((item) => (item.id === hit.id ? { ...item, x: point.x, y: point.y } : item)) }
   }
@@ -3056,9 +3796,9 @@ function favLabel(item: Fav): string {
   return formsFor(item.kind).find((form) => form.id === item.form)?.label ?? item.form
 }
 
-function withSpin(item: Fixture, turn: number): Fixture {
+function withSpin<T extends { rotationDeg?: number }>(item: T, turn: number): T {
   const norm = ((turn % 360) + 360) % 360
-  const next: Fixture = { ...item }
+  const next = { ...item }
   if (norm === 0) delete next.rotationDeg
   else next.rotationDeg = norm
   return next

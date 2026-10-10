@@ -590,7 +590,8 @@ export function plantMarkup(plant: Plant, ppm: number, k: number): string {
     const stroke = dot.bloom ? paint.ink : '#3e2614'
     return `<circle cx="${num(dot.x)}" cy="${num(dot.y)}" r="${num(dot.r)}" fill="${fill}" stroke="${stroke}" stroke-width="${vein}" vector-effect="non-scaling-stroke"/>`
   }).join('')
-  return `<g transform="translate(${num(plant.x)} ${num(plant.y)}) scale(${num(radius)})">${fills}${veins}${dots}</g>`
+  const spin = plant.rotationDeg ? ` rotate(${num(plant.rotationDeg)})` : ''
+  return `<g transform="translate(${num(plant.x)} ${num(plant.y)})${spin} scale(${num(radius)})">${fills}${veins}${dots}</g>`
 }
 
 function drawn(fills: string[], shade: number[], veins: string[], dots: PlantDot[], inked?: number): PlantGlyph {

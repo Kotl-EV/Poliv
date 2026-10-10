@@ -78,7 +78,19 @@ export function gearList(doc: Doc, analysis: Analysis): GearList {
   for (const row of sortedNozzles) lines.push({ name: row.name, qty: pieces(row.count) })
 
   const dripGroups = new Map<string, { flow: number; spacing: number; lengthM: number; runs: number; known: boolean }>()
+  let bareM = 0
+  let bareRuns = 0
+  let bareKnown = false
   for (const drip of doc.drips) {
+    if (drip.bare) {
+      bareRuns += 1
+      const length = dripLengthM(drip, doc.pxPerMeter)
+      if (length !== null) {
+        bareKnown = true
+        bareM += length
+      }
+      continue
+    }
     const flow = Math.round(drip.emitterLph * 10) / 10
     const spacing = Math.round(drip.spacingM * 100) / 100
     const key = `${flow}|${spacing}`
@@ -90,6 +102,9 @@ export function gearList(doc: Doc, analysis: Analysis): GearList {
       group.lengthM += length
     }
     dripGroups.set(key, group)
+  }
+  if (bareRuns) {
+    lines.push({ name: 'Трубка ПЭ 16 без капельниц', qty: bareKnown ? metres(bareM) : pieces(bareRuns) })
   }
   for (const group of [...dripGroups.values()].sort((a, b) => a.flow - b.flow || a.spacing - b.spacing)) {
     lines.push({

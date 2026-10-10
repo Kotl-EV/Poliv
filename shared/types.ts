@@ -91,6 +91,8 @@ export type Drip = {
   points: Point[]
   spacingM: number
   emitterLph: number
+  /** Трубка без капельниц: подвод к кольцу. Пусто значит с капельницами. */
+  bare?: boolean
 }
 
 export type Source = {
@@ -114,6 +116,8 @@ export type Note = {
   /** Цвет #rrggbb. Пусто — чернила чертежа. */
   color?: string
   bold?: boolean
+  /** Остриё стрелки. Пусто — подпись без выноски. */
+  leader?: Point
 }
 
 export type PlantKind = 'tree' | 'bush'
@@ -132,6 +136,8 @@ export type Plant = {
   radiusM: number
   /** Крона. Пусто — лиственное дерево или шаровидный куст. */
   form?: PlantForm
+  /** Поворот по часовой, градусы. Пусто — без поворота. */
+  rotationDeg?: number
 }
 
 export type Measure = {
@@ -195,6 +201,15 @@ export type Doc = {
   anchor?: Point
   /** Ортогональ без Shift. Пусто значит выключена. */
   ortho?: boolean
+  /** Дни и старт пульта. Пусто — понедельник, среда и пятница в 06:00. */
+  program?: Program
+}
+
+/** Дни пульта: 0 — понедельник … 6 — воскресенье. */
+export type Program = {
+  days: number[]
+  startHour: number
+  startMin: number
 }
 
 export type SegmentStatus = 'ok' | 'unfed' | 'cycle'
@@ -213,6 +228,34 @@ export type SegmentResult = {
   residualHeadM: number | null
   status: SegmentStatus
   role: PipeRole
+  /** Клапан, после которого идёт участок. Пусто — магистраль или нет станции. */
+  stationId: string
+  /** Вода течёт от a к b. Пусто — направление неизвестно. */
+  downB?: boolean
+}
+
+export type PlanIssue = {
+  text: string
+  kind: 'sprinkler' | 'drip' | 'valve'
+  id: string
+}
+
+export type StationMark = {
+  id: string
+  kind: 'sprinkler' | 'drip'
+  stationId: string
+}
+
+export type FittingKind = 'cap' | 'elbow' | 'reducer' | 'tee' | 'cross' | 'node'
+
+/** Знак фитинга на узле трубы. Считается вместе со спецификацией. */
+export type FittingMark = {
+  x: number
+  y: number
+  /** Куда смотрит знак: по часовой от верха, градусы. */
+  rotationDeg: number
+  kind: FittingKind
+  name: string
 }
 
 export type Analysis = {
@@ -244,8 +287,27 @@ export type Analysis = {
   stations: { id: string; name: string; flowLph: number; runtimeMin: number | null; cycles: number | null; soakMin: number }[]
   drips: { lengthM: number | null; emitters: number; flowLph: number }
   fittings: { name: string; count: number }[]
+  /** Углы, переходы, тройники, крестовины и заглушки на узлах. Гидрант и старт капли сюда не входят. */
+  fittingMarks: FittingMark[]
   /** Короткий гибкий хвост от узла трубы до головки, не дальше метра. */
   tails: { a: Point; b: Point; lengthM: number }[]
   trench: { widthM: number; depthM: number; lengthM: number | null; volumeM3: number | null }
   warnings: string[]
+  /** По одному на оторванный дождеватель, трубку или клапан. Текст предупреждения остаётся общим. */
+  issues: PlanIssue[]
+  /** Головка или капля, которые питает станция. Номер на плане берётся отсюда. */
+  marks: StationMark[]
+  /** Остаток давления у головки, которая стоит на сети. Свободная головка сюда не входит. */
+  pressureMarks: PressureMark[]
+}
+
+/** Остаток у дождевателя после потерь в трубах. */
+export type PressureMark = {
+  id: string
+  x: number
+  y: number
+  /** Бар, уже округлён до десятой. */
+  bar: number
+  /** Ниже 2 бар, головке мало. */
+  low: boolean
 }

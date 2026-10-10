@@ -193,6 +193,14 @@ export function hatchTile(id: HatchId, ppm: number): HatchTile {
   }
 }
 
+/** Заливка вида осадков: нет данных, мало, норма, много. */
+export function precipWash(mmH: number | null): string {
+  if (mmH === null || !Number.isFinite(mmH)) return 'rgba(150,148,142,0.38)'
+  if (mmH < 8) return 'rgba(86,146,196,0.48)'
+  if (mmH > 22) return 'rgba(196,84,62,0.46)'
+  return 'rgba(78,156,82,0.46)'
+}
+
 /** Один <pattern> для печатного листа или другого SVG. */
 export function hatchPatternMarkup(id: HatchId, ppm: number, patternId: string): string {
   const tile = hatchTile(id, ppm)

@@ -1,6 +1,6 @@
 /** Внутренние диаметры ПЭ по SDR. Шероховатость 0,005 мм. */
 
-import type { PipeRole } from './types.ts'
+import type { PipeRole, Source } from './types.ts'
 
 /** Толщина линии на экране, в пикселях до деления на масштаб вида. */
 export function pipeWeight(role: PipeRole): number {
@@ -83,4 +83,25 @@ export function headLossM(flowLph: number, idMm: number, lengthM: number): numbe
 
 export function barToHeadM(bar: number): number {
   return (bar * 1e5) / (RHO * G)
+}
+
+export function headMToBar(headM: number): number {
+  return (headM * RHO * G) / 1e5
+}
+
+/** Остаток у головки, одна цифра после запятой: «2,9 бар». */
+export function pressureLabel(bar: number): string {
+  return `${bar.toLocaleString('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} бар`
+}
+
+/** Расход станции у знака клапана: «360 л/ч». */
+export function valveFlowLabel(flowLph: number): string {
+  return `${Math.round(flowLph).toLocaleString('ru-RU')} л/ч`
+}
+
+/** Давление источника. Лимит ведра дописывается, когда он задан: «2,5 бар · 900 л/ч». */
+export function sourceLabel(source: Pick<Source, 'pressureBar' | 'flowLimitLph'>): string {
+  const pressure = `${source.pressureBar.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} бар`
+  if (source.flowLimitLph === null || !(source.flowLimitLph > 0)) return pressure
+  return `${pressure} · ${Math.round(source.flowLimitLph).toLocaleString('ru-RU')} л/ч`
 }

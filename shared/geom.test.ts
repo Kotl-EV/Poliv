@@ -9,6 +9,15 @@ import {
   circlePoints,
   controlFromHandle,
   dist,
+  headsAlong,
+  mirrorHeading,
+  mirrorNozzleId,
+  sideInto,
+  sideOfPoint,
+  seatOnZone,
+  resizeEdge,
+  filletVertex,
+  noteLeader,
   handleFromControl,
   midpoint,
   mirrorAround,
@@ -24,6 +33,135 @@ import {
   withinScreen,
   zonePathD,
 } from './geom.ts'
+
+test('the cursor above a rightward edge is the left side', () => {
+  const edge = [{ x: 0, y: 0 }, { x: 100, y: 0 }]
+  assert.equal(sideOfPoint(edge, { x: 50, y: -20 }), 1)
+  assert.equal(sideOfPoint(edge, { x: 50, y: 20 }), -1)
+  assert.equal(sideOfPoint(edge, { x: 50, y: 2 }, 8), 0)
+})
+
+test('a heading mirrors across an axis and a left strip becomes the right one', () => {
+  const vertical = [{ x: 0, y: 0 }, { x: 0, y: 100 }]
+  const turned = ((mirrorHeading(90, vertical[0], vertical[1]) - 270) % 360 + 360) % 360
+  assert.ok(turned < 0.05)
+  const flat = ((mirrorHeading(0, { x: 0, y: 0 }, { x: 100, y: 0 }) - 180) % 360 + 360) % 360
+  assert.ok(flat < 0.05)
+  assert.equal(mirrorNozzleId('fan-lcs'), 'fan-rcs')
+  assert.equal(mirrorNozzleId('rot-rcs'), 'rot-lcs')
+  assert.equal(mirrorNozzleId('fan180'), 'fan180')
+})
+
+test('a row along a square edge faces into the square', () => {
+  const clockwise = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }]
+  assert.equal(sideInto([clockwise[0], clockwise[1]], clockwise), -1)
+  assert.equal(sideInto([clockwise[1], clockwise[2]], clockwise), -1)
+  const counter = [{ x: 0, y: 0 }, { x: 0, y: 100 }, { x: 100, y: 100 }, { x: 100, y: 0 }]
+  assert.equal(sideInto([counter[0], counter[1]], counter), 1)
+})
+
+function angleGap(actual: number, expected: number): number {
+  return Math.abs((((actual - expected) % 360) + 540) % 360 - 180)
+}
+
+test('a head near a zone edge sits on the outline and faces in', () => {
+  const square = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }]
+  const top = seatOnZone({ x: 50, y: -8 }, [{ points: square }], 20, 16)
+  if (!top) throw new Error('кромка не поймана')
+  assert.equal(top.x, 50)
+  assert.equal(top.y, 0)
+  assert.ok(angleGap(top.rotationDeg, 180) < 0.05)
+  assert.ok(Math.abs(top.arcDeg - 180) < 0.05)
+  const right = seatOnZone({ x: 108, y: 50 }, [{ points: square }], 20, 16)
+  if (!right) throw new Error('правая кромка не поймана')
+  assert.equal(right.x, 100)
+  assert.equal(right.y, 50)
+  assert.ok(angleGap(right.rotationDeg, 270) < 0.05)
+  const corner = seatOnZone({ x: -6, y: -6 }, [{ points: square }], 20, 16)
+  if (!corner) throw new Error('угол не пойман')
+  assert.equal(corner.x, 0)
+  assert.equal(corner.y, 0)
+  assert.ok(angleGap(corner.rotationDeg, 135) < 0.05)
+  assert.ok(Math.abs(corner.arcDeg - 90) < 0.05)
+  assert.equal(seatOnZone({ x: 50, y: 50 }, [{ points: square }], 20, 16), null)
+  const counter = [{ x: 0, y: 0 }, { x: 0, y: 100 }, { x: 100, y: 100 }, { x: 100, y: 0 }]
+  const other = seatOnZone({ x: 50, y: -8 }, [{ points: counter }], 20, 16)
+  if (!other) throw new Error('встречный контур не пойман')
+  assert.ok(angleGap(other.rotationDeg, 180) < 0.05)
+})
+
+test('a notch corner and a hole turn the sector into the watered ground', () => {
+  const notch = [
+    { x: 0, y: 0 },
+    { x: 100, y: 0 },
+    { x: 100, y: 40 },
+    { x: 40, y: 40 },
+    { x: 40, y: 100 },
+    { x: 0, y: 100 },
+  ]
+  const reflex = seatOnZone({ x: 48, y: 48 }, [{ points: notch }], 20, 16)
+  if (!reflex) throw new Error('внутренний угол не пойман')
+  assert.equal(reflex.x, 40)
+  assert.equal(reflex.y, 40)
+  assert.ok(angleGap(reflex.rotationDeg, 315) < 0.05)
+  assert.ok(Math.abs(reflex.arcDeg - 270) < 0.05)
+  const hole = [
+    { x: 80, y: 80 },
+    { x: 120, y: 80 },
+    { x: 120, y: 120 },
+    { x: 80, y: 120 },
+  ]
+  const outer = [
+    { x: 0, y: 0 },
+    { x: 200, y: 0 },
+    { x: 200, y: 200 },
+    { x: 0, y: 200 },
+  ]
+  const around = seatOnZone({ x: 100, y: 70 }, [{ points: outer, holes: [hole] }], 20, 16)
+  if (!around) throw new Error('кромка отверстия не поймана')
+  assert.equal(around.x, 100)
+  assert.equal(around.y, 80)
+  assert.ok(angleGap(around.rotationDeg, 0) < 0.05)
+  assert.ok(Math.abs(around.arcDeg - 180) < 0.05)
+  const holeCorner = seatOnZone({ x: 72, y: 72 }, [{ points: outer, holes: [hole] }], 20, 16)
+  if (!holeCorner) throw new Error('угол отверстия не пойман')
+  assert.equal(holeCorner.x, 80)
+  assert.equal(holeCorner.y, 80)
+  assert.ok(Math.abs(holeCorner.arcDeg - 270) < 0.05)
+})
+
+test('a lawn keeps a shared edge and a bulge is followed', () => {
+  const lawn = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }]
+  const bed = [{ x: 100, y: 0 }, { x: 160, y: 0 }, { x: 160, y: 100 }, { x: 100, y: 100 }]
+  const shared = seatOnZone({ x: 100, y: 50 }, [{ points: bed }, { points: lawn, spray: true }], 20, 16)
+  if (!shared) throw new Error('общая кромка не поймана')
+  assert.equal(shared.x, 100)
+  assert.equal(shared.y, 50)
+  assert.ok(angleGap(shared.rotationDeg, 270) < 0.05)
+  const bowed = seatOnZone(
+    { x: 50, y: -36 },
+    [{ points: lawn, bends: [{ x: 50, y: -40 }, null, null, null] }],
+    20,
+    16,
+  )
+  if (!bowed) throw new Error('дуга не поймана')
+  assert.ok(bowed.y < -10)
+  assert.ok(angleGap(bowed.rotationDeg, 180) < 8)
+})
+
+test('heads along a left-to-right edge aim up on the left side', () => {
+  const row = headsAlong([{ x: 0, y: 0 }, { x: 100, y: 0 }], 50, 1)
+  assert.equal(row.length, 2)
+  assert.equal(row[0].x, 0)
+  assert.equal(row[0].y, 0)
+  assert.equal(row[0].rotationDeg, 0)
+  assert.equal(row[1].x, 100)
+  assert.equal(headsAlong([{ x: 0, y: 0 }, { x: 100, y: 0 }], 50, -1)[0].rotationDeg, 180)
+  const mid = headsAlong([{ x: 0, y: 0 }, { x: 100, y: 0 }], 180, 1)
+  assert.equal(mid.length, 1)
+  assert.equal(mid[0].x, 50)
+  assert.equal(mid[0].rotationDeg, 0)
+})
 
 test('zone close uses screen pixels, so a fitted large sheet still hits the start vertex', () => {
   const start = { x: 100, y: 100 }
@@ -159,4 +297,51 @@ test('dragging the mid handle turns the sector, edge handles change the arc', ()
   assert.equal(Math.round(start.arcDeg), 270)
   const end = aimSprinkler(o, 180, 180, { x: 100, y: 200 }, 'end')
   assert.equal(Math.round(end.arcDeg), 90)
+})
+
+test('an edge length keeps the first vertex and scales its bend', () => {
+  const square = [
+    { x: 0, y: 0 },
+    { x: 100, y: 0 },
+    { x: 100, y: 100 },
+    { x: 0, y: 100 },
+  ]
+  const edge = resizeEdge(square, null, 0, 50)
+  assert.deepEqual(edge?.points[0], { x: 0, y: 0 })
+  assert.deepEqual(edge?.points[1], { x: 50, y: 0 })
+  const bent = resizeEdge(square, [{ x: 50, y: 40 }, null, null, null], 0, 50)
+  assert.deepEqual(bent?.bends?.[0], { x: 25, y: 20 })
+  assert.equal(resizeEdge([{ x: 0, y: 0 }, { x: 0, y: 0 }], null, 0, 10), null)
+  const last = resizeEdge(square, null, 3, 50)
+  assert.deepEqual(last?.points[3], { x: 0, y: 100 })
+  assert.deepEqual(last?.points[0], { x: 0, y: 50 })
+})
+
+test('a corner fillet stops each side one radius early and keeps the far bend', () => {
+  const square = [
+    { x: 0, y: 0 },
+    { x: 100, y: 0 },
+    { x: 100, y: 100 },
+    { x: 0, y: 100 },
+  ]
+  const bends = [null, { x: 100, y: 50 }, null, null]
+  const cut = filletVertex(square, bends, 0, 10)
+  assert.ok(cut)
+  assert.ok(Math.hypot(cut.points[0].x - 0, cut.points[0].y - 10) < 1e-6)
+  assert.ok(Math.hypot(cut.points[1].x - 10, cut.points[1].y - 0) < 1e-6)
+  assert.deepEqual(cut.bends[0], { x: 0, y: 0 })
+  assert.deepEqual(cut.bends[2], { x: 100, y: 50 })
+  assert.equal(cut?.points.length, 5)
+  assert.equal(filletVertex(square, null, 0, 200), null)
+  assert.equal(filletVertex([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 200, y: 0 }], null, 1, 5), null)
+})
+
+test('a note leader points at the tip and a short one is omitted', () => {
+  const mark = noteLeader({ x: 0, y: 0 }, { x: 100, y: 0 }, 1)
+  assert.ok(mark)
+  assert.deepEqual(mark.head[0], { x: 100, y: 0 })
+  assert.ok(Math.abs(mark.shaft[1].x - 89) < 1e-6)
+  assert.equal(mark.shaft[1].y, 0)
+  assert.ok(Math.abs(mark.head[1].y) > 1)
+  assert.equal(noteLeader({ x: 0, y: 0 }, { x: 5, y: 0 }, 1), null)
 })

@@ -61,8 +61,37 @@ test('notes and plants survive a reload and a blank text is rejected', () => {
     ...emptyDoc(),
     plants: [{ id: 'p', kind: 'tree', x: 3, y: 4, radiusM: 1.5, form: 4 }],
   }), null)
+  const turned = parseDoc({
+    ...emptyDoc(),
+    plants: [{ id: 'p', kind: 'bush', x: 3, y: 4, radiusM: 0.8, form: 'hedge', rotationDeg: -90 }],
+  })
+  assert.equal(turned?.plants?.[0].rotationDeg, 270)
+  assert.equal(parseDoc({
+    ...emptyDoc(),
+    plants: [{ id: 'p', kind: 'tree', x: 3, y: 4, radiusM: 1.5, rotationDeg: 360 }],
+  })?.plants?.[0].rotationDeg, undefined)
+  assert.equal(parseDoc({
+    ...emptyDoc(),
+    plants: [{ id: 'p', kind: 'tree', x: 3, y: 4, radiusM: 1.5, rotationDeg: 'бок' }],
+  }), null)
   assert.equal(parseDoc({ ...emptyDoc(), notes: [{ id: 'n', x: 1, y: 2, text: '   ', sizeM: 0.4 }] }), null)
   assert.equal(parseDoc(emptyDoc())?.plants?.length, 0)
+})
+
+test('a note leader reloads and a bad tip rejects the file', () => {
+  const saved = parseDoc({
+    ...emptyDoc(),
+    notes: [{ id: 'n', x: 1, y: 2, text: 'Кран', sizeM: 0.4, leader: { x: 30, y: 8 } }],
+  })
+  assert.deepEqual(saved?.notes?.[0].leader, { x: 30, y: 8 })
+  assert.equal(parseDoc({
+    ...emptyDoc(),
+    notes: [{ id: 'n', x: 1, y: 2, text: 'Кран', sizeM: 0.4 }],
+  })?.notes?.[0].leader, undefined)
+  assert.equal(parseDoc({
+    ...emptyDoc(),
+    notes: [{ id: 'n', x: 1, y: 2, text: 'Кран', sizeM: 0.4, leader: { x: 'нет' } }],
+  }), null)
 })
 
 test('a drawing object round-trips and a bad kind rejects the file', () => {
@@ -156,6 +185,20 @@ test('stroke, opacity, note colour, anchor and ortho survive a reload', () => {
   })
   assert.equal(plain?.zones[0].stroke, undefined)
   assert.equal(parseDoc({ ...emptyDoc(), ortho: 'yes' }), null)
+  const bare = parseDoc({
+    ...emptyDoc(),
+    drips: [{ id: 'd', points: [{ x: 0, y: 0 }, { x: 10, y: 0 }], spacingM: 0.3, emitterLph: 2, bare: true }],
+  })
+  assert.equal(bare?.drips[0].bare, true)
+  const emitting = parseDoc({
+    ...emptyDoc(),
+    drips: [{ id: 'd', points: [{ x: 0, y: 0 }, { x: 10, y: 0 }], spacingM: 0.3, emitterLph: 2, bare: false }],
+  })
+  assert.equal(emitting?.drips[0].bare, undefined)
+  assert.equal(parseDoc({
+    ...emptyDoc(),
+    drips: [{ id: 'd', points: [{ x: 0, y: 0 }, { x: 10, y: 0 }], spacingM: 0.3, emitterLph: 2, bare: 'yes' }],
+  }), null)
   assert.equal(parseDoc({ ...emptyDoc(), anchor: { x: 1 } }), null)
   assert.equal(parseDoc({
     ...emptyDoc(),

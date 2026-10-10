@@ -144,4 +144,8 @@ test('drip, a valve box and a loose hydrant are buy lines', () => {
   assert.equal(gear.lines.find((line) => line.name === 'Гидрант')?.qty, '1 шт.')
   assert.equal(gear.lines.filter((line) => line.name === 'Гидрант').length, 1)
   assert.equal(gear.lines.find((line) => line.name === 'Гильза')?.qty, '1 шт. · 2 м')
+  doc.drips.push({ id: 'bare', points: [{ x: 0, y: 20 }, { x: 40, y: 20 }], spacingM: 0.3, emitterLph: 2, bare: true })
+  const withBare = gearList(doc, analyze(doc))
+  assert.equal(withBare.lines.find((line) => line.name === 'Капельная трубка 2 л/ч, шаг 0,3 м')?.qty, '3 м')
+  assert.equal(withBare.lines.find((line) => line.name === 'Трубка ПЭ 16 без капельниц')?.qty, '2 м')
 })

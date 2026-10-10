@@ -1,6 +1,42 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { nozzleById, NOZZLES, nozzlesOf, rotorMark } from './nozzles.ts'
+import { headCaption, nozzleById, NOZZLES, nozzlesOf, rotorMark, sectorForPlace } from './nozzles.ts'
+
+test('a head caption names the throw, the sector and the flow', () => {
+  assert.equal(
+    headCaption({ nozzleId: 'fan180', radiusM: 4.5, arcDeg: 180, flowLph: 360 }),
+    '4,5 м · 180° · 360 л/ч',
+  )
+  assert.equal(
+    headCaption({ nozzleId: 'fan360', radiusM: 4.5, arcDeg: 360, flowLph: 720 }),
+    '4,5 м · 360° · 720 л/ч',
+  )
+  assert.equal(
+    headCaption({ nozzleId: 'fan-ss', radiusM: 1.5, arcDeg: 180, flowLph: 80 }),
+    '1,5×9 м · 80 л/ч',
+  )
+  assert.equal(
+    headCaption({ nozzleId: 'fan-es', radiusM: 4.5, arcDeg: 180, flowLph: 40 }),
+    '1,5×4,5 м · 40 л/ч',
+  )
+})
+
+test('a corner and an edge pick the sector of that place', () => {
+  assert.deepEqual(sectorForPlace(nozzleById('fan180'), 90), { nozzleId: 'fan90', arcDeg: 90, radiusM: 4.5, flowLph: 180 })
+  assert.deepEqual(sectorForPlace(nozzleById('fan360'), 180), { nozzleId: 'fan180', arcDeg: 180, radiusM: 4.5, flowLph: 360 })
+  assert.equal(sectorForPlace(nozzleById('fan180'), 270).nozzleId, 'fan45-270')
+  assert.equal(sectorForPlace(nozzleById('fan180'), 150).arcDeg, 120)
+  const adjustable = sectorForPlace(nozzleById('fan45-adj'), 90)
+  assert.equal(adjustable.nozzleId, 'fan45-adj')
+  assert.equal(adjustable.arcDeg, 90)
+  assert.equal(adjustable.flowLph, nozzleById('fan45-adj').flowLph)
+  const wide = sectorForPlace(nozzleById('rot-corner'), 180)
+  assert.equal(wide.nozzleId, 'rot-corner')
+  assert.equal(wide.arcDeg, 105)
+  assert.equal(sectorForPlace(nozzleById('fan-ss'), 90).nozzleId, 'fan-ss')
+  assert.equal(sectorForPlace(nozzleById('bub240'), 90).nozzleId, 'bub240')
+  assert.equal(sectorForPlace(nozzleById('rotorLa10-180'), 90).nozzleId, 'rotorLa10-90')
+})
 
 test('legacy fan and rotor keep their radius and matched flow', () => {
   assert.deepEqual(

@@ -4,7 +4,8 @@ import { gearHint, gearList, gearText } from '@shared/gear.ts'
 import { dist } from '@shared/geom.ts'
 import { sleeveLengthM } from '@shared/join.ts'
 import { SURFACES } from '@shared/landscape.ts'
-import type { Analysis, Doc, Drip, PipeRole, Source, Sprinkler, Valve, Zone } from '@shared/types.ts'
+import { bucketLph, programOf, programTable, type Program } from '@shared/program.ts'
+import type { Analysis, Doc, Drip, PipeRole, PlanIssue, Source, Sprinkler, Valve, Zone } from '@shared/types.ts'
 import { nozzleById, nozzlesOf, type NozzleKind } from '@shared/nozzles.ts'
 import { SERIES, seriesById, type PipeSeriesId } from '@shared/pipes.ts'
 
@@ -23,13 +24,7 @@ function cycleText(cycles: number | null): string {
   return ` · ${cycles} ${cyclesWord(cycles)}`
 }
 
-function programText(analysis: Analysis): string {
-  const head = analysis.stations.length > 0 ? 'Станции друг за другом' : 'Один запуск'
-  const open = meters(analysis.programMin, 1)
-  const pause = analysis.clockMin !== null && analysis.programMin !== null ? analysis.clockMin - analysis.programMin : 0
-  if (pause > 0.05) return `${head}: ${open} мин полива, вместе с паузами ${meters(analysis.clockMin, 0)} мин.`
-  return `${head}: ${open} мин.`
-}
+const DAY = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
 
 function meters(value: number | null, digits = 1): string {
   if (value === null) return '—'
@@ -121,6 +116,8 @@ export function Spec({
   onPipe,
   onBox,
   onDelete,
+  onFocus,
+  onProgram,
 }: {
   doc: Doc
   analysis: Analysis
@@ -135,6 +132,8 @@ export function Spec({
   onSeries: (id: PipeSeriesId) => void
   onTrench: (patch: Partial<Doc['trench']>) => void
   onDelete: () => void
+  onFocus: (issue: PlanIssue) => void
+  onProgram: (patch: Partial<Program>) => void
 }) {
   const zone = selection?.kind === 'zone' ? doc.zones.find((item) => item.id === selection.id) : undefined
   const zoneRow = zone ? analysis.zones.find((item) => item.id === zone.id) : undefined
@@ -149,6 +148,11 @@ export function Spec({
   const sleeves = doc.sleeves ?? []
   const sleeveM = sleeveLengthM(sleeves, doc.pxPerMeter)
   const oneSleeveM = sleeve && doc.pxPerMeter ? dist(sleeve.a, sleeve.b) / doc.pxPerMeter : null
+  const [bucketL, setBucketL] = useState('10')
+  const [bucketS, setBucketS] = useState('40')
+  const bucketRate = bucketLph(Number(bucketL.replace(',', '.')), Number(bucketS.replace(',', '.')))
+  const program = programOf(doc)
+  const table = programTable(doc, analysis)
 
   return (
     <aside className="spec">
@@ -286,6 +290,23 @@ export function Spec({
               onChange={(event) => onSource({ flowLimitLph: event.target.value === '' ? null : Number(event.target.value) })}
             />
           </label>
+          <label>
+            Ведро, литры
+            <input value={bucketL} aria-label="Литры ведра" onChange={(event) => setBucketL(event.target.value)} />
+          </label>
+          <label>
+            Секунды
+            <input value={bucketS} aria-label="Секунды ведра" onChange={(event) => setBucketS(event.target.value)} />
+          </label>
+          <button
+            type="button"
+            className="tool"
+            disabled={bucketRate === null}
+            onClick={() => { if (bucketRate !== null) onSource({ flowLimitLph: bucketRate }) }}
+          >
+            {bucketRate === null ? 'В лимит' : `В лимит · ${bucketRate.toLocaleString('ru-RU')} л/ч`}
+          </button>
+          <p className="hint">Наберите ведро и засеките секунды. Кнопка ставит этот расход лимитом источника.</p>
           <button className="ghost" onClick={onDelete}>Убрать источник</button>
         </div>
       )}
@@ -328,6 +349,10 @@ export function Spec({
       {drip && (
         <div className="props">
           <h2>Капельная трубка</h2>
+          <div className="hatch-row">
+            <button className={drip.bare ? 'tool' : 'tool active'} onClick={() => onDrip(drip.id, { bare: false })}>С капельницами</button>
+            <button className={drip.bare ? 'tool active' : 'tool'} onClick={() => onDrip(drip.id, { bare: true })}>Без капельниц</button>
+          </div>
           <label>
             Шаг капельниц, м
             <input type="number" min={0.05} max={2} step={0.05} value={drip.spacingM} onChange={(event) => onDrip(drip.id, { spacingM: Number(event.target.value) })} />
@@ -368,6 +393,11 @@ export function Spec({
           ))}
         </select>
       </label>
+      {analysis.issues.map((issue) => (
+        <button key={`${issue.kind}:${issue.id}`} type="button" className="warn" onClick={() => onFocus(issue)}>
+          {issue.text}
+        </button>
+      ))}
       {analysis.warnings.map((warning) => (
         <p key={warning} className="warn">{warning}</p>
       ))}
@@ -502,9 +532,48 @@ export function Spec({
           })}
         </tbody>
       </table>
-      {analysis.programMin !== null && (
-        <p className="note">{programText(analysis)}</p>
+      <h3>Пульт</h3>
+      <div className="hatch-row">
+        {DAY.map((name, day) => (
+          <button
+            key={name}
+            type="button"
+            className={program.days.includes(day) ? 'tool active' : 'tool'}
+            onClick={() => onProgram({
+              days: program.days.includes(day) ? program.days.filter((item) => item !== day) : [...program.days, day],
+            })}
+          >
+            {name}
+          </button>
+        ))}
+      </div>
+      <label>
+        Старт
+        <input
+          type="time"
+          aria-label="Старт полива"
+          value={`${String(program.startHour).padStart(2, '0')}:${String(program.startMin).padStart(2, '0')}`}
+          onChange={(event) => {
+            const [hour, minute] = event.target.value.split(':').map((part) => Number(part))
+            if (Number.isInteger(hour) && Number.isInteger(minute)) onProgram({ startHour: hour, startMin: minute })
+          }}
+        />
+      </label>
+      {table ? (
+        <table>
+          <tbody>
+            {table.lines.map((line) => (
+              <tr key={`${line.name}-${line.when}`}>
+                <td>{line.name}</td>
+                <td>{line.when}{line.note ? ` · ${line.note}` : ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="hint">Станции появятся после клапанов и «Схема».</p>
       )}
+      <p className="hint">Станции идут друг за другом. Пауза между циклами уже входит в конец станции.</p>
       <h3>Капля</h3>
       <table>
         <tbody>

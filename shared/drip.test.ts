@@ -1,12 +1,25 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { dripPitch, emitterPoints, placeDripAtPlant, placeDripOnPolygon } from './drip.ts'
+import { dripPitch, dripRingPoints, emitterPoints, placeDripAtPlant, placeDripOnPolygon } from './drip.ts'
 import { dist, pointInPolygon } from './geom.ts'
 import { layoutIrrigation } from './plan.ts'
 import { emptyDoc } from './doc.ts'
 import type { Point } from './types.ts'
 
 const PPM = 10
+
+test('a drip ring is centered on the plant and passes through the anchor', () => {
+  const anchor = { x: 100, y: 40 }
+  const center = { x: 100, y: 80 }
+  assert.equal(dripRingPoints(anchor, { x: 100, y: 42 }), null)
+  const ring = dripRingPoints(anchor, center)
+  assert.ok(ring)
+  assert.equal(ring![0].x, anchor.x)
+  assert.equal(ring![0].y, anchor.y)
+  assert.equal(ring![ring!.length - 1].x, anchor.x)
+  assert.equal(ring![ring!.length - 1].y, anchor.y)
+  for (const point of ring!) assert.ok(Math.abs(dist(point, center) - 40) < 1e-6)
+})
 
 function rect(x: number, y: number, w: number, h: number): Point[] {
   return [

@@ -5,6 +5,9 @@ import { emptyDoc } from './doc.ts'
 import { exampleDoc } from './example.ts'
 import { hatchTile } from './landscape.ts'
 import { pdfFromJpegPages } from './pdf.ts'
+import { runtimeLabel } from './program.ts'
+import { pressureLabel, sourceLabel, valveFlowLabel } from './pipes.ts'
+import { dripFlowTags, lossTags } from './pipeview.ts'
 import { buildSheetPages, contentBounds, DEFAULT_SHEET_LAYERS, mmToPx, paperOf } from './sheet.ts'
 
 test('A4 album is 297 by 210 millimetres', () => {
@@ -44,6 +47,31 @@ test('scheme svg has the lawn, heads, pipes, legend and scale', () => {
   assert.match(pages[1].svg, /Сопло веерное 4,5 м, 180°/)
   assert.match(pages[1].svg, /Корпус выдвижной/)
   assert.match(pages[1].svg, /ПЭ/)
+})
+
+test('a station colour and a precip wash reach the sheet', () => {
+  const doc = exampleDoc()
+  doc.valves = [{ id: 'v1', name: 'Клапан 1', x: 200, y: 300 }]
+  const pages = buildSheetPages(doc, analyze(doc), { title: 'Станция', date: '01.01.2026', includeSpec: false })
+  assert.match(pages[0].svg, /#c23b22/)
+  assert.match(pages[0].svg, /Станция 1/)
+  assert.match(pages[0].svg, /sheet-lawn/)
+  const wet = buildSheetPages(doc, analyze(doc), {
+    title: 'Осадки',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, precip: true },
+  })
+  assert.match(wet[0].svg, /rgba\(78,156,82,0\.46\)/)
+  assert.match(wet[0].svg, /Норма, 8–22 мм\/ч/)
+  const named = buildSheetPages(doc, analyze(doc), {
+    title: 'Подписи',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, headInfo: true },
+  })
+  assert.match(named[0].svg, /4,5 м · 180° · 360 л\/ч/)
+  assert.equal(pages[0].svg.includes('4,5 м · 180° · 360 л/ч'), false)
 })
 
 test('turning a layer off drops that geometry from the sheet', () => {
@@ -213,4 +241,347 @@ test('jpeg pages become a pdf with one image per page', () => {
   assert.match(text, /startxref/)
   assert.match(text, /%%EOF/)
   assert.ok(pdf.length > 400)
+})
+
+test('runtime, a hidden cover and a draft sheet stay on the drawing', () => {
+  const doc = exampleDoc()
+  const analysis = analyze(doc)
+  const label = runtimeLabel(analysis.zones[0].runtimeMin, analysis.zones[0].cycles)
+  assert.ok(label)
+  const plain = buildSheetPages(doc, analysis, { title: 'План', date: '01.01.2026', includeSpec: false })
+  assert.equal(plain[0].svg.includes(label), false)
+  assert.match(plain[0].svg, /#24633a/)
+  assert.match(plain[0].svg, /sheet-lawn/)
+  const timed = buildSheetPages(doc, analysis, {
+    title: 'Время',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, runtime: true },
+  })
+  assert.equal(timed[0].svg.includes(label), true)
+  const bare = buildSheetPages(doc, analysis, {
+    title: 'Без радиусов',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, cover: false },
+  })
+  assert.equal(bare[0].svg.includes('#24633a'), false)
+  assert.match(bare[0].svg, /Дождеватель/)
+  const draft = buildSheetPages(doc, analysis, {
+    title: 'Чертёж',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, draft: true },
+  })
+  assert.equal(draft[0].svg.includes('sheet-lawn'), false)
+  assert.match(draft[0].svg, /fill="#ffffff"/)
+  const spec = buildSheetPages(doc, analysis, { title: 'Пульт', date: '01.01.2026' }).map((page) => page.svg).join('\n')
+  assert.match(spec, /ПУЛЬТ/)
+  assert.match(spec, /старт 06:00/)
+  assert.match(spec, /Вся сеть/)
+})
+
+test('a note leader reaches the sheet', () => {
+  const doc = {
+    ...emptyDoc(),
+    notes: [{ id: 'n', x: 10, y: 20, text: 'Туда', sizeM: 0.4, leader: { x: 110, y: 20 } }],
+  }
+  const box = contentBounds(doc)
+  assert.ok(box.maxX >= 110)
+  assert.ok(box.minX <= 10)
+  const svg = buildSheetPages(doc, analyze(doc), { title: 'Выноска', date: '01.01.2026', includeSpec: false })[0].svg
+  assert.match(svg, /Туда/)
+  assert.match(svg, /<polygon points="110,20/)
+  const plainDoc = { ...doc, notes: [{ id: 'n', x: 10, y: 20, text: 'Туда', sizeM: 0.4 }] }
+  const plain = buildSheetPages(plainDoc, analyze(plainDoc), { title: 'Выноска', date: '01.01.2026', includeSpec: false })[0].svg
+  assert.equal(plain.includes('<polygon'), false)
+})
+
+test('a sleeve length reaches the sheet and hides with the fittings', () => {
+  const doc = {
+    ...emptyDoc(),
+    sleeves: [{ id: 's', a: { x: 0, y: 0 }, b: { x: 248, y: 0 } }],
+  }
+  const on = buildSheetPages(doc, analyze(doc), { title: 'Гильза', date: '01.01.2026', includeSpec: false })
+  assert.match(on[0].svg, /12,4 м/)
+  const off = buildSheetPages(doc, analyze(doc), {
+    title: 'Гильза',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, fittings: false },
+  })
+  assert.equal(off[0].svg.includes('12,4 м'), false)
+})
+
+test('a zone name reaches the sheet only when that layer is on', () => {
+  const doc = {
+    ...emptyDoc(),
+    zones: [{
+      id: 'z',
+      name: 'Палисадник',
+      kind: 'lawn' as const,
+      points: [{ x: 0, y: 0 }, { x: 80, y: 0 }, { x: 80, y: 40 }],
+      doseMm: 6,
+      soil: 'loam' as const,
+      slope: 'flat' as const,
+      climate: 'open' as const,
+    }],
+  }
+  const analysis = analyze(doc)
+  const off = buildSheetPages(doc, analysis, { title: 'Имя', date: '01.01.2026', includeSpec: false })
+  // Легенда всегда пишет имя. Подпись в середине зоны — только со слоем.
+  assert.equal(off[0].svg.includes('>Палисадник</text>'), false)
+  assert.match(off[0].svg, /Палисадник ·/)
+  const on = buildSheetPages(doc, analysis, {
+    title: 'Имя',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, names: true },
+  })
+  assert.match(on[0].svg, />Палисадник<\/text>/)
+})
+
+test('a flow arrow points at the head and hides with the pipes', () => {
+  const doc = {
+    ...emptyDoc(),
+    source: { x: 0, y: 0, pressureBar: 3, flowLimitLph: null },
+    zones: [],
+    valves: [],
+    pipes: [{ id: 'run', points: [{ x: 0, y: 0 }, { x: 200, y: 0 }] }],
+    sprinklers: [{ id: 's', nozzleId: 'fan180', x: 200, y: 0, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 360 }],
+  }
+  const analysis = analyze(doc)
+  const on = buildSheetPages(doc, analysis, { title: 'Поток', date: '01.01.2026', includeSpec: false })
+  assert.match(on[0].svg, /data-flow="1"/)
+  assert.match(on[0].svg, /rotate\(90\)/)
+  const off = buildSheetPages(doc, analysis, {
+    title: 'Поток',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, pipes: false },
+  })
+  assert.equal(off[0].svg.includes('data-flow='), false)
+})
+
+test('a pipe speed reaches the sheet and hides with the pipes', () => {
+  const doc = {
+    ...emptyDoc(),
+    source: { x: 0, y: 0, pressureBar: 3, flowLimitLph: null },
+    zones: [],
+    valves: [],
+    pipes: [{ id: 'run', points: [{ x: 0, y: 0 }, { x: 200, y: 0 }] }],
+    sprinklers: [{ id: 's', nozzleId: 'fan180', x: 200, y: 0, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 360 }],
+  }
+  const analysis = analyze(doc)
+  const fed = analysis.segments.find((segment) => segment.status === 'ok' && segment.velocity && segment.velocity > 0)
+  assert.ok(fed?.velocity)
+  const label = `${fed.velocity.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} м/с`
+  const on = buildSheetPages(doc, analysis, { title: 'Скорость', date: '01.01.2026', includeSpec: false })
+  assert.match(on[0].svg, /data-speed="1"/)
+  assert.equal(on[0].svg.includes(`>${label}</text>`), true)
+  const off = buildSheetPages(doc, analysis, {
+    title: 'Скорость',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, pipes: false },
+  })
+  assert.equal(off[0].svg.includes('data-speed='), false)
+})
+
+test('a pipe loss reaches the sheet and hides with the pipes', () => {
+  const doc = {
+    ...emptyDoc(),
+    source: { x: 0, y: 0, pressureBar: 3, flowLimitLph: null },
+    zones: [],
+    valves: [],
+    pipes: [{ id: 'run', points: [{ x: 0, y: 0 }, { x: 200, y: 0 }] }],
+    sprinklers: [{ id: 's', nozzleId: 'fan180', x: 200, y: 0, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 360 }],
+  }
+  const analysis = analyze(doc)
+  const tags = lossTags(analysis.segments, doc.pxPerMeter, 1)
+  assert.equal(tags.length, 1)
+  const on = buildSheetPages(doc, analysis, { title: 'Потери', date: '01.01.2026', includeSpec: false })
+  assert.match(on[0].svg, /data-loss="1"/)
+  assert.equal(on[0].svg.includes(`>${tags[0].text}</text>`), true)
+  const off = buildSheetPages(doc, analysis, {
+    title: 'Потери',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, pipes: false },
+  })
+  assert.equal(off[0].svg.includes('data-loss='), false)
+})
+
+test('a drip emitter count reaches the sheet and hides with the drip', () => {
+  const doc = {
+    ...emptyDoc(),
+    zones: [],
+    valves: [],
+    pipes: [],
+    sprinklers: [],
+    drips: [
+      { id: 'd', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 40 }], spacingM: 0.3, emitterLph: 2 },
+      { id: 'bare', points: [{ x: 0, y: 40 }, { x: 100, y: 40 }], spacingM: 0.3, emitterLph: 2, bare: true },
+    ],
+  }
+  const analysis = analyze(doc)
+  const tags = dripFlowTags(doc.drips, doc.pxPerMeter, 1)
+  assert.equal(tags.length, 1)
+  const on = buildSheetPages(doc, analysis, { title: 'Капля', date: '01.01.2026', includeSpec: false })
+  assert.equal(on[0].svg.match(/data-drip-flow="1"/g)?.length, 1)
+  assert.equal(on[0].svg.includes(`>${tags[0].text}</text>`), true)
+  const off = buildSheetPages(doc, analysis, {
+    title: 'Капля',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, drip: false },
+  })
+  assert.equal(off[0].svg.includes('data-drip-flow='), false)
+})
+
+test('a head pressure reaches the sheet and hides with the heads', () => {
+  const doc = {
+    ...emptyDoc(),
+    source: { x: 0, y: 0, pressureBar: 3, flowLimitLph: null },
+    zones: [],
+    valves: [],
+    pipes: [{ id: 'run', points: [{ x: 0, y: 0 }, { x: 200, y: 0 }] }],
+    sprinklers: [{ id: 's', nozzleId: 'fan180', x: 200, y: 0, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 360 }],
+  }
+  const analysis = analyze(doc)
+  const mark = analysis.pressureMarks.find((item) => item.id === 's')
+  assert.ok(mark)
+  const on = buildSheetPages(doc, analysis, { title: 'Напор', date: '01.01.2026', includeSpec: false })
+  assert.match(on[0].svg, /data-pressure="1"/)
+  assert.equal(on[0].svg.includes(`>${pressureLabel(mark.bar)}</text>`), true)
+  const off = buildSheetPages(doc, analysis, {
+    title: 'Напор',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, spray: false },
+  })
+  assert.equal(off[0].svg.includes('data-pressure='), false)
+  const pipesOff = buildSheetPages(doc, analysis, {
+    title: 'Напор',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, pipes: false },
+  })
+  assert.match(pipesOff[0].svg, /data-pressure="1"/)
+})
+
+test('a valve shows its station flow and hides with the fittings', () => {
+  assert.equal(valveFlowLabel(360), '360 л/ч')
+  assert.equal(valveFlowLabel(12.6), '13 л/ч')
+  const doc = {
+    ...emptyDoc(),
+    source: { x: 0, y: 0, pressureBar: 3, flowLimitLph: null },
+    zones: [],
+    pipes: [{ id: 'run', points: [{ x: 0, y: 0 }, { x: 80, y: 0 }, { x: 200, y: 0 }] }],
+    valves: [{ id: 'v1', name: 'Клапан 1', x: 80, y: 0 }],
+    sprinklers: [{ id: 's', nozzleId: 'fan180', x: 200, y: 0, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 360 }],
+  }
+  const analysis = analyze(doc)
+  assert.equal(analysis.stations.find((item) => item.id === 'v1')?.flowLph, 360)
+  const on = buildSheetPages(doc, analysis, { title: 'Клапан', date: '01.01.2026', includeSpec: false })
+  assert.match(on[0].svg, /data-valve-flow="1"/)
+  assert.equal(on[0].svg.includes('>360 л/ч</text>'), true)
+  const off = buildSheetPages(doc, analysis, {
+    title: 'Клапан',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, fittings: false },
+  })
+  assert.equal(off[0].svg.includes('data-valve-flow='), false)
+  const dry = {
+    ...doc,
+    sprinklers: [],
+  }
+  const idle = buildSheetPages(dry, analyze(dry), { title: 'Клапан', date: '01.01.2026', includeSpec: false })
+  assert.equal(idle[0].svg.includes('data-valve-flow='), false)
+})
+
+test('a source label names the pressure and hides with the fittings', () => {
+  assert.equal(sourceLabel({ pressureBar: 3, flowLimitLph: null }), '3 бар')
+  assert.equal(sourceLabel({ pressureBar: 2.5, flowLimitLph: 900 }), '2,5 бар · 900 л/ч')
+  assert.equal(sourceLabel({ pressureBar: 3, flowLimitLph: 0 }), '3 бар')
+  const doc = {
+    ...emptyDoc(),
+    source: { x: 40, y: 80, pressureBar: 2.5, flowLimitLph: 900 },
+    zones: [],
+    valves: [],
+    pipes: [],
+    sprinklers: [],
+  }
+  const analysis = analyze(doc)
+  const on = buildSheetPages(doc, analysis, { title: 'Источник', date: '01.01.2026', includeSpec: false })
+  assert.match(on[0].svg, /data-source="1"/)
+  assert.equal(on[0].svg.includes('>2,5 бар · 900 л/ч</text>'), true)
+  const off = buildSheetPages(doc, analysis, {
+    title: 'Источник',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, fittings: false },
+  })
+  assert.equal(off[0].svg.includes('data-source='), false)
+})
+
+test('a pipe elbow and a cap reach the sheet with the pipes', () => {
+  const doc = {
+    ...emptyDoc(),
+    source: { x: 0, y: 0, pressureBar: 3, flowLimitLph: null },
+    zones: [],
+    sprinklers: [],
+    valves: [],
+    pipes: [{ id: 'run', points: [{ x: 0, y: 0 }, { x: 80, y: 0 }, { x: 80, y: 80 }] }],
+  }
+  const analysis = analyze(doc)
+  assert.equal(analysis.fittingMarks.some((item) => item.kind === 'elbow' && item.x === 80 && item.y === 0), true)
+  assert.equal(analysis.fittingMarks.some((item) => item.kind === 'cap' && item.x === 80 && item.y === 80), true)
+  const on = buildSheetPages(doc, analysis, { title: 'Фитинг', date: '01.01.2026', includeSpec: false })
+  assert.match(on[0].svg, /data-fitting="elbow"/)
+  assert.match(on[0].svg, /data-fitting="cap"/)
+  const off = buildSheetPages(doc, analysis, {
+    title: 'Фитинг',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, pipes: false },
+  })
+  assert.equal(off[0].svg.includes('data-fitting='), false)
+})
+
+test('a zone area reaches the sheet only when that layer is on', () => {
+  const doc = {
+    ...emptyDoc(),
+    zones: [{
+      id: 'z',
+      name: 'Палисадник',
+      kind: 'lawn' as const,
+      points: [{ x: 0, y: 0 }, { x: 80, y: 0 }, { x: 80, y: 40 }],
+      doseMm: 6,
+      soil: 'loam' as const,
+      slope: 'flat' as const,
+      climate: 'open' as const,
+    }],
+  }
+  const analysis = analyze(doc)
+  const off = buildSheetPages(doc, analysis, { title: 'Площадь', date: '01.01.2026', includeSpec: false })
+  // Легенда всегда пишет площадь. Подпись в середине — только со слоем.
+  assert.equal(off[0].svg.includes('>4 м²</text>'), false)
+  assert.match(off[0].svg, /4 м²/)
+  const on = buildSheetPages(doc, analysis, {
+    title: 'Площадь',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, area: true },
+  })
+  assert.match(on[0].svg, />4 м²<\/text>/)
+  const bare = { ...doc, pxPerMeter: null }
+  const unscaled = buildSheetPages(bare, analyze(bare), {
+    title: 'Площадь',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, area: true },
+  })
+  assert.equal(unscaled[0].svg.includes('>4 м²</text>'), false)
 })

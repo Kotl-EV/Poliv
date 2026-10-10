@@ -51,8 +51,54 @@ export function nozzleById(id: string): Nozzle {
   return NOZZLES.find((item) => item.id === id) ?? NOZZLES.find((item) => item.id === 'fan180') ?? NOZZLES[0]
 }
 
+function ruCount(value: number): string {
+  return value.toLocaleString('ru-RU', { maximumFractionDigits: 1 })
+}
+
+/** Подпись на плане: радиус, сектор и расход. У полосы — ширина и длина. */
+export function headCaption(head: { radiusM: number; arcDeg: number; flowLph: number; nozzleId: string }): string {
+  const nozzle = nozzleById(head.nozzleId)
+  const flow = `${Math.round(head.flowLph)} л/ч`
+  if (nozzle.pattern === 'strip' && nozzle.widthM && nozzle.strip) {
+    const first = nozzle.strip === 'side' ? head.radiusM : nozzle.widthM
+    const second = nozzle.strip === 'side' ? nozzle.widthM : head.radiusM
+    return `${ruCount(first)}×${ruCount(second)} м · ${flow}`
+  }
+  const arc = head.arcDeg >= 359 ? 360 : Math.round(head.arcDeg)
+  return `${ruCount(head.radiusM)} м · ${arc}° · ${flow}`
+}
+
 export function nozzlesOf(kind: NozzleKind): Nozzle[] {
   return NOZZLES.filter((item) => item.kind === kind)
+}
+
+/**
+ * Сектор по месту: на ребре ближайшие 180°, на углу — ближайший сектор того же радиуса.
+ * Регулируемое и угловое сопло крутится до внутреннего угла. Полоса и баблер не меняются.
+ */
+export function sectorForPlace(nozzle: Nozzle, interiorDeg: number): { nozzleId: string; arcDeg: number; radiusM: number; flowLph: number } {
+  const same = { nozzleId: nozzle.id, arcDeg: nozzle.arcDeg, radiusM: nozzle.radiusM, flowLph: nozzle.flowLph }
+  if (nozzle.kind === 'bubbler' || nozzle.pattern === 'strip') return same
+  if (nozzle.pattern === 'adjust' || nozzle.pattern === 'corner') {
+    const min = nozzle.arcMin ?? 1
+    const max = nozzle.arcMax ?? 360
+    const arc = Math.min(max, Math.max(min, Math.round(interiorDeg)))
+    return { ...same, arcDeg: arc > 0 ? arc : 1 }
+  }
+  const pattern = nozzle.pattern ?? 'fixed'
+  const pool = NOZZLES.filter((item) => item.kind === nozzle.kind && (item.pattern ?? 'fixed') === pattern && item.radiusM === nozzle.radiusM)
+  let best: Nozzle | null = null
+  for (const item of pool) {
+    if (!best) {
+      best = item
+      continue
+    }
+    const gap = Math.abs(item.arcDeg - interiorDeg)
+    const bestGap = Math.abs(best.arcDeg - interiorDeg)
+    if (gap < bestGap - 0.01 || (Math.abs(gap - bestGap) <= 0.01 && item.arcDeg < best.arcDeg)) best = item
+  }
+  if (!best) return same
+  return { nozzleId: best.id, arcDeg: best.arcDeg, radiusM: best.radiusM, flowLph: best.flowLph }
 }
 
 /** Радиус стандартного ротора при ~3 бар. Номер — обычный номер сопла, одна точка, не таблица давлений. */

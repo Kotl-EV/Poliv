@@ -1,14 +1,16 @@
+import { stationInk, stationNo } from './analyze.ts'
 import { emitterPoints } from './drip.ts'
 import { fixtureMarkup } from './fixtures.ts'
 import { plantMarkup } from './plants.ts'
-import { gridStepM, surfaceOf, SURFACES, DEFAULT_PPM, DEFAULT_SHEET_M, hatchOf, hatchPatternMarkup, HATCHES } from './landscape.ts'
-import { coverPath, zoneShapeD } from './geom.ts'
-import { nozzleById } from './nozzles.ts'
+import { gridStepM, precipWash, surfaceOf, SURFACES, DEFAULT_PPM, DEFAULT_SHEET_M, hatchOf, hatchPatternMarkup, HATCHES } from './landscape.ts'
+import { centroid, coverPath, noteLeader, pointInZone, zoneShapeD } from './geom.ts'
+import { headCaption, nozzleById } from './nozzles.ts'
+import { programTable, runtimeLabel } from './program.ts'
 import { gearHint, gearList } from './gear.ts'
 import { sleeveLengthM } from './join.ts'
-import { funnyPoints, pipeTags } from './pipeview.ts'
-import { pipeWeight } from './pipes.ts'
-import type { Analysis, Doc, Plant, Point } from './types.ts'
+import { dripFlowTags, dripTags, fittingShape, flowArrows, funnyPoints, lossTags, pipeTags, sleeveTags, speedTags } from './pipeview.ts'
+import { pipeWeight, pressureLabel, sourceLabel, valveFlowLabel } from './pipes.ts'
+import type { Analysis, Doc, FittingMark, Plant, Point } from './types.ts'
 
 export const SHEET_DPI = 150
 
@@ -18,20 +20,39 @@ export type SheetLayers = {
   underlay: boolean
   grid: boolean
   landscape: boolean
+  /** Имя зоны в её середине. */
+  names: boolean
+  /** Площадь зоны в её середине. */
+  area: boolean
   spray: boolean
   pipes: boolean
   drip: boolean
   fittings: boolean
+  /** Радиусы дождевателей. Пусто в старом снимке значит включены. */
+  cover: boolean
+  precip: boolean
+  /** Минуты и циклы на зоне и на клапане. */
+  runtime: boolean
+  headInfo: boolean
+  /** Лист без штриховок, чёрными линиями. */
+  draft: boolean
 }
 
 export const DEFAULT_SHEET_LAYERS: SheetLayers = {
   underlay: true,
   grid: true,
   landscape: true,
+  names: false,
+  area: false,
   spray: true,
   pipes: true,
   drip: true,
   fittings: true,
+  cover: true,
+  precip: false,
+  runtime: false,
+  headInfo: false,
+  draft: false,
 }
 
 export const PAPERS: { id: PaperId; name: string; wMm: number; hMm: number }[] = [
@@ -101,7 +122,10 @@ export function contentBounds(doc: Doc, underlay?: { w: number; h: number } | nu
     push(sleeve.a)
     push(sleeve.b)
   }
-  for (const note of doc.notes ?? []) push(note)
+  for (const note of doc.notes ?? []) {
+    push(note)
+    if (note.leader) push(note.leader)
+  }
   for (const plant of doc.plants ?? []) {
     const r = plant.radiusM * ppm
     push(plant)
@@ -161,11 +185,12 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
   const oy = plot.y + (plot.h - worldH * k) / 2 - bounds.minY * k
   const date = opts.date ?? isoDate()
   const layers = opts.layers
+  const draft = layers.draft
   const parts: string[] = []
   parts.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${widthPx}" height="${heightPx}" viewBox="0 0 ${widthPx} ${heightPx}">`)
-  parts.push(patterns(ppm))
+  if (!draft) parts.push(patterns(ppm))
   parts.push(`<rect width="${widthPx}" height="${heightPx}" fill="#f7f3ea"/>`)
-  parts.push(`<rect x="${plot.x}" y="${plot.y}" width="${plot.w}" height="${plot.h}" fill="#e7efe6" stroke="#1c2822" stroke-width="1.2"/>`)
+  parts.push(`<rect x="${plot.x}" y="${plot.y}" width="${plot.w}" height="${plot.h}" fill="${draft ? '#ffffff' : '#e7efe6'}" stroke="#1c2822" stroke-width="1.2"/>`)
   parts.push(`<clipPath id="plot-clip"><rect x="${plot.x}" y="${plot.y}" width="${plot.w}" height="${plot.h}"/></clipPath>`)
   parts.push(`<g clip-path="url(#plot-clip)"><g transform="translate(${fmt(ox)} ${fmt(oy)}) scale(${fmt(k)})">`)
   if (layers.grid) parts.push(gridSvg(bounds, ppm, k))
@@ -177,37 +202,73 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
   if (layers.landscape) {
     for (const zone of doc.zones) {
       const surface = surfaceOf(zone.kind)
-      const fade = zone.opacity !== undefined ? ` opacity="${fmt(zone.opacity)}"` : ''
+      const fade = !draft && zone.opacity !== undefined ? ` opacity="${fmt(zone.opacity)}"` : ''
+      const row = analysis.zones.find((item) => item.id === zone.id)
+      const fill = draft ? '#ffffff' : layers.precip ? precipWash(row?.precipMmH ?? null) : `url(#sheet-${hatchOf(zone)})`
+      const stroke = draft ? '#1c2822' : zone.stroke || surface.stroke
       parts.push(
-        `<path d="${xml(zoneShapeD(zone.points, zone.bends, zone.holes))}" fill="url(#sheet-${hatchOf(zone)})" fill-rule="evenodd" stroke="${xml(zone.stroke || surface.stroke)}" stroke-width="${fmt((zone.pen ?? 1.3) / k)}"${fade}/>`,
+        `<path d="${xml(zoneShapeD(zone.points, zone.bends, zone.holes))}" fill="${fill}" fill-rule="evenodd" stroke="${xml(stroke)}" stroke-width="${fmt((zone.pen ?? 1.3) / k)}"${fade}/>`,
       )
+      const middle = centroid(zone.points)
+      const captions: { text: string; size: number }[] = []
+      if (layers.names && zone.name) captions.push({ text: zone.name, size: 13 })
+      if (layers.area && row?.areaM2 != null) captions.push({ text: `${num(row.areaM2)} м²`, size: 13 })
+      if (layers.precip) captions.push({ text: row?.precipMmH == null ? 'нет осадков' : `${num(row.precipMmH)} мм/ч`, size: 13 })
+      if (layers.runtime && row) {
+        const label = runtimeLabel(row.runtimeMin, row.cycles)
+        if (label) captions.push({ text: label, size: 12 })
+      }
+      captions.forEach((caption, index) => {
+        parts.push(plotLabel(middle.x, middle.y + index * (16 / k), k, caption.text, caption.size))
+      })
     }
     for (const fixture of doc.fixtures ?? []) parts.push(fixtureMarkup(fixture, ppm, k))
     for (const plant of doc.plants ?? []) parts.push(plantSvg(plant, ppm, k))
     for (const note of doc.notes ?? []) {
+      if (note.leader) {
+        const mark = noteLeader(note, note.leader, k)
+        if (mark) {
+          const ink = draft ? '#1c2822' : note.color || '#1c2822'
+          const [from, to] = mark.shaft
+          const pts = mark.head.map((point) => `${fmt(point.x)},${fmt(point.y)}`).join(' ')
+          parts.push(
+            `<line x1="${fmt(from.x)}" y1="${fmt(from.y)}" x2="${fmt(to.x)}" y2="${fmt(to.y)}" stroke="${xml(ink)}" stroke-width="${fmt(1.2 / k)}" stroke-linecap="round"/>`,
+          )
+          parts.push(`<polygon points="${pts}" fill="${xml(ink)}"/>`)
+        }
+      }
       parts.push(
         `<text x="${fmt(note.x)}" y="${fmt(note.y)}" fill="${xml(note.color || '#1c2822')}" font-size="${fmt(note.sizeM * ppm)}" font-family="sans-serif"${note.bold ? ' font-weight="700"' : ''}>${xml(note.text)}</text>`,
       )
     }
     for (const measure of doc.measures ?? []) parts.push(measureSvg(measure, ppm, k))
   }
-  if (layers.spray) {
+  if (layers.spray && layers.cover) {
     for (const head of doc.sprinklers) {
+      const wash = draft ? 'none' : layers.precip ? precipWash(precipAt(doc, analysis, head)) : 'rgba(47,122,72,0.18)'
       parts.push(
-        `<path d="${xml(coverPath(head, ppm, nozzleById(head.nozzleId)))}" fill="rgba(47,122,72,0.18)" stroke="#24633a" stroke-width="${fmt(1 / k)}"/>`,
+        `<path d="${xml(coverPath(head, ppm, nozzleById(head.nozzleId)))}" fill="${wash}" stroke="${draft ? '#1c2822' : '#24633a'}" stroke-width="${fmt(1 / k)}"/>`,
       )
     }
   }
   if (layers.pipes) {
     for (const segment of analysis.segments) {
       parts.push(
-        `<line x1="${fmt(segment.a.x)}" y1="${fmt(segment.a.y)}" x2="${fmt(segment.b.x)}" y2="${fmt(segment.b.y)}" stroke="${pipeColor(segment.odMm, segment.status)}" stroke-width="${fmt(pipeWeight(segment.role) / k)}" stroke-linecap="round"/>`,
+        `<line x1="${fmt(segment.a.x)}" y1="${fmt(segment.a.y)}" x2="${fmt(segment.b.x)}" y2="${fmt(segment.b.y)}" stroke="${draft ? '#1c2822' : segmentInk(analysis, segment)}" stroke-width="${fmt(pipeWeight(segment.role) / k)}" stroke-linecap="round"/>`,
+      )
+    }
+    for (const arrow of flowArrows(analysis.segments, doc.pxPerMeter, k)) {
+      const r = 5 / Math.max(k, 0.05)
+      const pts = `0,${fmt(-r)} ${fmt(r * 0.72)},${fmt(r * 0.55)} ${fmt(-r * 0.72)},${fmt(r * 0.55)}`
+      const ink = draft ? '#1c2822' : '#1f4d6e'
+      parts.push(
+        `<polygon data-flow="1" points="${pts}" fill="${ink}" stroke="${draft ? '#1c2822' : '#14364c'}" stroke-width="${fmt(0.8 / Math.max(k, 0.05))}" transform="translate(${fmt(arrow.x)} ${fmt(arrow.y)}) rotate(${fmt(arrow.rotationDeg)})"/>`,
       )
     }
     for (const tail of analysis.tails) {
       const pts = funnyPoints(tail.a, tail.b).map((point) => `${fmt(point.x)},${fmt(point.y)}`).join(' ')
       parts.push(
-        `<polyline points="${pts}" fill="none" stroke="#8a5a16" stroke-width="${fmt(2.2 / k)}" stroke-linecap="round"/>`,
+        `<polyline points="${pts}" fill="none" stroke="${draft ? '#1c2822' : '#8a5a16'}" stroke-width="${fmt(2.2 / k)}" stroke-linecap="round"/>`,
       )
     }
     for (const tag of pipeTags(analysis.segments, doc.pxPerMeter, k)) {
@@ -215,24 +276,69 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
         `<text x="${fmt(tag.x)}" y="${fmt(tag.y)}" fill="#1c2822" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle" transform="rotate(${fmt(tag.rotate)} ${fmt(tag.x)} ${fmt(tag.y)})">${xml(tag.text)}</text>`,
       )
     }
+    for (const tag of speedTags(analysis.segments, doc.pxPerMeter, k)) {
+      const fill = draft || !tag.hot ? '#1c2822' : '#8d2b1f'
+      parts.push(
+        `<text data-speed="1" x="${fmt(tag.x)}" y="${fmt(tag.y)}" fill="${fill}" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle" transform="rotate(${fmt(tag.rotate)} ${fmt(tag.x)} ${fmt(tag.y)})">${xml(tag.text)}</text>`,
+      )
+    }
+    for (const tag of lossTags(analysis.segments, doc.pxPerMeter, k)) {
+      parts.push(
+        `<text data-loss="1" x="${fmt(tag.x)}" y="${fmt(tag.y)}" fill="#1c2822" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle" transform="rotate(${fmt(tag.rotate)} ${fmt(tag.x)} ${fmt(tag.y)})">${xml(tag.text)}</text>`,
+      )
+    }
+    for (const mark of analysis.fittingMarks) parts.push(fittingMarkSvg(mark, k, draft))
   }
   if (layers.drip) {
     const ppm = doc.pxPerMeter && doc.pxPerMeter > 0 ? doc.pxPerMeter : DEFAULT_PPM
     for (const drip of doc.drips) {
       const pts = drip.points.map((p) => `${fmt(p.x)},${fmt(p.y)}`).join(' ')
+      const mark = analysis.marks.find((item) => item.kind === 'drip' && item.id === drip.id)
+      const stroke = draft ? '#1c2822' : mark ? stationInk(analysis.stations, mark.stationId) : '#6b3fa0'
+      const dash = drip.bare ? '' : ` stroke-dasharray="${fmt(7 / k)} ${fmt(5 / k)}"`
       parts.push(
-        `<polyline points="${pts}" fill="none" stroke="#6b3fa0" stroke-width="${fmt(2.2 / k)}" stroke-dasharray="${fmt(7 / k)} ${fmt(5 / k)}" stroke-linecap="round"/>`,
+        `<polyline points="${pts}" fill="none" stroke="${stroke}" stroke-width="${fmt(2.2 / k)}"${dash} stroke-linecap="round"/>`,
       )
+      if (drip.bare) continue
       for (const point of emitterPoints(drip.points, drip.spacingM, ppm)) {
-        parts.push(`<circle cx="${fmt(point.x)}" cy="${fmt(point.y)}" r="${fmt(2.4 / k)}" fill="#6b3fa0"/>`)
+        parts.push(`<circle cx="${fmt(point.x)}" cy="${fmt(point.y)}" r="${fmt(2.4 / k)}" fill="${stroke}"/>`)
       }
+    }
+    for (const tag of dripTags(doc.drips, doc.pxPerMeter, k)) {
+      parts.push(
+        `<text x="${fmt(tag.x)}" y="${fmt(tag.y)}" fill="#1c2822" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle" transform="rotate(${fmt(tag.rotate)} ${fmt(tag.x)} ${fmt(tag.y)})">${xml(tag.text)}</text>`,
+      )
+    }
+    for (const tag of dripFlowTags(doc.drips, doc.pxPerMeter, k)) {
+      parts.push(
+        `<text data-drip-flow="1" x="${fmt(tag.x)}" y="${fmt(tag.y)}" fill="#1c2822" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle" transform="rotate(${fmt(tag.rotate)} ${fmt(tag.x)} ${fmt(tag.y)})">${xml(tag.text)}</text>`,
+      )
     }
   }
   if (layers.spray) {
     for (const head of doc.sprinklers) {
       const r = 4.5 / k
-      const fill = head.nozzleId.startsWith('bub') ? '#2a6288' : '#fffdf8'
-      parts.push(`<circle cx="${fmt(head.x)}" cy="${fmt(head.y)}" r="${fmt(r)}" fill="${fill}" stroke="#1c2822" stroke-width="${fmt(1.6 / k)}"/>`)
+      const mark = analysis.marks.find((item) => item.kind === 'sprinkler' && item.id === head.id)
+      const ink = mark ? stationInk(analysis.stations, mark.stationId) : '#1c2822'
+      const fill = draft ? '#ffffff' : head.nozzleId.startsWith('bub') ? '#2a6288' : '#fffdf8'
+      parts.push(`<circle cx="${fmt(head.x)}" cy="${fmt(head.y)}" r="${fmt(r)}" fill="${fill}" stroke="${draft ? '#1c2822' : ink}" stroke-width="${fmt(1.6 / k)}"/>`)
+      const pressure = analysis.pressureMarks.find((item) => item.id === head.id)
+      if (pressure) {
+        const pressureInk = draft || !pressure.low ? '#1c2822' : '#8d2b1f'
+        parts.push(
+          `<text data-pressure="1" x="${fmt(pressure.x + 14 / k)}" y="${fmt(pressure.y)}" fill="${pressureInk}" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="start" dominant-baseline="middle">${xml(pressureLabel(pressure.bar))}</text>`,
+        )
+      }
+      if (layers.headInfo) {
+        parts.push(
+          `<text x="${fmt(head.x)}" y="${fmt(head.y + 22 / k)}" fill="#1c2822" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="700" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle">${xml(headCaption(head))}</text>`,
+        )
+      }
+      if (!mark) continue
+      const no = stationNo(analysis.stations, mark.stationId)
+      parts.push(
+        `<text x="${fmt(head.x)}" y="${fmt(head.y - 12 / k)}" fill="${ink}" font-size="${fmt(11 / k)}" font-weight="700" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle">${no}</text>`,
+      )
     }
   }
   if (layers.fittings) {
@@ -240,6 +346,11 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
       parts.push(
         `<line x1="${fmt(sleeve.a.x)}" y1="${fmt(sleeve.a.y)}" x2="${fmt(sleeve.b.x)}" y2="${fmt(sleeve.b.y)}" stroke="#5c564e" stroke-width="${fmt(7 / k)}" stroke-linecap="round"/>`,
         `<line x1="${fmt(sleeve.a.x)}" y1="${fmt(sleeve.a.y)}" x2="${fmt(sleeve.b.x)}" y2="${fmt(sleeve.b.y)}" stroke="#f4efe4" stroke-width="${fmt(2.4 / k)}" stroke-linecap="round"/>`,
+      )
+    }
+    for (const tag of sleeveTags(doc.sleeves ?? [], doc.pxPerMeter, k)) {
+      parts.push(
+        `<text x="${fmt(tag.x)}" y="${fmt(tag.y)}" fill="#1c2822" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle" transform="rotate(${fmt(tag.rotate)} ${fmt(tag.x)} ${fmt(tag.y)})">${xml(tag.text)}</text>`,
       )
     }
     for (const box of doc.boxes ?? []) {
@@ -257,14 +368,34 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
     }
     for (const valve of doc.valves) {
       const r = 5 / k
+      const no = stationNo(analysis.stations, valve.id)
+      const ink = no > 0 ? stationInk(analysis.stations, valve.id) : '#6b3fa0'
       parts.push(
-        `<polygon points="${fmt(valve.x)},${fmt(valve.y - r)} ${fmt(valve.x + r)},${fmt(valve.y)} ${fmt(valve.x)},${fmt(valve.y + r)} ${fmt(valve.x - r)},${fmt(valve.y)}" fill="#f7f3ea" stroke="#6b3fa0" stroke-width="${fmt(1.6 / k)}"/>`,
+        `<polygon points="${fmt(valve.x)},${fmt(valve.y - r)} ${fmt(valve.x + r)},${fmt(valve.y)} ${fmt(valve.x)},${fmt(valve.y + r)} ${fmt(valve.x - r)},${fmt(valve.y)}" fill="#f7f3ea" stroke="${ink}" stroke-width="${fmt(1.6 / k)}"/>`,
       )
+      if (no > 0) {
+        parts.push(
+          `<text x="${fmt(valve.x)}" y="${fmt(valve.y - 12 / k)}" fill="${ink}" font-size="${fmt(11 / k)}" font-weight="700" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle">${no}</text>`,
+        )
+      }
+      const station = analysis.stations.find((row) => row.id === valve.id)
+      if (layers.runtime && station) {
+        const label = runtimeLabel(station.runtimeMin, station.cycles)
+        if (label) parts.push(plotLabel(valve.x, valve.y + 16 / k, k, label, 11))
+      }
+      if (station && station.flowLph > 0) {
+        parts.push(
+          `<text data-valve-flow="1" x="${fmt(valve.x + 14 / k)}" y="${fmt(valve.y)}" fill="#1c2822" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="start" dominant-baseline="middle">${xml(valveFlowLabel(station.flowLph))}</text>`,
+        )
+      }
     }
     if (doc.source) {
       const s = 5 / k
       parts.push(
         `<rect x="${fmt(doc.source.x - s)}" y="${fmt(doc.source.y - s)}" width="${fmt(s * 2)}" height="${fmt(s * 2)}" fill="#1f6b45" stroke="#143c28" stroke-width="${fmt(1.4 / k)}"/>`,
+      )
+      parts.push(
+        `<text data-source="1" x="${fmt(doc.source.x)}" y="${fmt(doc.source.y - 16 / k)}" fill="#1c2822" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle">${xml(sourceLabel(doc.source))}</text>`,
       )
     }
   }
@@ -354,9 +485,10 @@ function specLines(doc: Doc, analysis: Analysis): SpecLine[] {
   pushTitle('Фитинги')
   if (analysis.fittings.length === 0) push('—')
   for (const row of analysis.fittings) push(row.name, `${row.count} шт.`)
-  if (analysis.programMin !== null) {
-    pushTitle('Программа')
-    push(analysis.stations.length > 0 ? 'Станции друг за другом' : 'Один запуск', `${num(analysis.programMin, 1)} мин`)
+  const table = programTable(doc, analysis)
+  if (table) {
+    pushTitle('Пульт')
+    for (const line of table.lines) push(line.name, line.when, line.note)
   }
   for (const warning of analysis.warnings) push('!', warning)
   return lines
@@ -446,7 +578,45 @@ function legendSvg(doc: Doc, analysis: Analysis, layers: SheetLayers, x: number,
     items.push({ swatch: `<line x1="0" y1="6" x2="12" y2="6" stroke="#1c2822" stroke-width="4" stroke-linecap="round"/>`, label: 'Магистраль' })
   }
   if (layers.pipes && analysis.segments.some((segment) => segment.role === 'zone')) {
-    items.push({ swatch: `<line x1="0" y1="6" x2="12" y2="6" stroke="#2f6f97" stroke-width="2" stroke-linecap="round"/>`, label: 'Зональная' })
+    const stationIds: string[] = []
+    for (const segment of analysis.segments) {
+      if (segment.role !== 'zone' || segment.status !== 'ok' || !segment.stationId) continue
+      if (!stationIds.includes(segment.stationId)) stationIds.push(segment.stationId)
+    }
+    if (stationIds.length === 0) {
+      items.push({ swatch: `<line x1="0" y1="6" x2="12" y2="6" stroke="#2f6f97" stroke-width="2" stroke-linecap="round"/>`, label: 'Зональная' })
+    } else {
+      for (const id of stationIds) {
+        const station = analysis.stations.find((item) => item.id === id)
+        const valve = doc.valves.find((item) => item.id === id)
+        const box = valve?.boxId ? (doc.boxes ?? []).find((item) => item.id === valve.boxId) : undefined
+        const kinds = new Set(analysis.marks.filter((item) => item.stationId === id).map((item) => item.kind))
+        const type = kinds.has('sprinkler') && kinds.has('drip') ? 'дождевание и капля' : kinds.has('drip') ? 'капля' : kinds.has('sprinkler') ? 'дождевание' : ''
+        const bits = [`Станция ${stationNo(analysis.stations, id)}`]
+        if (station?.name) bits.push(station.name)
+        if (box) bits.push(box.name)
+        if (type) bits.push(type)
+        if (station) bits.push(`${Math.round(station.flowLph)} л/ч`)
+        items.push({
+          swatch: `<line x1="0" y1="6" x2="12" y2="6" stroke="${stationInk(analysis.stations, id)}" stroke-width="3" stroke-linecap="round"/>`,
+          label: bits.join(' · '),
+        })
+      }
+    }
+  }
+  if (layers.landscape) {
+    for (const zone of analysis.zones) {
+      const swatch = layers.precip ? precipWash(zone.precipMmH) : surfaceOf(zone.kind).fill
+      items.push({
+        swatch: `<rect width="12" height="12" fill="${swatch}" stroke="#1c2822"/>`,
+        label: `${zone.name} · ${num(zone.areaM2)} м² · ${num(zone.precipMmH)} мм/ч`,
+      })
+    }
+  }
+  if (layers.precip) {
+    items.push({ swatch: `<rect width="12" height="12" fill="rgba(86,146,196,0.48)" stroke="#1c2822"/>`, label: 'Мало, до 8 мм/ч' })
+    items.push({ swatch: `<rect width="12" height="12" fill="rgba(78,156,82,0.46)" stroke="#1c2822"/>`, label: 'Норма, 8–22 мм/ч' })
+    items.push({ swatch: `<rect width="12" height="12" fill="rgba(196,84,62,0.46)" stroke="#1c2822"/>`, label: 'Много, больше 22 мм/ч' })
   }
   if (layers.pipes && analysis.tails.length) {
     items.push({ swatch: `<path d="M0 6 Q3 2 6 6 T12 6" fill="none" stroke="#8a5a16" stroke-width="1.6"/>`, label: 'Гибкий хвост' })
@@ -532,9 +702,44 @@ function gridSvg(bounds: { minX: number; minY: number; maxX: number; maxY: numbe
   return parts.join('')
 }
 
+function fittingMarkSvg(mark: FittingMark, k: number, draft: boolean): string {
+  const ink = draft ? '#1c2822' : '#243028'
+  const shape = fittingShape(mark.kind, k)
+  const width = fmt(1.6 / Math.max(k, 0.05))
+  const bits: string[] = []
+  for (const line of shape.lines) {
+    bits.push(
+      `<line x1="${fmt(line.x1)}" y1="${fmt(line.y1)}" x2="${fmt(line.x2)}" y2="${fmt(line.y2)}" stroke="${ink}" stroke-width="${width}" stroke-linecap="round"/>`,
+    )
+  }
+  if (shape.dot !== null) {
+    bits.push(`<circle cx="0" cy="0" r="${fmt(shape.dot)}" fill="${draft ? '#ffffff' : '#f7f3ea'}" stroke="${ink}" stroke-width="${width}"/>`)
+  }
+  if (shape.poly) {
+    const pts = shape.poly.map((point) => `${fmt(point.x)},${fmt(point.y)}`).join(' ')
+    bits.push(`<polygon points="${pts}" fill="${ink}"/>`)
+  }
+  return `<g data-fitting="${mark.kind}" transform="translate(${fmt(mark.x)} ${fmt(mark.y)}) rotate(${fmt(mark.rotationDeg)})">${bits.join('')}</g>`
+}
+
+function plotLabel(x: number, y: number, k: number, label: string, size: number): string {
+  return `<text x="${fmt(x)}" y="${fmt(y)}" fill="#1c2822" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(size / k)}" font-weight="700" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle">${xml(label)}</text>`
+}
+
 function patterns(ppm: number): string {
   const body = HATCHES.map((item) => hatchPatternMarkup(item.id, ppm, `sheet-${item.id}`)).join('')
   return `<defs>${body}</defs>`
+}
+
+function precipAt(doc: Doc, analysis: Analysis, point: Point): number | null {
+  const zone = doc.zones.find((item) => pointInZone(point, item.points, item.holes))
+  if (!zone) return null
+  return analysis.zones.find((item) => item.id === zone.id)?.precipMmH ?? null
+}
+
+function segmentInk(analysis: Analysis, segment: Analysis['segments'][number]): string {
+  if (segment.role === 'zone' && segment.status === 'ok' && segment.stationId) return stationInk(analysis.stations, segment.stationId)
+  return pipeColor(segment.odMm, segment.status)
 }
 
 function pipeColor(od: number | null, status: string): string {

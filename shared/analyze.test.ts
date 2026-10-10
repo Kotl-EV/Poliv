@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { analyze } from './analyze.ts'
+import { analyze, stationInk, stationNo } from './analyze.ts'
+import { dripRingPoints } from './drip.ts'
 import { emptyDoc, parseDoc } from './doc.ts'
 import { exampleDoc } from './example.ts'
 import { headLossM, velocityMs } from './pipes.ts'
@@ -16,6 +17,7 @@ test('example network on SDR 11 picks PE 25 at the source and PE 20 after the fi
   assert.ok(main)
   assert.equal(main.flowLph, 1440)
   assert.equal(main.role, 'main')
+  assert.equal(main.downB, true)
   assert.equal(main.odMm, 25)
   assert.equal(main.idMm, 20.4)
   assert.ok((main.velocity ?? 0) <= 1.5)
@@ -36,6 +38,10 @@ test('example network on SDR 11 picks PE 25 at the source and PE 20 after the fi
   assert.equal(analysis.fittings.find((item) => item.name === 'Крестовина ПЭ 25×20×20×20')?.count, 1)
   assert.equal(analysis.fittings.find((item) => item.name === 'Тройник ПЭ 20')?.count, 1)
   assert.equal(analysis.fittings.find((item) => item.name === 'Угол ПЭ 20')?.count, 1)
+  assert.equal(analysis.fittingMarks.length, 3)
+  assert.equal(analysis.fittingMarks.filter((item) => item.kind === 'cross').length, 1)
+  assert.equal(analysis.fittingMarks.filter((item) => item.kind === 'tee').length, 1)
+  assert.equal(analysis.fittingMarks.filter((item) => item.kind === 'elbow').length, 1)
   const runtime = 6 / (1440 / 116.16) * 60
   assert.equal(analysis.zones[0].doseMm, 6)
   assert.equal(analysis.zones[0].climate, 'open')
@@ -159,6 +165,54 @@ test('valves in one box keep their own stations when each zone pipe names a valv
   assert.equal(analysis.warnings.some((item) => item.includes('одной точке')), false)
 })
 
+test('flow runs toward the head when the pipe was drawn backwards', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 20
+  doc.zones = []
+  doc.valves = []
+  doc.source = { x: 0, y: 0, pressureBar: 3, flowLimitLph: null }
+  doc.sprinklers = [{ id: 's', nozzleId: 'fan180', x: 200, y: 0, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 360 }]
+  doc.pipes = [{ id: 'run', points: [{ x: 200, y: 0 }, { x: 0, y: 0 }] }]
+  const back = analyze(doc).segments[0]
+  assert.equal(back?.flowLph, 360)
+  assert.equal(back?.downB, false)
+  doc.pipes = [{ id: 'run', points: [{ x: 0, y: 0 }, { x: 200, y: 0 }] }]
+  assert.equal(analyze(doc).segments[0]?.downB, true)
+})
+
+test('a fed head keeps the pressure left in the pipe and a loose head does not', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 20
+  doc.zones = []
+  doc.valves = []
+  doc.source = { x: 0, y: 0, pressureBar: 3, flowLimitLph: null }
+  doc.sprinklers = [
+    { id: 's', nozzleId: 'fan180', x: 200, y: 0, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 360 },
+    { id: 'loose', nozzleId: 'fan180', x: 800, y: 800, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 360 },
+    { id: 'tail', nozzleId: 'fan180', x: 216, y: 0, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 360 },
+  ]
+  doc.pipes = [{ id: 'run', points: [{ x: 0, y: 0 }, { x: 200, y: 0 }] }]
+  const analysis = analyze(doc)
+  const fed = analysis.pressureMarks.find((item) => item.id === 's')
+  assert.ok(fed)
+  assert.equal(fed.x, 200)
+  assert.equal(fed.y, 0)
+  assert.equal(fed.low, false)
+  assert.ok(fed.bar < 3 && fed.bar > 2)
+  assert.equal(analysis.pressureMarks.some((item) => item.id === 'loose'), false)
+  const tail = analysis.pressureMarks.find((item) => item.id === 'tail')
+  assert.equal(tail?.x, 216)
+  assert.equal(tail?.low, false)
+  doc.pxPerMeter = null
+  assert.equal(analyze(doc).pressureMarks.some((item) => item.id === 's'), false)
+  doc.pxPerMeter = 20
+  doc.source = { x: 0, y: 0, pressureBar: 1.5, flowLimitLph: null }
+  doc.sprinklers = [{ id: 's', nozzleId: 'fan180', x: 200, y: 0, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 360 }]
+  const low = analyze(doc).pressureMarks.find((item) => item.id === 's')
+  assert.equal(low?.low, true)
+  assert.ok((low?.bar ?? 2) < 2)
+})
+
 test('a hydrant on a dead end replaces the cap', () => {
   const doc = emptyDoc()
   doc.pxPerMeter = 20
@@ -171,6 +225,7 @@ test('a hydrant on a dead end replaces the cap', () => {
   const analysis = analyze(doc)
   assert.equal(analysis.fittings.find((item) => item.name === 'Гидрант')?.count, 1)
   assert.equal(analysis.fittings.some((item) => item.name.startsWith('Заглушка')), false)
+  assert.equal(analysis.fittingMarks.length, 0)
 })
 
 test('a dead end gets a cap and a straight joint of one size does not', () => {
@@ -182,6 +237,63 @@ test('a dead end gets a cap and a straight joint of one size does not', () => {
   doc.pipes = [{ id: 'run', points: [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }] }]
   const analysis = analyze(doc)
   assert.deepEqual(analysis.fittings, [{ name: 'Заглушка ПЭ 20', count: 1 }])
+  assert.equal(analysis.fittingMarks.length, 1)
+  assert.equal(analysis.fittingMarks[0].kind, 'cap')
+  assert.equal(analysis.fittingMarks[0].x, 100)
+  assert.equal(analysis.fittingMarks[0].y, 0)
+  assert.equal(analysis.fittingMarks[0].name, 'Заглушка ПЭ 20')
+})
+
+test('a bare supply and a branch feed two emitter rings with one start', () => {
+  const doc = exampleDoc()
+  doc.zones = []
+  doc.sprinklers = []
+  doc.valves = []
+  doc.source = { x: 0, y: 0, pressureBar: 3, flowLimitLph: null }
+  doc.pxPerMeter = 50
+  doc.pipes = [{ id: 'run', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] }]
+  const ring = dripRingPoints({ x: 160, y: 40 }, { x: 160, y: 80 })
+  const second = dripRingPoints({ x: 100, y: 40 }, { x: 60, y: 40 })
+  assert.ok(ring && second)
+  doc.drips = [
+    { id: 'supply', points: [{ x: 100, y: 0 }, { x: 100, y: 40 }], spacingM: 0.3, emitterLph: 2, bare: true },
+    { id: 'branch', points: [{ x: 100, y: 40 }, { x: 160, y: 40 }], spacingM: 0.3, emitterLph: 2, bare: true },
+    { id: 'ring', points: ring!, spacingM: 0.3, emitterLph: 4 },
+    { id: 'second', points: second!, spacingM: 0.3, emitterLph: 2 },
+  ]
+  const analysis = analyze(doc)
+  assert.equal(analysis.issues.some((item) => item.kind === 'drip'), false)
+  assert.equal(analysis.drips.emitters, 17 + 17)
+  assert.equal(analysis.drips.flowLph, 17 * 4 + 17 * 2)
+  assert.equal(analysis.connectedFlowLph, 17 * 4 + 17 * 2)
+  assert.equal(analysis.fittings.find((item) => item.name === 'Старт капельной трубки')?.count, 1)
+})
+
+test('a bare tube that misses the pipe is loose and adds no flow', () => {
+  const doc = exampleDoc()
+  doc.zones = []
+  doc.sprinklers = []
+  doc.valves = []
+  doc.source = { x: 0, y: 0, pressureBar: 3, flowLimitLph: null }
+  doc.pipes = [{ id: 'run', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] }]
+  doc.drips = [{ id: 'loose', points: [{ x: 400, y: 400 }, { x: 440, y: 400 }], spacingM: 0.3, emitterLph: 2, bare: true }]
+  const analysis = analyze(doc)
+  assert.equal(analysis.connectedFlowLph, 0)
+  assert.equal(analysis.issues.some((item) => item.kind === 'drip' && item.id === 'loose'), true)
+  assert.equal(analysis.fittings.some((item) => item.name === 'Старт капельной трубки'), false)
+})
+
+test('a valve paints its zone and numbers the heads', () => {
+  const doc = exampleDoc()
+  doc.valves = [{ id: 'v1', name: 'Клапан 1', x: 200, y: 300 }]
+  const analysis = analyze(doc)
+  const zone = analysis.segments.find((item) => item.role === 'zone' && item.status === 'ok')
+  assert.equal(zone?.stationId, 'v1')
+  assert.equal(analysis.marks.filter((item) => item.kind === 'sprinkler').length, 4)
+  assert.equal(stationNo(analysis.stations, 'v1'), 1)
+  assert.equal(stationInk(analysis.stations, 'v1'), '#c23b22')
+  const main = analysis.segments.find((item) => item.role === 'main' && item.a.x === 40)
+  assert.equal(main?.stationId === 'v1' || main?.stationId === '', true)
 })
 
 test('drip tubing adds emitters, flow and a start fitting', () => {

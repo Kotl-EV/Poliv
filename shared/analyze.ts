@@ -1,12 +1,25 @@
 import { climateFactor, cyclePlan, defaultDose, intakeMmH, SNAP_PX } from './doc.ts'
-import { dist, pointInZone, zoneAreaPx } from './geom.ts'
+import { bearingDeg, closestOnSegment, dist, pointInZone, zoneAreaPx } from './geom.ts'
 import { isDripKind } from './landscape.ts'
 import { nozzleById } from './nozzles.ts'
-import { barToHeadM, headLossM, MIN_SPRINKLER_BAR, pickPipe, seriesById } from './pipes.ts'
-import type { Analysis, Doc, Drip, PipeRole, Point, SegmentResult, Valve, Zone } from './types.ts'
+import { barToHeadM, headLossM, headMToBar, MIN_SPRINKLER_BAR, pickPipe, seriesById } from './pipes.ts'
+import type { Analysis, Doc, Drip, FittingMark, PipeRole, Point, PressureMark, SegmentResult, Valve, Zone } from './types.ts'
 
 /** Гибкий хвост дотягивается до головки не дальше этого расстояния. */
 const FUNNY_M = 1
+
+const STATION_INKS = ['#c23b22', '#1f6f97', '#2c7a4b', '#b86a09', '#6b3fa0', '#0f6e6e', '#8a4b2f', '#3d4f8a']
+
+export function stationNo(stations: { id: string }[], stationId: string): number {
+  const index = stations.findIndex((item) => item.id === stationId)
+  return index < 0 ? 0 : index + 1
+}
+
+export function stationInk(stations: { id: string }[], stationId: string): string {
+  const index = stations.findIndex((item) => item.id === stationId)
+  if (index < 0) return '#243028'
+  return STATION_INKS[index % STATION_INKS.length]
+}
 
 type Node = { id: number; x: number; y: number; points: Point[] }
 
@@ -194,7 +207,7 @@ function nozzleRows(doc: Doc): Analysis['nozzles'] {
   return [...map.values()]
 }
 
-function blank(doc: Doc, warnings: string[], totalFlowLph: number): Analysis {
+function blank(doc: Doc, warnings: string[], totalFlowLph: number, issues: Analysis['issues']): Analysis {
   const zones = zoneRows(doc)
   return {
     segments: [],
@@ -210,9 +223,13 @@ function blank(doc: Doc, warnings: string[], totalFlowLph: number): Analysis {
     stations: [],
     drips: dripSummary(doc),
     fittings: [],
+    fittingMarks: [],
     tails: [],
     trench: trenchRow(doc),
     warnings,
+    issues,
+    marks: [],
+    pressureMarks: [],
   }
 }
 
@@ -230,6 +247,7 @@ function trenchRow(doc: Doc): Analysis['trench'] {
 
 export function analyze(doc: Doc): Analysis {
   const warnings: string[] = []
+  const issues: Analysis['issues'] = []
   if (!doc.pxPerMeter) warnings.push('Задайте масштаб двумя точками, чтобы площади и длины считались в метрах.')
 
   const totalFlowLph = doc.sprinklers.reduce((sum, item) => sum + item.flowLph, 0) + doc.drips.reduce((sum, item) => sum + dripMeasure(item, doc.pxPerMeter).flowLph, 0)
@@ -243,8 +261,11 @@ export function analyze(doc: Doc): Analysis {
     if (doc.drips.length) warnings.push(doc.drips.length === 1 ? 'Капельная трубка не стоит на трубе и в расход сети не входит.' : `${doc.drips.length} капельных трубок не стоят на трубе и в расход сети не входят.`)
     if (doc.valves.length) warnings.push(doc.valves.length === 1 ? 'Клапан не стоит на трубе.' : `${doc.valves.length} клапанов не стоят на трубе.`)
     if (doc.source) warnings.push('Поставьте источник на трубу.')
+    for (const sprinkler of doc.sprinklers) issues.push({ text: 'Дождеватель не стоит на трубе.', kind: 'sprinkler', id: sprinkler.id })
+    for (const drip of doc.drips) issues.push({ text: 'Капельная трубка не стоит на трубе.', kind: 'drip', id: drip.id })
+    for (const valve of doc.valves) issues.push({ text: 'Клапан не стоит на трубе.', kind: 'valve', id: valve.id })
     pushDoseWarnings(doc, warnings)
-    return blank(doc, warnings, totalFlowLph)
+    return blank(doc, warnings, totalFlowLph, issues)
   }
 
   const { nodes, index } = cluster(flat)
@@ -285,6 +306,7 @@ export function analyze(doc: Doc): Analysis {
     const hit = hitchPoint(sprinkler, nodes, doc.pxPerMeter)
     if (!hit) {
       loose += 1
+      issues.push({ text: 'Дождеватель не стоит на трубе.', kind: 'sprinkler', id: sprinkler.id })
       continue
     }
     demand.set(hit.node.id, (demand.get(hit.node.id) ?? 0) + sprinkler.flowLph)
@@ -294,15 +316,18 @@ export function analyze(doc: Doc): Analysis {
   }
   if (loose) warnings.push(loose === 1 ? 'Один дождеватель не стоит на трубе и в расход сети не входит.' : `${loose} дождевателей не стоят на трубе и в расход сети не входят.`)
 
+  const feed = dripFeed(doc, nodes)
   let looseDrip = 0
   for (const drip of doc.drips) {
-    const hit = nearest(drip.points[0], nodes)
+    const node = feed.nodeOf.get(drip.id)
     const flow = dripMeasure(drip, doc.pxPerMeter).flowLph
-    if (!hit || hit.distance > SNAP_PX || flow <= 0) {
+    const reached = node !== undefined
+    if (!reached || (drip.bare !== true && flow <= 0)) {
       looseDrip += 1
+      issues.push({ text: 'Капельная трубка не стоит на трубе.', kind: 'drip', id: drip.id })
       continue
     }
-    demand.set(hit.node.id, (demand.get(hit.node.id) ?? 0) + flow)
+    if (flow > 0) demand.set(node, (demand.get(node) ?? 0) + flow)
   }
   if (looseDrip) warnings.push(looseDrip === 1 ? 'Капельная трубка не стоит на трубе и в расход сети не входит.' : `${looseDrip} капельных трубок не стоят на трубе и в расход сети не входят.`)
 
@@ -321,6 +346,8 @@ export function analyze(doc: Doc): Analysis {
   if (!doc.source || sourceId === null) warnings.push('Поставьте источник на трубу.')
 
   const segments: SegmentResult[] = []
+  let marks: Analysis['marks'] = []
+  let pressureMarks: PressureMark[] = []
   const pipeTotals = new Map<number, { odMm: number; name: string; lengthM: number }>()
   let connectedFlowLph = 0
   let stations: Analysis['stations'] = []
@@ -372,6 +399,7 @@ export function analyze(doc: Doc): Analysis {
       const hit = nearest(valveAnchor(doc, valve), nodes)
       if (!hit || hit.distance > SNAP_PX || !seen.has(hit.node.id)) {
         looseValve += 1
+        issues.push({ text: 'Клапан не стоит на трубе.', kind: 'valve', id: valve.id })
         continue
       }
       const list = valveGroups.get(hit.node.id) ?? []
@@ -439,7 +467,7 @@ export function analyze(doc: Doc): Analysis {
     const rootParts = walkParts(sourceId)
     connectedFlowLph = designFlow(rootParts)
 
-    stations = withStationRuntime(doc, nodes, seen, stationOf, doc.valves.flatMap((valve) => {
+    stations = withStationRuntime(doc, nodes, seen, stationOf, feed, doc.valves.flatMap((valve) => {
       const hit = nearest(valveAnchor(doc, valve), nodes)
       if (!hit || !seen.has(hit.node.id)) return []
       const owns = valveAt.get(hit.node.id) === valve.id || [...stationOf.values()].includes(valve.id)
@@ -474,12 +502,15 @@ export function analyze(doc: Doc): Analysis {
         const residual = loss === null || start === undefined ? null : start - loss
         if (residual !== null) headAt.set(child, residual)
         sized.add(edge.key)
+        const childNode = nodes[child]
+        const downB = !childNode || dist(edge.p2, childNode) <= dist(edge.p1, childNode)
         segments.push({
           pipeId: edge.pipeId,
           a: edge.p1,
           b: edge.p2,
           lengthM,
           flowLph: flow,
+          downB,
           odMm: picked.pipe.odMm,
           idMm: picked.pipe.idMm,
           name: picked.pipe.name,
@@ -488,6 +519,7 @@ export function analyze(doc: Doc): Analysis {
           residualHeadM: residual,
           status: 'ok',
           role: roleOf(edge.pipeId, stationOf.get(current) ?? '', stationOf.get(child) ?? ''),
+          stationId: stationOf.get(child) || stationOf.get(current) || '',
         })
         order.push(child)
       }
@@ -501,6 +533,7 @@ export function analyze(doc: Doc): Analysis {
       segments.push(segment(doc, edge, null, null, status, roleOf(edge.pipeId, '', '')))
     }
     if (hanging) warnings.push('Часть труб не соединена с источником.')
+    marks = stationMarks(doc, nodes, seen, stationOf, feed)
 
     for (const [nodeId, flow] of demand) {
       if (flow <= 0 || !headAt.has(nodeId)) continue
@@ -510,6 +543,20 @@ export function analyze(doc: Doc): Analysis {
     if (minResidualHeadM !== null && minResidualHeadM < barToHeadM(MIN_SPRINKLER_BAR) - 1e-6) {
       warnings.push('На дальнем дождевателе после потерь в трубах остаётся меньше 2 бар.')
     }
+    for (const sprinkler of doc.sprinklers) {
+      const hit = hitchPoint(sprinkler, nodes, doc.pxPerMeter)
+      if (!hit || !seen.has(hit.node.id)) continue
+      const head = headAt.get(hit.node.id)
+      if (head === undefined) continue
+      const raw = headMToBar(head)
+      pressureMarks.push({
+        id: sprinkler.id,
+        x: sprinkler.x,
+        y: sprinkler.y,
+        bar: Math.round(raw * 10) / 10,
+        low: raw < MIN_SPRINKLER_BAR - 1e-6,
+      })
+    }
   }
 
   if (doc.source?.flowLimitLph && connectedFlowLph > doc.source.flowLimitLph + 1e-6) {
@@ -518,6 +565,7 @@ export function analyze(doc: Doc): Analysis {
 
   pushDoseWarnings(doc, warnings)
   const zones = zoneRows(doc)
+  const fitted = fittingsOf(doc, nodes, segments, sourceId, feed)
   return {
     segments,
     pipes: [...pipeTotals.values()].sort((a, b) => a.odMm - b.odMm),
@@ -531,10 +579,14 @@ export function analyze(doc: Doc): Analysis {
     clockMin: clockMinutes(zones, stations),
     stations,
     drips: dripSummary(doc),
-    fittings: fittingsOf(doc, nodes, segments, sourceId),
+    fittings: fitted.rows,
+    fittingMarks: fitted.marks,
     tails,
     trench: trenchRow(doc),
     warnings: unique(warnings),
+    issues,
+    marks,
+    pressureMarks,
   }
 }
 
@@ -543,6 +595,7 @@ function withStationRuntime(
   nodes: Node[],
   seen: Set<number>,
   stationOf: Map<number, string>,
+  feed: DripFeed,
   stations: { id: string; name: string; flowLph: number }[],
 ): Analysis['stations'] {
   const zones = zoneRows(doc)
@@ -561,9 +614,9 @@ function withStationRuntime(
   }
   for (const drip of doc.drips) {
     if (dripMeasure(drip, doc.pxPerMeter).flowLph <= 0) continue
-    const hit = nearest(drip.points[0], nodes)
-    if (!hit || hit.distance > SNAP_PX || !seen.has(hit.node.id)) continue
-    take(centroid(drip.points), stationOf.get(hit.node.id))
+    const nodeId = feed.nodeOf.get(drip.id)
+    if (nodeId === undefined || !seen.has(nodeId)) continue
+    take(centroid(drip.points), stationOf.get(nodeId))
   }
   const byId = new Map(zones.map((zone) => [zone.id, zone]))
   return stations.map((station) => {
@@ -605,6 +658,7 @@ function segment(doc: Doc, edge: Edge, flow: number | null, name: string | null,
     residualHeadM: null,
     status,
     role,
+    stationId: '',
   }
 }
 
@@ -635,8 +689,102 @@ export function dripMeasure(drip: Drip, pxPerMeter: number | null): { lengthM: n
   for (let i = 0; i < drip.points.length - 1; i++) lengthPx += dist(drip.points[i], drip.points[i + 1])
   if (!pxPerMeter) return { lengthM: null, emitters: 0, flowLph: 0 }
   const lengthM = lengthPx / pxPerMeter
+  if (drip.bare) return { lengthM, emitters: 0, flowLph: 0 }
   const emitters = Math.max(1, Math.round(lengthM / drip.spacingM))
   return { lengthM, emitters, flowLph: emitters * drip.emitterLph }
+}
+
+type DripFeed = {
+  nodeOf: Map<string, number>
+  onPipe: Set<string>
+  rootOf: Map<string, string>
+}
+
+function polylinesTouch(a: Point[], b: Point[]): boolean {
+  for (const point of a) {
+    for (let i = 0; i < b.length - 1; i++) {
+      if (closestOnSegment(point, b[i], b[i + 1]).distance <= SNAP_PX) return true
+    }
+  }
+  for (const point of b) {
+    for (let i = 0; i < a.length - 1; i++) {
+      if (closestOnSegment(point, a[i], a[i + 1]).distance <= SNAP_PX) return true
+    }
+  }
+  return false
+}
+
+function pipeTouch(drip: Drip, nodes: Node[]): number | null {
+  let best: { id: number; distance: number } | null = null
+  for (const point of drip.points) {
+    const hit = nearest(point, nodes)
+    if (!hit || hit.distance > SNAP_PX) continue
+    if (!best || hit.distance < best.distance) best = { id: hit.node.id, distance: hit.distance }
+  }
+  return best?.id ?? null
+}
+
+/** Капля достаёт до трубы сама или через цепочку трубок. Корень — трубка, которая стоит на узле. */
+function dripFeed(doc: Doc, nodes: Node[]): DripFeed {
+  const onPipe = new Map<string, number>()
+  for (const drip of doc.drips) {
+    const node = pipeTouch(drip, nodes)
+    if (node !== null) onPipe.set(drip.id, node)
+  }
+  const touch = new Map<string, string[]>()
+  for (let i = 0; i < doc.drips.length; i++) {
+    for (let j = i + 1; j < doc.drips.length; j++) {
+      if (!polylinesTouch(doc.drips[i].points, doc.drips[j].points)) continue
+      const left = touch.get(doc.drips[i].id) ?? []
+      left.push(doc.drips[j].id)
+      touch.set(doc.drips[i].id, left)
+      const right = touch.get(doc.drips[j].id) ?? []
+      right.push(doc.drips[i].id)
+      touch.set(doc.drips[j].id, right)
+    }
+  }
+  const nodeOf = new Map<string, number>()
+  const rootOf = new Map<string, string>()
+  const queue = [...onPipe.keys()]
+  for (const id of queue) {
+    nodeOf.set(id, onPipe.get(id)!)
+    rootOf.set(id, id)
+  }
+  for (let i = 0; i < queue.length; i++) {
+    const id = queue[i]
+    for (const next of touch.get(id) ?? []) {
+      if (rootOf.has(next)) continue
+      rootOf.set(next, rootOf.get(id)!)
+      nodeOf.set(next, nodeOf.get(id)!)
+      queue.push(next)
+    }
+  }
+  return { nodeOf, onPipe: new Set(onPipe.keys()), rootOf }
+}
+
+function stationMarks(
+  doc: Doc,
+  nodes: Node[],
+  seen: Set<number>,
+  stationOf: Map<number, string>,
+  feed: DripFeed,
+): Analysis['marks'] {
+  const marks: Analysis['marks'] = []
+  for (const sprinkler of doc.sprinklers) {
+    const hit = hitchPoint(sprinkler, nodes, doc.pxPerMeter)
+    if (!hit || !seen.has(hit.node.id)) continue
+    const stationId = stationOf.get(hit.node.id) ?? ''
+    if (!stationId) continue
+    marks.push({ id: sprinkler.id, kind: 'sprinkler', stationId })
+  }
+  for (const drip of doc.drips) {
+    const nodeId = feed.nodeOf.get(drip.id)
+    if (nodeId === undefined || !seen.has(nodeId)) continue
+    const stationId = stationOf.get(nodeId) ?? ''
+    if (!stationId) continue
+    marks.push({ id: drip.id, kind: 'drip', stationId })
+  }
+  return marks
 }
 
 function dripSummary(doc: Doc): Analysis['drips'] {
@@ -680,9 +828,16 @@ function designFlow(parts: Map<string, number>): number {
   return hasStation ? open + largest : open
 }
 
-function fittingsOf(doc: Doc, nodes: Node[], segments: SegmentResult[], sourceId: number | null): Analysis['fittings'] {
+function fittingsOf(
+  doc: Doc,
+  nodes: Node[],
+  segments: SegmentResult[],
+  sourceId: number | null,
+  feed: DripFeed,
+): { rows: Analysis['fittings']; marks: FittingMark[] } {
   const counts = new Map<string, number>()
   const add = (name: string) => counts.set(name, (counts.get(name) ?? 0) + 1)
+  const marks: FittingMark[] = []
   const arms = new Map<number, { node: number; od: number }[]>()
   for (const segment of segments) {
     if (segment.status !== 'ok' || segment.odMm === null) continue
@@ -714,9 +869,22 @@ function fittingsOf(doc: Doc, nodes: Node[], segments: SegmentResult[], sourceId
   const dripNodes = new Set<number>()
   let dripStarts = 0
   for (const drip of doc.drips) {
-    const hit = nearest(drip.points[0], nodes)
-    if (!hit || hit.distance > SNAP_PX || dripMeasure(drip, doc.pxPerMeter).flowLph <= 0) continue
-    dripNodes.add(hit.node.id)
+    if (!feed.onPipe.has(drip.id)) continue
+    const node = feed.nodeOf.get(drip.id)
+    if (node === undefined) continue
+    const own = dripMeasure(drip, doc.pxPerMeter).flowLph
+    let feeds = own > 0
+    if (!feeds) {
+      for (const other of doc.drips) {
+        if (other.id === drip.id || feed.onPipe.has(other.id)) continue
+        if (feed.rootOf.get(other.id) !== drip.id) continue
+        if (dripMeasure(other, doc.pxPerMeter).flowLph <= 0) continue
+        feeds = true
+        break
+      }
+    }
+    if (!feeds) continue
+    dripNodes.add(node)
     dripStarts += 1
   }
   if (dripStarts) counts.set('Старт капельной трубки', dripStarts)
@@ -724,24 +892,41 @@ function fittingsOf(doc: Doc, nodes: Node[], segments: SegmentResult[], sourceId
   for (const [nodeId, list] of arms) {
     const node = nodes[nodeId]
     if (!node) continue
+    const place = (kind: FittingMark['kind'], name: string, rotationDeg: number) => {
+      add(name)
+      marks.push({ x: node.x, y: node.y, rotationDeg, kind, name })
+    }
     if (list.length === 1) {
       if (nodeId === sourceId || sprinklerNodes.has(nodeId) || dripNodes.has(nodeId) || hydrantNodes.has(nodeId)) continue
-      add(`Заглушка ПЭ ${list[0].od}`)
+      const other = nodes[list[0].node]
+      place('cap', `Заглушка ПЭ ${list[0].od}`, other ? bearingDeg(node, other) : 0)
       continue
     }
     if (list.length === 2) {
       const [first, second] = list
       const turn = angleDeg(nodes[first.node], node, nodes[second.node])
       if (first.od === second.od && Math.abs(turn - 180) <= 15) continue
-      if (first.od === second.od) add(`Угол ПЭ ${first.od}`)
-      else add(`Переход ПЭ ${Math.max(first.od, second.od)}×${Math.min(first.od, second.od)}`)
+      const aim = bisectorDeg(node, nodes[first.node], nodes[second.node])
+      if (first.od === second.od) place('elbow', `Угол ПЭ ${first.od}`, aim)
+      else place('reducer', `Переход ПЭ ${Math.max(first.od, second.od)}×${Math.min(first.od, second.od)}`, aim)
       continue
     }
-    const kind = list.length === 3 ? 'Тройник' : list.length === 4 ? 'Крестовина' : 'Узел'
-    add(`${kind} ${sizeLabel(list.map((item) => item.od))}`)
+    const word = list.length === 3 ? 'Тройник' : list.length === 4 ? 'Крестовина' : 'Узел'
+    const kind = list.length === 3 ? 'tee' : list.length === 4 ? 'cross' : 'node'
+    place(kind, `${word} ${sizeLabel(list.map((item) => item.od))}`, 0)
   }
 
-  return [...counts.entries()].map(([name, count]) => ({ name, count }))
+  return { rows: [...counts.entries()].map(([name, count]) => ({ name, count })), marks }
+}
+
+function bisectorDeg(node: Node, a: Node | undefined, b: Node | undefined): number {
+  if (!a || !b) return 0
+  const d1 = Math.hypot(a.x - node.x, a.y - node.y) || 1
+  const d2 = Math.hypot(b.x - node.x, b.y - node.y) || 1
+  const ux = (a.x - node.x) / d1 + (b.x - node.x) / d2
+  const uy = (a.y - node.y) / d1 + (b.y - node.y) / d2
+  if (ux === 0 && uy === 0) return bearingDeg(node, a)
+  return bearingDeg(node, { x: node.x + ux, y: node.y + uy })
 }
 
 function sizeLabel(sizes: number[]): string {

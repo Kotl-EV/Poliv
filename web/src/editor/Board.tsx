@@ -1,14 +1,16 @@
 import { forwardRef, type MouseEvent, type PointerEvent } from 'react'
+import { stationInk, stationNo } from '@shared/analyze.ts'
 import type { BrushTip } from '@shared/clip.ts'
 import { emitterPoints } from '@shared/drip.ts'
 import { fixtureGlyph } from '@shared/fixtures.ts'
 import { crownFill, formOf, plantGlyph, plantPaint } from '@shared/plants.ts'
-import { centroid, coverPath, dist, handleFromControl, midpoint, polar, sectorPath, stripHandlePoint, zonePathD, zoneShapeD } from '@shared/geom.ts'
-import { nozzleById } from '@shared/nozzles.ts'
-import { DEFAULT_PPM, gridStepM, hatchOf, hatchTile, HATCHES, surfaceOf, type HatchNode } from '@shared/landscape.ts'
-import { pipeWeight } from '@shared/pipes.ts'
-import { funnyPoints, pipeTags } from '@shared/pipeview.ts'
-import type { Analysis, Doc, Fixture, Measure, Note, Plant, Point, Sprinkler, Zone, ZoneKind } from '@shared/types.ts'
+import { centroid, coverPath, dist, handleFromControl, midpoint, noteLeader, pointInZone, polar, sectorPath, stripHandlePoint, zonePathD, zoneShapeD } from '@shared/geom.ts'
+import { headCaption, nozzleById } from '@shared/nozzles.ts'
+import { runtimeLabel } from '@shared/program.ts'
+import { DEFAULT_PPM, gridStepM, hatchOf, hatchTile, HATCHES, precipWash, surfaceOf, type HatchNode } from '@shared/landscape.ts'
+import { pipeWeight, pressureLabel, sourceLabel, valveFlowLabel } from '@shared/pipes.ts'
+import { dripFlowTags, dripTags, fittingShape, flowArrows, funnyPoints, lossTags, pipeTags, sleeveTags, speedTags, type FlowArrow } from '@shared/pipeview.ts'
+import type { Analysis, Doc, FittingMark, Fixture, Measure, Note, Plant, Point, Sprinkler, Zone, ZoneKind } from '@shared/types.ts'
 
 export const CLOSE_SCREEN_PX = 14
 
@@ -34,6 +36,7 @@ export type Hit =
   | { kind: 'drip'; id: string }
   | { kind: 'drip-point'; id: string; index: number }
   | { kind: 'note'; id: string }
+  | { kind: 'note-leader'; id: string }
   | { kind: 'plant'; id: string }
   | { kind: 'plant-size'; id: string }
   | { kind: 'fixture'; id: string }
@@ -70,6 +73,7 @@ export function readHit(target: EventTarget | null): Hit {
   if (kind === 'pipe-point' && Number.isInteger(index)) return { kind, id, index }
   if (kind === 'drip-point' && Number.isInteger(index)) return { kind, id, index }
   if (kind === 'note') return { kind, id }
+  if (kind === 'note-leader') return { kind, id }
   if (kind === 'plant') return { kind, id }
   if (kind === 'plant-size') return { kind, id }
   if (kind === 'fixture') return { kind, id }
@@ -98,6 +102,17 @@ function pipeColor(od: number | null, status: string): string {
   return '#243028'
 }
 
+function segmentInk(analysis: Analysis, segment: Analysis['segments'][number]): string {
+  if (segment.role === 'zone' && segment.status === 'ok' && segment.stationId) return stationInk(analysis.stations, segment.stationId)
+  return pipeColor(segment.odMm, segment.status)
+}
+
+function precipAt(doc: Doc, analysis: Analysis, point: Point): number | null {
+  const zone = doc.zones.find((item) => pointInZone(point, item.points, item.holes))
+  if (!zone) return null
+  return analysis.zones.find((item) => item.id === zone.id)?.precipMmH ?? null
+}
+
 export const Board = forwardRef<SVGSVGElement, {
   doc: Doc
   analysis: Analysis
@@ -120,6 +135,17 @@ export const Board = forwardRef<SVGSVGElement, {
   scalePoints: Point[]
   selectionId: string | null
   selectionKind: string | null
+  precip?: boolean
+  headInfo?: boolean
+  /** Имена зон. Пусто значит выключены. Выбранная зона подписана и без слоя. */
+  names?: boolean
+  /** Площадь зоны. Пусто значит выключена. Без масштаба подписи нет. */
+  area?: boolean
+  /** Радиусы. Пусто значит включены. */
+  cover?: boolean
+  runtime?: boolean
+  alongPreview?: { x: number; y: number; rotationDeg: number; radiusM: number; arcDeg: number; nozzleId: string }[]
+  placePreview?: { x: number; y: number; rotationDeg: number; radiusM: number; arcDeg: number; nozzleId: string } | null
   onPointerDown: (event: PointerEvent<SVGSVGElement>) => void
   onPointerMove: (event: PointerEvent<SVGSVGElement>) => void
   onPointerUp: (event: PointerEvent<SVGSVGElement>) => void
@@ -155,6 +181,25 @@ export const Board = forwardRef<SVGSVGElement, {
         {doc.zones.map((zone) => {
           const surface = surfaceOf(zone.kind)
           const selected = selectedZone?.id === zone.id
+          const row = analysis.zones.find((item) => item.id === zone.id)
+          const wash = props.precip ? precipWash(row?.precipMmH ?? null) : null
+          const middle = centroid(zone.points)
+          const captions: { text: string; size: number }[] = []
+          if ((props.names || selected) && zone.name) captions.push({ text: zone.name, size: 13 })
+          if (props.area && row?.areaM2 != null) {
+            captions.push({
+              text: `${row.areaM2.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} м²`,
+              size: 13,
+            })
+          }
+          if (props.precip && row) {
+            captions.push({
+              text: row.precipMmH === null ? 'нет осадков' : `${row.precipMmH.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} мм/ч`,
+              size: 13,
+            })
+          }
+          const run = props.runtime && row ? runtimeLabel(row.runtimeMin, row.cycles) : null
+          if (run) captions.push({ text: run, size: 12 })
           return (
             <g key={zone.id}>
               <path
@@ -162,11 +207,28 @@ export const Board = forwardRef<SVGSVGElement, {
                 data-id={zone.id}
                 d={zoneShapeD(zone.points, zone.bends, zone.holes)}
                 fillRule="evenodd"
-                fill={`url(#fill-${hatchOf(zone)})`}
+                fill={wash ?? `url(#fill-${hatchOf(zone)})`}
                 stroke={zone.stroke || surface.stroke}
                 strokeWidth={(zone.pen ?? (selected ? 2.4 : 1.4)) / view.k}
                 opacity={zone.opacity}
               />
+              {captions.map((caption, index) => (
+                <text
+                  key={`${zone.id}-cap-${index}`}
+                  x={middle.x}
+                  y={middle.y + index * (16 / view.k)}
+                  fontSize={caption.size / view.k}
+                  textAnchor="middle"
+                  fill="#1c2822"
+                  fontWeight={700}
+                  stroke="#f7f3ea"
+                  strokeWidth={3 / view.k}
+                  paintOrder="stroke"
+                  pointerEvents="none"
+                >
+                  {caption.text}
+                </text>
+              ))}
               {zone.points.map((point, index) => {
                 const next = zone.points[(index + 1) % zone.points.length]
                 return (
@@ -220,16 +282,19 @@ export const Board = forwardRef<SVGSVGElement, {
             key={note.id}
             note={note}
             ppm={ppm}
+            k={view.k}
             selected={props.selectionKind === 'note' && props.selectionId === note.id}
           />
         ))}
-        {doc.sprinklers.map((sprinkler) => {
+        {props.cover !== false && doc.sprinklers.map((sprinkler) => {
           const selected = selectedSprinkler?.id === sprinkler.id
+          const wash = props.precip ? precipWash(precipAt(doc, analysis, sprinkler)) : undefined
           return (
             <path
               key={`${sprinkler.id}-cover`}
               d={coverPath(sprinkler, ppm, nozzleById(sprinkler.nozzleId))}
               className={selected ? 'cover selected' : 'cover'}
+              style={wash ? { fill: wash } : undefined}
               pointerEvents="none"
             />
           )
@@ -241,11 +306,14 @@ export const Board = forwardRef<SVGSVGElement, {
             y1={segment.a.y}
             x2={segment.b.x}
             y2={segment.b.y}
-            stroke={pipeColor(segment.odMm, segment.status)}
+            stroke={segmentInk(analysis, segment)}
             strokeWidth={pipeWeight(segment.role) / view.k}
             strokeLinecap="round"
             pointerEvents="none"
           />
+        ))}
+        {flowArrows(analysis.segments, doc.pxPerMeter, view.k).map((arrow, index) => (
+          <FlowArrowView key={`flow-${index}`} arrow={arrow} k={view.k} />
         ))}
         {analysis.tails.map((tail, index) => (
           <polyline
@@ -256,9 +324,49 @@ export const Board = forwardRef<SVGSVGElement, {
             pointerEvents="none"
           />
         ))}
+        {analysis.fittingMarks.map((mark, index) => (
+          <FittingMarkView key={`fit-${index}`} mark={mark} k={view.k} />
+        ))}
         {pipeTags(analysis.segments, doc.pxPerMeter, view.k).map((tag, index) => (
           <text
             key={`tag-${index}`}
+            x={tag.x}
+            y={tag.y}
+            className="pipe-tag"
+            fontSize={11 / view.k}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            transform={`rotate(${tag.rotate} ${tag.x} ${tag.y})`}
+            stroke="#f7f3ea"
+            strokeWidth={3 / view.k}
+            paintOrder="stroke"
+            pointerEvents="none"
+          >
+            {tag.text}
+          </text>
+        ))}
+        {speedTags(analysis.segments, doc.pxPerMeter, view.k).map((tag, index) => (
+          <text
+            key={`speed-${index}`}
+            x={tag.x}
+            y={tag.y}
+            className="pipe-tag"
+            fontSize={11 / view.k}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            transform={`rotate(${tag.rotate} ${tag.x} ${tag.y})`}
+            stroke="#f7f3ea"
+            strokeWidth={3 / view.k}
+            paintOrder="stroke"
+            style={tag.hot ? { fill: '#8d2b1f' } : undefined}
+            pointerEvents="none"
+          >
+            {tag.text}
+          </text>
+        ))}
+        {lossTags(analysis.segments, doc.pxPerMeter, view.k).map((tag, index) => (
+          <text
+            key={`loss-${index}`}
             x={tag.x}
             y={tag.y}
             className="pipe-tag"
@@ -303,17 +411,22 @@ export const Board = forwardRef<SVGSVGElement, {
           warn={props.draftWarn}
           onFinish={props.onFinishDraft}
         />
-        {doc.drips.map((drip) => (
-          <polyline
-            key={`${drip.id}-line`}
-            points={drip.points.map((point) => `${point.x},${point.y}`).join(' ')}
-            className="drip"
-            strokeWidth={2 / view.k}
-            strokeDasharray={`${7 / view.k} ${5 / view.k}`}
-            pointerEvents="none"
-          />
-        ))}
-        {doc.drips.flatMap((drip) =>
+        {doc.drips.map((drip) => {
+          const mark = analysis.marks.find((item) => item.kind === 'drip' && item.id === drip.id)
+          const stroke = mark ? stationInk(analysis.stations, mark.stationId) : '#6b3fa0'
+          return (
+            <polyline
+              key={`${drip.id}-line`}
+              points={drip.points.map((point) => `${point.x},${point.y}`).join(' ')}
+              className="drip"
+              style={{ stroke }}
+              strokeWidth={2 / view.k}
+              strokeDasharray={drip.bare ? undefined : `${7 / view.k} ${5 / view.k}`}
+              pointerEvents="none"
+            />
+          )
+        })}
+        {doc.drips.filter((drip) => !drip.bare).flatMap((drip) =>
           emitterPoints(drip.points, drip.spacingM, ppm).map((point, index) => (
             <circle
               key={`${drip.id}-em-${index}`}
@@ -326,6 +439,42 @@ export const Board = forwardRef<SVGSVGElement, {
             />
           )),
         )}
+        {dripTags(doc.drips, doc.pxPerMeter, view.k).map((tag, index) => (
+          <text
+            key={`drip-tag-${index}`}
+            x={tag.x}
+            y={tag.y}
+            className="pipe-tag"
+            fontSize={11 / view.k}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            transform={`rotate(${tag.rotate} ${tag.x} ${tag.y})`}
+            stroke="#f7f3ea"
+            strokeWidth={3 / view.k}
+            paintOrder="stroke"
+            pointerEvents="none"
+          >
+            {tag.text}
+          </text>
+        ))}
+        {dripFlowTags(doc.drips, doc.pxPerMeter, view.k).map((tag, index) => (
+          <text
+            key={`drip-flow-${index}`}
+            x={tag.x}
+            y={tag.y}
+            className="pipe-tag"
+            fontSize={11 / view.k}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            transform={`rotate(${tag.rotate} ${tag.x} ${tag.y})`}
+            stroke="#f7f3ea"
+            strokeWidth={3 / view.k}
+            paintOrder="stroke"
+            pointerEvents="none"
+          >
+            {tag.text}
+          </text>
+        ))}
         {doc.drips.map((drip) =>
           drip.points.slice(0, -1).map((point, index) => (
             <line
@@ -341,27 +490,81 @@ export const Board = forwardRef<SVGSVGElement, {
             />
           )),
         )}
-        {doc.sprinklers.map((sprinkler) => (
-          <g key={sprinkler.id}>
-            <circle
-              data-hit="sprinkler"
-              data-id={sprinkler.id}
-              cx={sprinkler.x}
-              cy={sprinkler.y}
-              r={16 / view.k}
-              fill="transparent"
-              stroke="none"
-            />
-            <circle
-              data-hit="sprinkler"
-              data-id={sprinkler.id}
-              cx={sprinkler.x}
-              cy={sprinkler.y}
-              r={9 / view.k}
-              className={`node${sprinkler.nozzleId.startsWith('bub') ? ' bubbler' : ''}${props.selectionKind === 'sprinkler' && props.selectionId === sprinkler.id ? ' selected' : ''}`}
-            />
-          </g>
-        ))}
+        {doc.sprinklers.map((sprinkler) => {
+          const selected = props.selectionKind === 'sprinkler' && props.selectionId === sprinkler.id
+          const mark = analysis.marks.find((item) => item.kind === 'sprinkler' && item.id === sprinkler.id)
+          const ink = mark ? stationInk(analysis.stations, mark.stationId) : ''
+          const no = mark ? stationNo(analysis.stations, mark.stationId) : 0
+          const pressure = analysis.pressureMarks.find((item) => item.id === sprinkler.id)
+          return (
+            <g key={sprinkler.id}>
+              <circle
+                data-hit="sprinkler"
+                data-id={sprinkler.id}
+                cx={sprinkler.x}
+                cy={sprinkler.y}
+                r={16 / view.k}
+                fill="transparent"
+                stroke="none"
+              />
+              <circle
+                data-hit="sprinkler"
+                data-id={sprinkler.id}
+                cx={sprinkler.x}
+                cy={sprinkler.y}
+                r={9 / view.k}
+                className={`node${sprinkler.nozzleId.startsWith('bub') ? ' bubbler' : ''}${selected ? ' selected' : ''}`}
+                style={ink && !selected ? { stroke: ink } : undefined}
+              />
+              {no > 0 && (
+                <text
+                  x={sprinkler.x}
+                  y={sprinkler.y - 12 / view.k}
+                  fontSize={11 / view.k}
+                  textAnchor="middle"
+                  fill={ink}
+                  fontWeight={700}
+                  pointerEvents="none"
+                >
+                  {no}
+                </text>
+              )}
+              {pressure && (
+                <text
+                  x={sprinkler.x + 14 / view.k}
+                  y={sprinkler.y}
+                  className="pipe-tag"
+                  fontSize={11 / view.k}
+                  textAnchor="start"
+                  dominantBaseline="middle"
+                  stroke="#f7f3ea"
+                  strokeWidth={3 / view.k}
+                  paintOrder="stroke"
+                  style={pressure.low ? { fill: '#8d2b1f' } : undefined}
+                  pointerEvents="none"
+                >
+                  {pressureLabel(pressure.bar)}
+                </text>
+              )}
+              {(props.headInfo || selected) && (
+                <text
+                  x={sprinkler.x}
+                  y={sprinkler.y + 22 / view.k}
+                  fontSize={11 / view.k}
+                  textAnchor="middle"
+                  fill="#1c2822"
+                  stroke="#f7f3ea"
+                  strokeWidth={3 / view.k}
+                  paintOrder="stroke"
+                  fontWeight={700}
+                  pointerEvents="none"
+                >
+                  {headCaption(sprinkler)}
+                </text>
+              )}
+            </g>
+          )
+        })}
         {(doc.sleeves ?? []).map((sleeve) => (
           <g key={sleeve.id}>
             <line
@@ -396,6 +599,24 @@ export const Board = forwardRef<SVGSVGElement, {
             />
           </g>
         ))}
+        {sleeveTags(doc.sleeves ?? [], doc.pxPerMeter, view.k).map((tag, index) => (
+          <text
+            key={`sleeve-tag-${index}`}
+            x={tag.x}
+            y={tag.y}
+            className="pipe-tag"
+            fontSize={11 / view.k}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            transform={`rotate(${tag.rotate} ${tag.x} ${tag.y})`}
+            stroke="#f7f3ea"
+            strokeWidth={3 / view.k}
+            paintOrder="stroke"
+            pointerEvents="none"
+          >
+            {tag.text}
+          </text>
+        ))}
         {(doc.boxes ?? []).map((box) => (
           <rect
             key={box.id}
@@ -429,15 +650,70 @@ export const Board = forwardRef<SVGSVGElement, {
             />
           </g>
         ))}
-        {doc.valves.map((valve) => (
-          <polygon
-            key={valve.id}
-            data-hit="valve"
-            data-id={valve.id}
-            points={diamond(valve, 8 / view.k)}
-            className={props.selectionKind === 'valve' && props.selectionId === valve.id ? 'valve selected' : 'valve'}
-          />
-        ))}
+        {doc.valves.map((valve) => {
+          const selected = props.selectionKind === 'valve' && props.selectionId === valve.id
+          const no = stationNo(analysis.stations, valve.id)
+          const ink = no > 0 ? stationInk(analysis.stations, valve.id) : ''
+          const station = analysis.stations.find((row) => row.id === valve.id)
+          const run = props.runtime && station ? runtimeLabel(station.runtimeMin, station.cycles) : null
+          const flow = station && station.flowLph > 0 ? valveFlowLabel(station.flowLph) : null
+          return (
+            <g key={valve.id}>
+              <polygon
+                data-hit="valve"
+                data-id={valve.id}
+                points={diamond(valve, 8 / view.k)}
+                className={selected ? 'valve selected' : 'valve'}
+                style={ink && !selected ? { stroke: ink } : undefined}
+              />
+              {no > 0 && (
+                <text
+                  x={valve.x}
+                  y={valve.y - 14 / view.k}
+                  fontSize={11 / view.k}
+                  textAnchor="middle"
+                  fill={ink}
+                  fontWeight={700}
+                  pointerEvents="none"
+                >
+                  {no}
+                </text>
+              )}
+              {run && (
+                <text
+                  x={valve.x}
+                  y={valve.y + 16 / view.k}
+                  fontSize={11 / view.k}
+                  textAnchor="middle"
+                  fill="#1c2822"
+                  fontWeight={700}
+                  stroke="#f7f3ea"
+                  strokeWidth={3 / view.k}
+                  paintOrder="stroke"
+                  pointerEvents="none"
+                >
+                  {run}
+                </text>
+              )}
+              {flow && (
+                <text
+                  x={valve.x + 14 / view.k}
+                  y={valve.y}
+                  className="pipe-tag"
+                  fontSize={11 / view.k}
+                  textAnchor="start"
+                  dominantBaseline="middle"
+                  stroke="#f7f3ea"
+                  strokeWidth={3 / view.k}
+                  paintOrder="stroke"
+                  pointerEvents="none"
+                >
+                  {flow}
+                </text>
+              )}
+            </g>
+          )
+        })}
         {props.joinIds.map((id) => {
           const head = doc.sprinklers.find((item) => item.id === id)
           if (!head) return null
@@ -483,6 +759,22 @@ export const Board = forwardRef<SVGSVGElement, {
             height={14 / view.k}
             className={props.selectionKind === 'source' ? 'source selected' : 'source'}
           />
+        )}
+        {doc.source && (
+          <text
+            x={doc.source.x}
+            y={doc.source.y - 16 / view.k}
+            className="pipe-tag"
+            fontSize={11 / view.k}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            stroke="#f7f3ea"
+            strokeWidth={3 / view.k}
+            paintOrder="stroke"
+            pointerEvents="none"
+          >
+            {sourceLabel(doc.source)}
+          </text>
         )}
         {selectedZone && (
           <ZoneHandles zone={selectedZone} view={view} ppm={ppm} />
@@ -556,11 +848,35 @@ export const Board = forwardRef<SVGSVGElement, {
             pointerEvents="none"
           />
         )}
+        {(props.alongPreview ?? []).map((head, index) => (
+          <g key={`along-${index}`} pointerEvents="none" opacity={0.55}>
+            <path d={coverPath(head, ppm, nozzleById(head.nozzleId))} className="cover" />
+            <circle cx={head.x} cy={head.y} r={9 / view.k} className={`node${head.nozzleId.startsWith('bub') ? ' bubbler' : ''}`} />
+          </g>
+        ))}
+        {props.placePreview && (
+          <g pointerEvents="none" opacity={0.55}>
+            <path d={coverPath(props.placePreview, ppm, nozzleById(props.placePreview.nozzleId))} className="cover" />
+            <circle cx={props.placePreview.x} cy={props.placePreview.y} r={9 / view.k} className={`node${props.placePreview.nozzleId.startsWith('bub') ? ' bubbler' : ''}`} />
+          </g>
+        )}
         {selectedSprinkler && (
           <SprinklerHandles sprinkler={selectedSprinkler} ppm={ppm} k={view.k} />
         )}
         <SelectedSize doc={doc} selectionKind={props.selectionKind} selectionId={props.selectionId} ppm={ppm} k={view.k} />
       </g>
+      {props.precip && (
+        <g fontSize="12" fontFamily="Segoe UI, PT Sans, Arial, sans-serif">
+          <rect x="12" y="12" width="228" height="86" rx="6" fill="#f7f3ea" stroke="#1c2822" />
+          <text x="24" y="32" fontWeight={700}>Осадки</text>
+          <rect x="24" y="42" width="14" height="10" fill="rgba(86,146,196,0.48)" stroke="#1c2822" />
+          <text x="44" y="52">Мало, до 8</text>
+          <rect x="24" y="58" width="14" height="10" fill="rgba(78,156,82,0.46)" stroke="#1c2822" />
+          <text x="44" y="68">Норма, 8–22</text>
+          <rect x="148" y="58" width="14" height="10" fill="rgba(196,84,62,0.46)" stroke="#1c2822" />
+          <text x="168" y="68">Много</text>
+        </g>
+      )}
     </svg>
   )
 })
@@ -989,7 +1305,7 @@ function PlantMark({ plant, ppm, k, selected }: { plant: Plant; ppm: number; k: 
   const ink = selected ? '#b86a09' : paint.ink
   const inked = glyph.inked ?? glyph.fills.length
   return (
-    <g className={selected ? 'plant selected' : 'plant'} transform={`translate(${plant.x} ${plant.y})`}>
+    <g className={selected ? 'plant selected' : 'plant'} transform={`translate(${plant.x} ${plant.y}) rotate(${plant.rotationDeg || 0})`}>
       <g transform={`scale(${radius})`} pointerEvents="none">
         {glyph.fills.map((d, index) => (
           <path
@@ -1028,7 +1344,7 @@ function SelectedSize({ doc, selectionKind, selectionId, ppm, k }: { doc: Doc; s
     if (!plant) return null
     const radius = Math.max(plant.radiusM * ppm, 8 / k)
     return (
-      <g transform={`translate(${plant.x} ${plant.y})`}>
+      <g transform={`translate(${plant.x} ${plant.y}) rotate(${plant.rotationDeg || 0})`}>
         <SizeGrip x={radius} y={0} id={plant.id} hit="plant-size" k={k} label={sizeLabel(plant.radiusM)} />
       </g>
     )
@@ -1073,11 +1389,68 @@ function SizeGrip({ x, y, id, hit, k, label }: { x: number; y: number; id: strin
   )
 }
 
-function NoteMark({ note, ppm, selected }: { note: Note; ppm: number; selected: boolean }) {
+function FlowArrowView({ arrow, k }: { arrow: FlowArrow; k: number }) {
+  const scale = Math.max(k, 0.05)
+  const r = 5 / scale
+  return (
+    <polygon
+      points={`0,${-r} ${r * 0.72},${r * 0.55} ${-r * 0.72},${r * 0.55}`}
+      transform={`translate(${arrow.x} ${arrow.y}) rotate(${arrow.rotationDeg})`}
+      fill="#1f4d6e"
+      stroke="#14364c"
+      strokeWidth={0.8 / scale}
+      pointerEvents="none"
+    />
+  )
+}
+
+function FittingMarkView({ mark, k }: { mark: FittingMark; k: number }) {
+  const shape = fittingShape(mark.kind, k)
+  const ink = '#243028'
+  const width = 1.6 / Math.max(k, 0.05)
+  return (
+    <g transform={`translate(${mark.x} ${mark.y}) rotate(${mark.rotationDeg})`} pointerEvents="none">
+      {shape.lines.map((line, index) => (
+        <line
+          key={index}
+          x1={line.x1}
+          y1={line.y1}
+          x2={line.x2}
+          y2={line.y2}
+          stroke={ink}
+          strokeWidth={width}
+          strokeLinecap="round"
+        />
+      ))}
+      {shape.dot !== null && <circle cx={0} cy={0} r={shape.dot} fill="#f7f3ea" stroke={ink} strokeWidth={width} />}
+      {shape.poly && <polygon points={shape.poly.map((point) => `${point.x},${point.y}`).join(' ')} fill={ink} />}
+    </g>
+  )
+}
+
+function NoteMark({ note, ppm, k, selected }: { note: Note; ppm: number; k: number; selected: boolean }) {
   const size = Math.max(note.sizeM * ppm, 8)
   const width = Math.max(size * note.text.length * 0.62, size * 2)
+  const mark = note.leader ? noteLeader(note, note.leader, k) : null
+  const ink = note.color || (selected ? '#8d2b1f' : '#1c2822')
+  const s = 6 / k
   return (
     <g className={selected ? 'note selected' : 'note'}>
+      {mark && (
+        <>
+          <line
+            x1={mark.shaft[0].x}
+            y1={mark.shaft[0].y}
+            x2={mark.shaft[1].x}
+            y2={mark.shaft[1].y}
+            stroke={ink}
+            strokeWidth={1.2 / k}
+            strokeLinecap="round"
+            pointerEvents="none"
+          />
+          <polygon points={mark.head.map((point) => `${point.x},${point.y}`).join(' ')} fill={ink} pointerEvents="none" />
+        </>
+      )}
       <rect data-hit="note" data-id={note.id} x={note.x} y={note.y - size} width={width} height={size * 1.25} fill="transparent" />
       <text
         x={note.x}
@@ -1089,6 +1462,17 @@ function NoteMark({ note, ppm, selected }: { note: Note; ppm: number; selected: 
       >
         {note.text}
       </text>
+      {selected && note.leader && (
+        <rect
+          data-hit="note-leader"
+          data-id={note.id}
+          x={note.leader.x - s}
+          y={note.leader.y - s}
+          width={s * 2}
+          height={s * 2}
+          className="handle"
+        />
+      )}
     </g>
   )
 }

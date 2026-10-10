@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { BUSH_FORMS, TREE_FORMS, formOf, plantGlyph, plantPaint } from './plants.ts'
+import { BUSH_FORMS, TREE_FORMS, formOf, plantGlyph, plantMarkup, plantPaint } from './plants.ts'
 
 test('every crown is a closed drawing and the fallback matches the kind', () => {
   const forms = [...TREE_FORMS, ...BUSH_FORMS]
@@ -46,4 +46,11 @@ test('every crown is a closed drawing and the fallback matches the kind', () => 
   assert.equal(plantGlyph('palm').fills.length, 16)
   assert.equal(plantGlyph('fern').fills.length, 11)
   assert.equal(plantGlyph('grass').inked, undefined)
+})
+
+test('a turned crown rotates on the sheet and a zero turn stays omitted', () => {
+  const spun = plantMarkup({ id: 'p', kind: 'bush', x: 10, y: 20, radiusM: 1, form: 'hedge', rotationDeg: 90 }, 20, 1)
+  assert.match(spun, /rotate\(90\)/)
+  const plain = plantMarkup({ id: 'p', kind: 'tree', x: 1, y: 2, radiusM: 1 }, 20, 1)
+  assert.equal(plain.includes('rotate'), false)
 })
