@@ -3,8 +3,8 @@ import { placeDripAtPlant } from './drip.ts'
 import { dist, pointInPolygon, pointInZone, polygonAreaPx, zoneAreaPx } from './geom.ts'
 import { isDripKind, isObstacleKind, isSprayKind, isWetKind } from './landscape.ts'
 import { nozzleById } from './nozzles.ts'
-import { placeSprayOnPolygon, ringsOverlap } from './spray.ts'
-import type { Doc, Point, Zone, ZoneKind } from './types.ts'
+import { placeSprayOnPolygon, ringsOverlap, type SprayFamily } from './spray.ts'
+import type { Doc, PipeRole, Point, Zone, ZoneKind } from './types.ts'
 
 export type Rgb = [number, number, number]
 export type InkRole = 'structure' | 'hatch' | 'plant' | 'bed' | 'grid' | 'stipple'
@@ -17,6 +17,7 @@ const MIN_LAWN_M2 = 8
 const PLANT_DRIP_MIN = 90
 
 type HeadSpot = { key: number; point: Point; nozzleId: string; rotationDeg: number }
+type LaidPipe = { id: string; points: Point[]; role: PipeRole }
 type DripSpot = { key: number; points: Point[]; spacingM: number; emitterLph: number }
 
 /** Подпись «Масштаб 1:200» на листе. */
@@ -412,18 +413,18 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
   }
   const reached = new Set<number>()
   const valveKeys: number[] = []
-  const pipes: { id: string; points: Point[] }[] = []
+  const pipes: LaidPipe[] = []
   const clear = (a: Point, b: Point) => segmentClear(a, b, buildings, cellPx)
   const trunkAllowed = new Set<number>([root])
   for (const key of allowed) if (!terminalKeys.has(key)) trunkAllowed.add(key)
   for (const spot of spots) trunkAllowed.add(spot)
   const trunk = steiner(root, spots.filter((spot) => spot !== root), trunkAllowed, cols, rows)
   const trunkCells = new Set(trunk.keys())
-  pipes.push(...pipesFromTree(trunk, center, ids, clear, new Set(spots)))
+  pipes.push(...pipesFromTree(trunk, center, ids, clear, new Set(spots), 'main'))
   for (let i = 0; i < groups.length; i++) {
     const spot = spots[i]
     if (spot !== root && !trunk.has(spot)) {
-      pipes.push({ id: ids('pipe'), points: [center(root), center(spot)] })
+      pipes.push({ id: ids('pipe'), points: [center(root), center(spot)], role: 'main' })
     }
     const owned = groups[i].map((item) => item.key)
     const local = new Set<number>([spot])
@@ -439,7 +440,7 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
       const cells = key === spot ? [spot] : pathTo(prev, key, spot)
       if (cells && cells.length >= 2) {
         const points = shorten(cells.map(center), clear)
-        if (points.length >= 2) pipes.push({ id: ids('pipe'), points })
+        if (points.length >= 2) pipes.push({ id: ids('pipe'), points, role: 'zone' })
         hit = true
         reached.add(key)
         continue
@@ -449,7 +450,7 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
         reached.add(key)
         continue
       }
-      pipes.push({ id: ids('pipe'), points: [center(spot), center(key)] })
+      pipes.push({ id: ids('pipe'), points: [center(spot), center(key)], role: 'zone' })
       hit = true
       reached.add(key)
     }
@@ -460,10 +461,10 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
   if (finalHeads.length === 0 && finalDrips.length === 0) return null
   for (const head of finalHeads) {
     const at = center(head.key)
-    if (dist(at, head.point) > 1) pipes.push({ id: ids('pipe'), points: [at, head.point] })
+    if (dist(at, head.point) > 1) pipes.push({ id: ids('pipe'), points: [at, head.point], role: 'zone' })
   }
   const sourcePoint = sourceOutside(center(root), centroid(hull), cellPx, page)
-  pipes.unshift({ id: ids('pipe'), points: [sourcePoint, center(root)] })
+  pipes.unshift({ id: ids('pipe'), points: [sourcePoint, center(root)], role: 'main' })
   const doc = emptyDoc()
   doc.pxPerMeter = ppm
   doc.zones = zones
@@ -506,7 +507,7 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
 }
 
 /** Схема полива по зонам и источнику, которые уже начертил пользователь. */
-export function layoutIrrigation(doc: Doc): Doc | null {
+export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | null {
   const ppm = doc.pxPerMeter
   const source = doc.source
   if (ppm == null || !(ppm > 0) || !source) return null
@@ -565,7 +566,7 @@ export function layoutIrrigation(doc: Doc): Doc | null {
         .filter((other) => ringsOverlap(zone.points, other.points))
         .map((other) => other.points),
     ]
-    for (const spot of placeSprayOnPolygon(zone.points, holes, ppm)) {
+    for (const spot of placeSprayOnPolygon(zone.points, holes, ppm, family)) {
       if (heads.length >= MAX_HEADS) break
       const key = snapHeadKey(spot.point, lawnSet, center) ?? snapHeadKey(spot.point, allowed, center)
       if (key === null) continue
@@ -704,7 +705,7 @@ export function layoutIrrigation(doc: Doc): Doc | null {
   }
   const reached = new Set<number>()
   const valveKeys: number[] = []
-  const pipes: { id: string; points: Point[] }[] = []
+  const pipes: LaidPipe[] = []
   const ids = sequencer()
   const buildings = doc.zones.filter((zone) => zone.kind === 'building' || zone.kind === 'water').map((zone) => zone.points)
   const clear = (a: Point, b: Point) => segmentClear(a, b, buildings, cellPx)
@@ -713,11 +714,11 @@ export function layoutIrrigation(doc: Doc): Doc | null {
   for (const spot of spots) trunkAllowed.add(spot)
   const trunk = steiner(root, spots.filter((spot) => spot !== root), trunkAllowed, cols, rows)
   const trunkCells = new Set(trunk.keys())
-  pipes.push(...pipesFromTree(trunk, center, ids, clear, new Set(spots)))
+  pipes.push(...pipesFromTree(trunk, center, ids, clear, new Set(spots), 'main'))
   for (let i = 0; i < groups.length; i++) {
     const spot = spots[i]
     if (spot !== root && !trunk.has(spot)) {
-      pipes.push({ id: ids('pipe'), points: [center(root), center(spot)] })
+      pipes.push({ id: ids('pipe'), points: [center(root), center(spot)], role: 'main' })
     }
     const owned = groups[i].map((item) => item.key)
     const local = new Set<number>([spot])
@@ -733,7 +734,7 @@ export function layoutIrrigation(doc: Doc): Doc | null {
       const cells = key === spot ? [spot] : pathTo(prev, key, spot)
       if (cells && cells.length >= 2) {
         const points = shorten(cells.map(center), clear)
-        if (points.length >= 2) pipes.push({ id: ids('pipe'), points })
+        if (points.length >= 2) pipes.push({ id: ids('pipe'), points, role: 'zone' })
         hit = true
         reached.add(key)
         continue
@@ -743,7 +744,7 @@ export function layoutIrrigation(doc: Doc): Doc | null {
         reached.add(key)
         continue
       }
-      pipes.push({ id: ids('pipe'), points: [center(spot), center(key)] })
+      pipes.push({ id: ids('pipe'), points: [center(spot), center(key)], role: 'zone' })
       hit = true
       reached.add(key)
     }
@@ -754,15 +755,15 @@ export function layoutIrrigation(doc: Doc): Doc | null {
   if (finalHeads.length === 0 && finalDrips.length === 0) return null
   for (const head of finalHeads) {
     const at = center(head.key)
-    if (dist(at, head.point) > 1) pipes.push({ id: ids('pipe'), points: [at, head.point] })
+    if (dist(at, head.point) > 1) pipes.push({ id: ids('pipe'), points: [at, head.point], role: 'zone' })
   }
   for (const drip of finalDrips) {
     const at = center(drip.key)
     const start = drip.points[0]
-    if (start && dist(at, start) > 1) pipes.push({ id: ids('pipe'), points: [at, start] })
+    if (start && dist(at, start) > 1) pipes.push({ id: ids('pipe'), points: [at, start], role: 'zone' })
   }
 
-  pipes.unshift({ id: ids('pipe'), points: [{ x: source.x, y: source.y }, center(root)] })
+  pipes.unshift({ id: ids('pipe'), points: [{ x: source.x, y: source.y }, center(root)], role: 'main' })
   return {
     ...doc,
     sprinklers: finalHeads.map((head) => {
@@ -790,18 +791,18 @@ function sequencer(): (prefix: string) => string {
 }
 
 function treePipes(
-  pipes: { id: string; points: Point[] }[],
+  pipes: LaidPipe[],
   snap: number,
   ids: (prefix: string) => string,
-): { id: string; points: Point[] }[] {
-  const segs: { a: Point; b: Point; len: number }[] = []
+): LaidPipe[] {
+  const segs: { a: Point; b: Point; len: number; role: PipeRole }[] = []
   for (const pipe of pipes) {
     for (let i = 1; i < pipe.points.length; i++) {
       const a = pipe.points[i - 1]
       const b = pipe.points[i]
       const len = dist(a, b)
       if (len < 0.5) continue
-      segs.push({ a, b, len })
+      segs.push({ a, b, len, role: pipe.role })
     }
   }
   segs.sort((left, right) => left.len - right.len)
@@ -818,7 +819,7 @@ function treePipes(
     parent.push(parent.length)
     return nodes.length - 1
   }
-  const kept: { a: Point; b: Point }[] = []
+  const kept: { a: Point; b: Point; role: PipeRole }[] = []
   for (const seg of segs) {
     const a = idx(seg.a)
     const b = idx(seg.b)
@@ -827,9 +828,9 @@ function treePipes(
     const pb = find(b)
     if (pa === pb) continue
     parent[pa] = pb
-    kept.push({ a: seg.a, b: seg.b })
+    kept.push({ a: seg.a, b: seg.b, role: seg.role })
   }
-  return kept.map((seg) => ({ id: ids('pipe'), points: [seg.a, seg.b] }))
+  return kept.map((seg) => ({ id: ids('pipe'), points: [seg.a, seg.b], role: seg.role }))
 }
 
 function splitCells(keys: number[], maxArea: number, cellArea: number, cols: number, rows: number): number[][] {
@@ -1560,7 +1561,8 @@ function pipesFromTree(
   ids: (prefix: string) => string,
   clear: (a: Point, b: Point) => boolean,
   extraJoints: Set<number>,
-): { id: string; points: Point[] }[] {
+  role: PipeRole,
+): LaidPipe[] {
   const children = new Map<number, number[]>()
   for (const [key, parent] of tree) {
     if (parent === null) continue
@@ -1571,7 +1573,7 @@ function pipesFromTree(
     const degree = (parent === null ? 0 : 1) + (children.get(key)?.length ?? 0)
     if (degree !== 2 || parent === null || extraJoints.has(key)) joints.add(key)
   }
-  const pipes: { id: string; points: Point[] }[] = []
+  const pipes: LaidPipe[] = []
   const seen = new Set<string>()
   for (const start of joints) {
     for (const next of children.get(start) ?? []) {
@@ -1588,7 +1590,7 @@ function pipesFromTree(
       if (seen.has(mark)) continue
       seen.add(mark)
       const points = shorten(path.map(at), clear)
-      if (points.length >= 2) pipes.push({ id: ids('pipe'), points })
+      if (points.length >= 2) pipes.push({ id: ids('pipe'), points, role })
     }
   }
   return pipes

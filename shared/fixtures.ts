@@ -218,7 +218,12 @@ function extraGlyph(kind: FixtureKind): FixtureGlyph | null {
   }
   if (kind === 'grill') {
     return {
-      parts: [{ d: roundRect(-0.72, -0.42, 1.44, 0.84, 0.06), fill: '#2c2420', stroke: INK }],
+      parts: [
+        { d: roundRect(-0.72, -0.42, 1.44, 0.84, 0.06), fill: '#2c2420', stroke: INK },
+        { d: ellipse(-0.48, 0.4, 0.08, 0.08), fill: INK, stroke: INK },
+        { d: ellipse(0.48, 0.4, 0.08, 0.08), fill: INK, stroke: INK },
+        { d: ellipse(0, 0.02, 0.22, 0.12), fill: '#8a3030', stroke: '#5c2018' },
+      ],
       lines: [
         { d: 'M -0.55 -0.24 H 0.55', stroke: '#c9a15b' },
         { d: 'M -0.55 -0.08 H 0.55', stroke: '#c9a15b' },
@@ -240,7 +245,9 @@ function extraGlyph(kind: FixtureKind): FixtureGlyph | null {
     return {
       parts: [
         { d: roundRect(-0.72, -0.72, 1.44, 1.44, 0.08), fill: '#a85a3a', stroke: '#6a3424' },
-        { d: ellipse(0, 0, 0.4, 0.4), fill: '#3d7a45', stroke: '#24522c' },
+        { d: ellipse(0, 0.08, 0.46, 0.46), fill: '#24522c', stroke: '#24522c' },
+        { d: ellipse(-0.08, -0.06, 0.28, 0.24), fill: '#3d7a45', stroke: '#24522c' },
+        { d: ellipse(0.16, 0.02, 0.16, 0.14), fill: '#6aaa4a', stroke: '#24522c' },
       ],
       lines: [],
     }
@@ -285,8 +292,11 @@ function extraGlyph(kind: FixtureKind): FixtureGlyph | null {
         { d: ellipse(0, 0.62, 0.08, 0.08), fill: WOOD_DARK, stroke: WOOD_DARK },
         { d: ellipse(-0.54, 0.32, 0.08, 0.08), fill: WOOD_DARK, stroke: WOOD_DARK },
         { d: ellipse(-0.54, -0.32, 0.08, 0.08), fill: WOOD_DARK, stroke: WOOD_DARK },
+        { d: ellipse(0, 0, 0.28, 0.28), fill: '#efe8dc', stroke: WOOD_DARK },
       ],
-      lines: [],
+      lines: [
+        { d: 'M 0 -0.7 L 0.55 0.15 L 0 0.7 L -0.55 0.15 Z', stroke: WOOD_DARK },
+      ],
     }
   }
   if (kind === 'fountain') {
@@ -295,22 +305,27 @@ function extraGlyph(kind: FixtureKind): FixtureGlyph | null {
         { d: ellipse(0, 0, 0.9, 0.9), fill: STONE, stroke: STONE_DARK },
         { d: ellipse(0, 0, 0.62, 0.62), fill: '#7eb6d4', stroke: '#2a6288' },
         { d: ellipse(0, 0, 0.18, 0.18), fill: '#f7f3ea', stroke: STONE_DARK },
+        { d: ellipse(0, -0.28, 0.07, 0.07), fill: '#d7eefe', stroke: '#2a6288' },
       ],
-      lines: [],
+      lines: [{ d: 'M 0 -0.1 V -0.55', stroke: '#d7eefe' }],
     }
   }
   if (kind === 'statue') {
     return {
       parts: [
         { d: roundRect(-0.38, 0.2, 0.76, 0.55, 0.04), fill: STONE, stroke: STONE_DARK },
-        { d: ellipse(0, -0.22, 0.26, 0.38), fill: '#b7b1a8', stroke: STONE_DARK },
+        { d: ellipse(0, -0.08, 0.32, 0.28), fill: '#b7b1a8', stroke: STONE_DARK },
+        { d: ellipse(0, -0.42, 0.14, 0.16), fill: '#d5cfc6', stroke: STONE_DARK },
       ],
       lines: [],
     }
   }
   if (kind === 'greenhouse') {
     return {
-      parts: [{ d: roundRect(-0.92, -0.55, 1.84, 1.1, 0.04), fill: GLASS, stroke: '#6d8ea0' }],
+      parts: [
+        { d: roundRect(-0.92, -0.55, 1.84, 1.1, 0.04), fill: GLASS, stroke: '#6d8ea0' },
+        { d: roundRect(-0.16, 0.05, 0.32, 0.5, 0.02), fill: '#e7f3ea', stroke: '#3d7a45' },
+      ],
       lines: [
         { d: 'M -0.92 0 H 0.92', stroke: '#6d8ea0' },
         { d: 'M -0.46 -0.55 V 0.55', stroke: '#6d8ea0' },
@@ -336,7 +351,11 @@ export function fixtureGlyph(kind: FixtureKind): FixtureGlyph {
   if (extra) return extra
   if (kind === 'boulder') {
     return {
-      parts: [{ d: blob(0, 0.02, 0.86, 0.72, 7, 0.16, 0.4), fill: STONE, stroke: STONE_DARK }],
+      parts: [
+        { d: blob(0.08, 0.06, 0.78, 0.66, 7, 0.16, 0.4), fill: STONE_DARK, stroke: STONE_DARK },
+        { d: blob(-0.06, -0.04, 0.7, 0.58, 7, 0.14, 0.9), fill: STONE, stroke: STONE_DARK },
+        { d: ellipse(-0.22, -0.2, 0.16, 0.1), fill: '#c8c2b8', stroke: STONE_DARK },
+      ],
       lines: [{ d: 'M -0.2 -0.05 Q 0.05 0.12 0.28 -0.08', stroke: STONE_DARK }],
     }
   }
@@ -552,8 +571,10 @@ function car(body: string, x: number, height: number, cabinX: number, cabinW: nu
       { d: ellipse(-x - 0.28, y - 0.02, 0.1, 0.07), fill: WHEEL, stroke: WHEEL },
       { d: ellipse(x + 0.28, y + height + 0.02, 0.1, 0.07), fill: WHEEL, stroke: WHEEL },
       { d: ellipse(-x - 0.28, y + height + 0.02, 0.1, 0.07), fill: WHEEL, stroke: WHEEL },
+      { d: ellipse(x + 0.14, y + height * 0.28, 0.055, 0.045), fill: '#f4e7b0', stroke: '#8a7030' },
+      { d: ellipse(x + 0.14, y + height * 0.72, 0.055, 0.045), fill: '#f4e7b0', stroke: '#8a7030' },
     ],
-    lines: [],
+    lines: [{ d: `M ${num(x + 0.22)} ${num(y + height * 0.5)} H ${num(Math.min(cabinX, -x - 0.2))}`, stroke: '#d7cbb8' }],
   }
 }
 

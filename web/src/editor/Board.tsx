@@ -2,9 +2,11 @@ import { forwardRef, type MouseEvent, type PointerEvent } from 'react'
 import type { BrushTip } from '@shared/clip.ts'
 import { emitterPoints } from '@shared/drip.ts'
 import { fixtureGlyph } from '@shared/fixtures.ts'
-import { formOf, plantGlyph, plantPaint } from '@shared/plants.ts'
+import { crownFill, formOf, plantGlyph, plantPaint } from '@shared/plants.ts'
 import { centroid, dist, handleFromControl, midpoint, polar, sectorPath, zonePathD, zoneShapeD } from '@shared/geom.ts'
 import { DEFAULT_PPM, gridStepM, hatchOf, honeycomb, surfaceOf } from '@shared/landscape.ts'
+import { pipeWeight } from '@shared/pipes.ts'
+import { funnyPoints, pipeTags } from '@shared/pipeview.ts'
 import type { Analysis, Doc, Fixture, Measure, Note, Plant, Point, Sprinkler, Zone, ZoneKind } from '@shared/types.ts'
 
 export const CLOSE_SCREEN_PX = 14
@@ -24,6 +26,10 @@ export type Hit =
   | { kind: 'pipe'; id: string }
   | { kind: 'pipe-point'; id: string; index: number }
   | { kind: 'valve'; id: string }
+  | { kind: 'box'; id: string }
+  | { kind: 'hydrant'; id: string }
+  | { kind: 'sleeve'; id: string }
+  | { kind: 'sleeve-point'; id: string; index: number }
   | { kind: 'drip'; id: string }
   | { kind: 'drip-point'; id: string; index: number }
   | { kind: 'note'; id: string }
@@ -50,6 +56,10 @@ export function readHit(target: EventTarget | null): Hit {
   if (kind === 'zone') return { kind, id }
   if (kind === 'pipe') return { kind, id }
   if (kind === 'valve') return { kind, id }
+  if (kind === 'box') return { kind, id }
+  if (kind === 'hydrant') return { kind, id }
+  if (kind === 'sleeve') return { kind, id }
+  if (kind === 'sleeve-point' && Number.isInteger(index)) return { kind, id, index }
   if (kind === 'drip') return { kind, id }
   if (kind === 'draft-close') return { kind }
   if (kind === 'draft-ok') return { kind }
@@ -102,6 +112,9 @@ export const Board = forwardRef<SVGSVGElement, {
   guide: Point[]
   snapMark: Point | null
   showOk: boolean
+  draftLine: 'poly' | 'main' | 'zone' | 'drip'
+  draftWarn: boolean
+  joinIds: string[]
   hover: Point | null
   scalePoints: Point[]
   selectionId: string | null
@@ -229,10 +242,37 @@ export const Board = forwardRef<SVGSVGElement, {
             x2={segment.b.x}
             y2={segment.b.y}
             stroke={pipeColor(segment.odMm, segment.status)}
-            strokeWidth={3 / view.k}
-            strokeDasharray={segment.status === 'ok' ? undefined : `${8 / view.k} ${6 / view.k}`}
+            strokeWidth={pipeWeight(segment.role) / view.k}
+            strokeLinecap="round"
             pointerEvents="none"
           />
+        ))}
+        {analysis.tails.map((tail, index) => (
+          <polyline
+            key={`tail-${index}`}
+            points={funnyPoints(tail.a, tail.b).map((point) => `${point.x},${point.y}`).join(' ')}
+            className="funny"
+            strokeWidth={2.2 / view.k}
+            pointerEvents="none"
+          />
+        ))}
+        {pipeTags(analysis.segments, doc.pxPerMeter, view.k).map((tag, index) => (
+          <text
+            key={`tag-${index}`}
+            x={tag.x}
+            y={tag.y}
+            className="pipe-tag"
+            fontSize={11 / view.k}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            transform={`rotate(${tag.rotate} ${tag.x} ${tag.y})`}
+            stroke="#f7f3ea"
+            strokeWidth={3 / view.k}
+            paintOrder="stroke"
+            pointerEvents="none"
+          >
+            {tag.text}
+          </text>
         ))}
         {doc.pipes.map((pipe) =>
           pipe.points.slice(0, -1).map((point, index) => (
@@ -259,6 +299,8 @@ export const Board = forwardRef<SVGSVGElement, {
           brushWidth={props.brushWidth}
           brushTip={props.brushTip}
           showOk={props.showOk}
+          ink={props.draftLine}
+          warn={props.draftWarn}
           onFinish={props.onFinishDraft}
         />
         {doc.drips.map((drip) => (
@@ -320,6 +362,73 @@ export const Board = forwardRef<SVGSVGElement, {
             />
           </g>
         ))}
+        {(doc.sleeves ?? []).map((sleeve) => (
+          <g key={sleeve.id}>
+            <line
+              x1={sleeve.a.x}
+              y1={sleeve.a.y}
+              x2={sleeve.b.x}
+              y2={sleeve.b.y}
+              stroke="#5c564e"
+              strokeWidth={8 / view.k}
+              strokeLinecap="round"
+              pointerEvents="none"
+            />
+            <line
+              x1={sleeve.a.x}
+              y1={sleeve.a.y}
+              x2={sleeve.b.x}
+              y2={sleeve.b.y}
+              stroke="#f4efe4"
+              strokeWidth={2.6 / view.k}
+              strokeLinecap="round"
+              pointerEvents="none"
+            />
+            <line
+              data-hit="sleeve"
+              data-id={sleeve.id}
+              x1={sleeve.a.x}
+              y1={sleeve.a.y}
+              x2={sleeve.b.x}
+              y2={sleeve.b.y}
+              stroke="transparent"
+              strokeWidth={16 / view.k}
+            />
+          </g>
+        ))}
+        {(doc.boxes ?? []).map((box) => (
+          <rect
+            key={box.id}
+            data-hit="box"
+            data-id={box.id}
+            x={box.x - 22 / view.k}
+            y={box.y - 14 / view.k}
+            width={44 / view.k}
+            height={28 / view.k}
+            rx={3 / view.k}
+            className={props.selectionKind === 'box' && props.selectionId === box.id ? 'box selected' : 'box'}
+          />
+        ))}
+        {(doc.hydrants ?? []).map((hydrant) => (
+          <g key={hydrant.id} data-hit="hydrant" data-id={hydrant.id}>
+            <circle
+              data-hit="hydrant"
+              data-id={hydrant.id}
+              cx={hydrant.x}
+              cy={hydrant.y}
+              r={7 / view.k}
+              className={props.selectionKind === 'hydrant' && props.selectionId === hydrant.id ? 'hydrant selected' : 'hydrant'}
+            />
+            <path
+              d={`M ${hydrant.x} ${hydrant.y - 3 / view.k} V ${hydrant.y + 3 / view.k} M ${hydrant.x - 3 / view.k} ${hydrant.y - 1 / view.k} H ${hydrant.x + 3 / view.k}`}
+              fill="none"
+              stroke="#f4efe4"
+              strokeWidth={1.4 / view.k}
+              strokeLinecap="round"
+              pointerEvents="none"
+            />
+          </g>
+        ))}
         {doc.valves.map((valve) => (
           <polygon
             key={valve.id}
@@ -329,6 +438,42 @@ export const Board = forwardRef<SVGSVGElement, {
             className={props.selectionKind === 'valve' && props.selectionId === valve.id ? 'valve selected' : 'valve'}
           />
         ))}
+        {props.joinIds.map((id) => {
+          const head = doc.sprinklers.find((item) => item.id === id)
+          if (!head) return null
+          return (
+            <circle
+              key={`join-${id}`}
+              cx={head.x}
+              cy={head.y}
+              r={18 / view.k}
+              className="join-head"
+              strokeWidth={2 / view.k}
+              pointerEvents="none"
+            />
+          )
+        })}
+        {props.selectionKind === 'sleeve' && (doc.sleeves ?? []).find((item) => item.id === props.selectionId) && (
+          <>
+            {(['a', 'b'] as const).map((end, index) => {
+              const sleeve = (doc.sleeves ?? []).find((item) => item.id === props.selectionId)
+              if (!sleeve) return null
+              const point = sleeve[end]
+              return (
+                <circle
+                  key={end}
+                  data-hit="sleeve-point"
+                  data-id={props.selectionId || ''}
+                  data-index={index}
+                  cx={point.x}
+                  cy={point.y}
+                  r={6 / view.k}
+                  className="handle"
+                />
+              )
+            })}
+          </>
+        )}
         {doc.source && (
           <rect
             data-hit="source"
@@ -430,6 +575,8 @@ function DraftLayer({
   brushWidth,
   brushTip,
   showOk,
+  ink,
+  warn,
   onFinish,
 }: {
   points: Point[]
@@ -441,6 +588,8 @@ function DraftLayer({
   brushWidth: number
   brushTip: BrushTip
   showOk: boolean
+  ink: 'poly' | 'main' | 'zone' | 'drip'
+  warn: boolean
   onFinish?: () => void
 }) {
   const start = points[0]
@@ -487,7 +636,10 @@ function DraftLayer({
         <polyline
           points={line.map((point) => `${point.x},${point.y}`).join(' ')}
           className="draft"
-          strokeWidth={2 / view.k}
+          stroke={warn && ink === 'zone' ? '#c4a035' : ink === 'zone' ? '#2f6f97' : ink === 'drip' ? '#6b3fa0' : '#1c2822'}
+          strokeWidth={(ink === 'main' ? pipeWeight('main') : ink === 'zone' ? pipeWeight('zone') : 2) / view.k}
+          strokeDasharray={ink === 'drip' ? `${7 / view.k} ${5 / view.k}` : undefined}
+          strokeLinecap="round"
           pointerEvents="none"
         />
       )}
@@ -847,7 +999,7 @@ function PlantMark({ plant, ppm, k, selected }: { plant: Plant; ppm: number; k: 
     <g className={selected ? 'plant selected' : 'plant'} transform={`translate(${plant.x} ${plant.y})`}>
       <g transform={`scale(${radius})`} pointerEvents="none">
         {glyph.fills.map((d, index) => (
-          <path key={`f${index}`} d={d} fill={paint.leaf} stroke={ink} strokeWidth={1.35} vectorEffect="non-scaling-stroke" />
+          <path key={`f${index}`} d={d} fill={crownFill(paint, glyph.shade?.[index] ?? 0)} stroke={ink} strokeWidth={1.35} vectorEffect="non-scaling-stroke" />
         ))}
         {glyph.veins.map((d, index) => (
           <path key={`v${index}`} d={d} fill="none" stroke={paint.vein} strokeWidth={1} vectorEffect="non-scaling-stroke" />

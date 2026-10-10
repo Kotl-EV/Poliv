@@ -40,7 +40,7 @@ export type PlantPaint = { leaf: string; ink: string; vein: string; trunk: strin
 
 export type PlantDot = { x: number; y: number; r: number; bloom?: boolean }
 
-export type PlantGlyph = { fills: string[]; veins: string[]; dots: PlantDot[] }
+export type PlantGlyph = { fills: string[]; shade?: number[]; veins: string[]; dots: PlantDot[] }
 
 const PAINT: Record<PlantForm, PlantPaint> = {
   leaf: { leaf: '#3e7c3a', ink: '#1b4a22', vein: '#2c6430', trunk: '#6b4423', accent: '#e7b7c6' },
@@ -93,192 +93,314 @@ export function plantPaint(form: PlantForm): PlantPaint {
   return PAINT[form]
 }
 
+/** 0 — основной зелёный, 1 — светлая шапка, −1 — тень снизу. */
+export function crownFill(paint: PlantPaint, shade = 0): string {
+  if (shade > 0.2) return mixHex(paint.leaf, '#f7f3ea', 0.4)
+  if (shade < -0.2) return mixHex(paint.leaf, '#102016', 0.42)
+  return paint.leaf
+}
+
 export function plantGlyph(form: PlantForm): PlantGlyph {
   if (form === 'round') {
-    return { fills: [circle(1)], veins: ribs(6, 0.62, -Math.PI / 2), dots: [trunk(0, 0, 0.07)] }
+    return drawn(
+      [circle(1), circle(0.62), disk(-0.16, -0.22, 0.28)],
+      [-1, 0, 1],
+      ribs(8, 0.72, -Math.PI / 2),
+      [trunk(0, 0, 0.08)],
+    )
   }
   if (form === 'leaf') {
-    return {
-      fills: [scallop({ count: 11, inner: 0.74, outer: 1, turn: -Math.PI / 2, wobble: 0.07 })],
-      veins: ribs(7, 0.58, -Math.PI / 2),
-      dots: [trunk(0, 0, 0.065)],
-    }
+    return drawn(
+      [
+        scallop({ count: 11, inner: 0.74, outer: 1, turn: -Math.PI / 2, wobble: 0.07 }),
+        scallop({ count: 7, inner: 0.42, outer: 0.66, turn: 0.5, wobble: 0.1 }),
+        disk(-0.2, -0.24, 0.26),
+      ],
+      [-1, 0, 1],
+      ribs(7, 0.7, -Math.PI / 2),
+      [trunk(0, 0, 0.07)],
+    )
   }
   if (form === 'spread') {
-    const crowns = [{ x: 0, y: 0, r: 0.58, turn: 0.2 }, ...around(5, 0.4, -Math.PI / 2).map((spot, i) => ({ ...spot, r: 0.5, turn: i * 0.7 }))]
-    return {
-      fills: crowns.map((spot) => scallop({ count: 8, inner: spot.r * 0.72, outer: spot.r, turn: spot.turn, wobble: 0.08, cx: spot.x, cy: spot.y })),
-      veins: [],
-      dots: [trunk(0, 0, 0.06)],
-    }
+    const crowns = [{ x: 0, y: 0, r: 0.58, turn: 0.2 }, ...around(5, 0.42, -Math.PI / 2).map((spot, i) => ({ ...spot, r: 0.48, turn: i * 0.7 }))]
+    return drawn(
+      crowns.map((spot) => scallop({ count: 8, inner: spot.r * 0.7, outer: spot.r, turn: spot.turn, wobble: 0.09, cx: spot.x, cy: spot.y })),
+      [-1, 0, 1, 0, 1, 0],
+      ribs(5, 0.35, 0.4),
+      [trunk(0, 0, 0.065)],
+    )
   }
   if (form === 'conifer') {
-    return {
-      fills: [star(18, 0.58, 1, -Math.PI / 2)],
-      veins: [circle(0.22)],
-      dots: [trunk(0, 0, 0.07)],
-    }
+    return drawn(
+      [star(18, 0.55, 1, -Math.PI / 2), star(12, 0.28, 0.62, 0.15), disk(-0.08, -0.12, 0.16)],
+      [0, -1, 1],
+      [circle(0.28), ...ribs(8, 0.78, -Math.PI / 2)],
+      [trunk(0, 0, 0.07)],
+    )
   }
   if (form === 'column') {
-    return {
-      fills: [scallop({ count: 10, inner: 0.78, outer: 1, turn: -Math.PI / 2, wobble: 0.03, sx: 0.48, sy: 0.98 })],
-      veins: ribs(5, 0.7, -Math.PI / 2, 0.48, 0.98),
-      dots: [trunk(0, 0, 0.06)],
-    }
+    return drawn(
+      [
+        scallop({ count: 10, inner: 0.78, outer: 1, turn: -Math.PI / 2, wobble: 0.03, sx: 0.46, sy: 1 }),
+        scallop({ count: 8, inner: 0.7, outer: 0.86, turn: 0.2, wobble: 0.02, sx: 0.32, sy: 0.82 }),
+        disk(0, -0.15, 0.12),
+      ],
+      [-1, 0, 1],
+      ribs(5, 0.72, -Math.PI / 2, 0.46, 1),
+      [trunk(0, 0.2, 0.05)],
+    )
   }
   if (form === 'weep') {
-    return {
-      fills: [scallop({ count: 16, inner: 0.86, outer: 1, turn: -Math.PI / 2, wobble: 0.04 })],
-      veins: [circle(0.55), circle(0.32), ...ribs(10, 0.8, -Math.PI / 2)],
-      dots: [trunk(0, 0, 0.055)],
-    }
+    return drawn(
+      [
+        scallop({ count: 16, inner: 0.86, outer: 1, turn: -Math.PI / 2, wobble: 0.04 }),
+        circle(0.58),
+        disk(-0.12, -0.16, 0.22),
+      ],
+      [-1, 0, 1],
+      [circle(0.34), ...ribs(12, 0.9, -Math.PI / 2)],
+      [trunk(0, 0, 0.06)],
+    )
   }
   if (form === 'palm') {
     const fills: string[] = []
+    const shade: number[] = []
     for (let i = 0; i < 9; i++) {
       const angle = -Math.PI / 2 + (i / 9) * TAU
-      const len = 0.78 + (i % 3) * 0.1
-      fills.push(frond(angle, len, 0.1 + (i % 2) * 0.03))
+      fills.push(frond(angle, 0.78 + (i % 3) * 0.1, 0.11 + (i % 2) * 0.03))
+      shade.push(i % 2 === 0 ? -1 : 0)
     }
-    return { fills, veins: [], dots: [trunk(0, 0, 0.09)] }
+    for (let i = 0; i < 6; i++) {
+      fills.push(frond(-Math.PI / 2 + (i / 6) * TAU + 0.3, 0.42, 0.07))
+      shade.push(1)
+    }
+    return drawn(fills, shade, [], [trunk(0, 0, 0.1), trunk(0, 0, 0.045)])
   }
   if (form === 'clump') {
-    const spots = around(3, 0.34, -Math.PI / 2)
-    return {
-      fills: spots.map((spot, i) => scallop({ count: 8, inner: 0.42, outer: 0.58, turn: i, wobble: 0.06, cx: spot.x, cy: spot.y })),
-      veins: [],
-      dots: spots.map((spot) => trunk(spot.x, spot.y, 0.045)),
-    }
+    const spots = around(3, 0.36, -Math.PI / 2)
+    return drawn(
+      [
+        ...spots.map((spot, i) => scallop({ count: 8, inner: 0.4, outer: 0.58, turn: i, wobble: 0.07, cx: spot.x, cy: spot.y })),
+        ...spots.map((spot) => disk(spot.x - 0.08, spot.y - 0.1, 0.16)),
+      ],
+      [-1, 0, -1, 1, 1, 1],
+      [],
+      spots.map((spot) => trunk(spot.x, spot.y, 0.045)),
+    )
   }
   if (form === 'oak') {
-    return {
-      fills: [scallop({ count: 8, inner: 0.62, outer: 1, turn: 0.35, wobble: 0.14, sx: 1.18, sy: 1.05 })],
-      veins: ribs(6, 0.55, 0.2),
-      dots: [trunk(0, 0, 0.07)],
-    }
+    return drawn(
+      [
+        scallop({ count: 8, inner: 0.58, outer: 1, turn: 0.35, wobble: 0.16, sx: 1.12, sy: 1.02 }),
+        scallop({ count: 6, inner: 0.4, outer: 0.62, turn: 1.2, wobble: 0.12, sx: 0.85, sy: 0.75 }),
+        disk(-0.18, -0.16, 0.22),
+      ],
+      [-1, 0, 1],
+      ribs(6, 0.62, 0.2, 1.05, 0.95),
+      [trunk(0, 0.05, 0.09)],
+    )
   }
   if (form === 'pine') {
-    return {
-      fills: [star(11, 0.42, 1, -Math.PI / 2)],
-      veins: [circle(0.18)],
-      dots: [trunk(0, 0, 0.06)],
-    }
+    return drawn(
+      [star(11, 0.34, 1, -Math.PI / 2), star(8, 0.16, 0.48, 0.3), disk(-0.06, -0.08, 0.12)],
+      [0, -1, 1],
+      ribs(11, 0.86, -Math.PI / 2),
+      [trunk(0, 0, 0.055)],
+    )
   }
   if (form === 'spruce') {
-    return {
-      fills: [star(14, 0.55, 1, 0.1), star(10, 0.32, 0.58, 0.4)],
-      veins: [],
-      dots: [trunk(0, 0, 0.055)],
-    }
+    return drawn(
+      [star(14, 0.52, 1, 0.1), star(10, 0.28, 0.62, 0.4), star(7, 0.12, 0.32, 0.7)],
+      [0, -1, 1],
+      ribs(6, 0.4, 0.2),
+      [trunk(0, 0, 0.05)],
+    )
   }
   if (form === 'birch') {
-    return {
-      fills: [scallop({ count: 14, inner: 0.82, outer: 1, turn: 0.1, wobble: 0.03, sx: 0.78, sy: 1.08 })],
-      veins: ribs(5, 0.5, -0.4, 0.78, 1.08),
-      dots: [trunk(0, 0, 0.08), ...around(7, 0.42, 0.3).map((spot) => ({ x: spot.x, y: spot.y, r: 0.035, bloom: true }))],
-    }
+    return drawn(
+      [
+        scallop({ count: 14, inner: 0.82, outer: 1, turn: 0.1, wobble: 0.03, sx: 0.72, sy: 1.05 }),
+        scallop({ count: 8, inner: 0.62, outer: 0.78, turn: 0.4, wobble: 0.04, sx: 0.48, sy: 0.72 }),
+      ],
+      [0, 1],
+      ribs(6, 0.55, -0.5, 0.7, 1),
+      [trunk(0, 0.08, 0.055), ...around(8, 0.38, 0.2).map((spot) => ({ x: spot.x * 0.85, y: spot.y, r: 0.03, bloom: true }))],
+    )
   }
   if (form === 'fruit') {
-    return {
-      fills: [scallop({ count: 12, inner: 0.8, outer: 1, turn: 0.5, wobble: 0.05 })],
-      veins: ribs(5, 0.4, 0.2),
-      dots: around(8, 0.55, -0.4).map((spot) => ({ x: spot.x, y: spot.y, r: 0.09, bloom: true })),
-    }
+    return drawn(
+      [
+        scallop({ count: 12, inner: 0.8, outer: 1, turn: 0.5, wobble: 0.05 }),
+        circle(0.55),
+        disk(-0.14, -0.18, 0.2),
+      ],
+      [-1, 0, 1],
+      ribs(6, 0.5, 0.3),
+      [trunk(0, 0, 0.05), ...around(9, 0.52, -0.2).map((spot, i) => ({ x: spot.x, y: spot.y, r: i % 3 === 0 ? 0.1 : 0.07, bloom: true }))],
+    )
   }
   if (form === 'olive') {
-    return {
-      fills: [scallop({ count: 10, inner: 0.7, outer: 1, turn: 1.1, wobble: 0.09, sx: 1.28, sy: 0.78 })],
-      veins: ribs(5, 0.5, 0.4, 1.28, 0.78),
-      dots: [trunk(0, 0, 0.06)],
-    }
+    return drawn(
+      [
+        scallop({ count: 10, inner: 0.68, outer: 1, turn: 1.1, wobble: 0.1, sx: 1.16, sy: 0.74 }),
+        scallop({ count: 7, inner: 0.4, outer: 0.58, turn: 0.4, wobble: 0.08, sx: 0.9, sy: 0.5 }),
+        disk(-0.22, -0.08, 0.16),
+      ],
+      [-1, 0, 1],
+      ribs(6, 0.55, 0.5, 1.1, 0.7),
+      [trunk(0, 0.04, 0.06)],
+    )
   }
   if (form === 'cypress') {
-    return {
-      fills: [scallop({ count: 12, inner: 0.86, outer: 1, turn: -0.2, wobble: 0.02, sx: 0.32, sy: 1.12 })],
-      veins: ribs(4, 0.72, -Math.PI / 2, 0.32, 1.12),
-      dots: [trunk(0, 0, 0.05)],
-    }
+    return drawn(
+      [
+        scallop({ count: 12, inner: 0.86, outer: 1, turn: -0.2, wobble: 0.02, sx: 0.3, sy: 1.08 }),
+        scallop({ count: 8, inner: 0.75, outer: 0.9, turn: 0.3, wobble: 0.02, sx: 0.18, sy: 0.72 }),
+        disk(0, -0.2, 0.07),
+      ],
+      [-1, 0, 1],
+      ribs(4, 0.8, -Math.PI / 2, 0.28, 1.05),
+      [trunk(0, 0.35, 0.04)],
+    )
   }
   if (form === 'bamboo') {
-    const stems = [-0.55, -0.18, 0.18, 0.55]
-    return {
-      fills: stems.map((x, index) => scallop({ count: 8, inner: 0.55, outer: 0.9, turn: index * 0.4, wobble: 0.02, sx: 0.16, sy: 1.05, cx: x, cy: (index % 2) * 0.06 })),
-      veins: [],
-      dots: stems.map((x) => trunk(x, 0.15, 0.035)),
-    }
+    const stems = [-0.48, -0.16, 0.16, 0.48]
+    const fills = stems.map((x, index) => scallop({ count: 8, inner: 0.55, outer: 0.95, turn: index * 0.5, wobble: 0.03, sx: 0.14, sy: 1.02, cx: x, cy: (index % 2) * 0.04 }))
+    for (const x of stems) fills.push(frond(-Math.PI / 2 + x, 0.42, 0.08))
+    return drawn(
+      fills,
+      [-1, 0, -1, 0, 1, 1, 1, 1],
+      [],
+      stems.flatMap((x) => [trunk(x, 0.2, 0.03), trunk(x, -0.15, 0.025)]),
+    )
   }
   if (form === 'ball') {
-    return { fills: [scallop({ count: 9, inner: 0.7, outer: 1, turn: 0.4, wobble: 0.08 })], veins: ribs(5, 0.45, 0.2), dots: [] }
+    return drawn(
+      [
+        scallop({ count: 9, inner: 0.72, outer: 1, turn: 0.4, wobble: 0.08 }),
+        circle(0.58),
+        disk(-0.14, -0.18, 0.24),
+      ],
+      [-1, 0, 1],
+      ribs(6, 0.55, 0.2),
+      [],
+    )
   }
   if (form === 'wide') {
-    const spots = [{ x: -0.4, y: 0.05 }, { x: 0.02, y: -0.08 }, { x: 0.4, y: 0.06 }]
-    return {
-      fills: spots.map((spot, i) => scallop({ count: 7, inner: 0.36, outer: 0.52, turn: i * 0.8, wobble: 0.1, cx: spot.x, cy: spot.y })),
-      veins: [],
-      dots: [],
-    }
+    const spots = [{ x: -0.42, y: 0.06 }, { x: 0, y: -0.1 }, { x: 0.42, y: 0.08 }]
+    return drawn(
+      [
+        ...spots.map((spot, i) => scallop({ count: 7, inner: 0.34, outer: 0.5, turn: i * 0.8, wobble: 0.1, cx: spot.x, cy: spot.y })),
+        ...spots.map((spot) => disk(spot.x - 0.08, spot.y - 0.1, 0.16)),
+      ],
+      [-1, 0, -1, 1, 1, 1],
+      [],
+      [],
+    )
   }
   if (form === 'needle') {
-    return { fills: [star(12, 0.62, 1, -Math.PI / 2)], veins: [], dots: [] }
+    return drawn(
+      [star(12, 0.58, 1, -Math.PI / 2), star(8, 0.22, 0.5, 0.2), disk(-0.06, -0.08, 0.14)],
+      [0, -1, 1],
+      ribs(8, 0.7, -Math.PI / 2),
+      [],
+    )
   }
   if (form === 'bloom') {
-    return {
-      fills: [scallop({ count: 8, inner: 0.72, outer: 1, turn: 0.2, wobble: 0.05 })],
-      veins: ribs(4, 0.4, 0.4),
-      dots: around(6, 0.62, -Math.PI / 2).map((spot) => ({ x: spot.x, y: spot.y, r: 0.11, bloom: true })),
-    }
+    return drawn(
+      [
+        scallop({ count: 8, inner: 0.7, outer: 1, turn: 0.2, wobble: 0.06 }),
+        circle(0.48),
+        disk(-0.12, -0.14, 0.18),
+      ],
+      [-1, 0, 1],
+      ribs(5, 0.45, 0.5),
+      around(7, 0.62, -Math.PI / 2).map((spot, i) => ({ x: spot.x, y: spot.y, r: i % 2 ? 0.12 : 0.08, bloom: true })),
+    )
   }
   if (form === 'group') {
-    const spots = [{ x: -0.28, y: 0.16, r: 0.48 }, { x: 0.3, y: 0.12, r: 0.44 }, { x: 0.02, y: -0.28, r: 0.4 }]
-    return {
-      fills: spots.map((spot, i) => scallop({ count: 7, inner: spot.r * 0.7, outer: spot.r, turn: i, wobble: 0.07, cx: spot.x, cy: spot.y })),
-      veins: [],
-      dots: [],
-    }
+    const spots = [{ x: -0.3, y: 0.16, r: 0.5 }, { x: 0.32, y: 0.12, r: 0.46 }, { x: 0.02, y: -0.3, r: 0.42 }]
+    return drawn(
+      [
+        ...spots.map((spot, i) => scallop({ count: 7, inner: spot.r * 0.68, outer: spot.r, turn: i, wobble: 0.08, cx: spot.x, cy: spot.y })),
+        ...spots.map((spot) => disk(spot.x - 0.06, spot.y - 0.08, spot.r * 0.35)),
+      ],
+      [-1, 0, -1, 1, 1, 1],
+      [],
+      spots.map((spot) => trunk(spot.x, spot.y + 0.04, 0.035)),
+    )
   }
   if (form === 'hedge') {
-    return {
-      fills: [scallop({ count: 16, inner: 0.84, outer: 1, turn: 0.05, wobble: 0.025, sx: 1.55, sy: 0.42 })],
-      veins: [],
-      dots: [],
-    }
+    return drawn(
+      [
+        scallop({ count: 18, inner: 0.86, outer: 1, turn: 0.04, wobble: 0.02, sx: 1.18, sy: 0.46 }),
+        scallop({ count: 12, inner: 0.8, outer: 0.92, turn: 0.2, wobble: 0.015, sx: 1.02, sy: 0.24 }),
+      ],
+      [-1, 1],
+      [-0.7, -0.35, 0, 0.35, 0.7].map((x) => `M ${num(x)} -0.28 L ${num(x)} 0.28`),
+      [],
+    )
   }
   if (form === 'rose') {
-    return {
-      fills: [scallop({ count: 7, inner: 0.55, outer: 0.82, turn: 0.6, wobble: 0.06 })],
-      veins: ribs(5, 0.35, 0.3),
-      dots: around(5, 0.28, 0.2).map((spot) => ({ x: spot.x, y: spot.y, r: 0.14, bloom: true })),
-    }
+    return drawn(
+      [
+        scallop({ count: 7, inner: 0.5, outer: 0.86, turn: 0.6, wobble: 0.07 }),
+        circle(0.36),
+        disk(-0.08, -0.1, 0.14),
+      ],
+      [-1, 0, 1],
+      ribs(5, 0.4, 0.4),
+      around(5, 0.22, 0.3).map((spot) => ({ x: spot.x, y: spot.y, r: 0.13, bloom: true })),
+    )
   }
   if (form === 'box') {
-    return { fills: [roundedBox(0.86, 0.16)], veins: [], dots: [] }
+    return drawn(
+      [roundedBox(0.82, 0.14), roundedBox(0.48, 0.08)],
+      [-1, 1],
+      ['M -0.7 0 H 0.7', 'M 0 -0.7 V 0.7'],
+      [],
+    )
   }
   if (form === 'fern') {
     const fills: string[] = []
-    for (let i = 0; i < 8; i++) fills.push(frond(-Math.PI / 2 + (i / 8) * TAU, 0.72 + (i % 3) * 0.1, 0.08))
-    return { fills, veins: [], dots: [] }
+    const shade: number[] = []
+    for (let i = 0; i < 8; i++) {
+      fills.push(frond(-Math.PI / 2 + (i / 8) * TAU, 0.78 + (i % 3) * 0.08, 0.09))
+      shade.push(i % 2 ? 0 : -1)
+    }
+    for (let i = 0; i < 8; i++) {
+      fills.push(frond(-Math.PI / 2 + ((i + 0.5) / 8) * TAU, 0.4, 0.05))
+      shade.push(1)
+    }
+    return drawn(fills, shade, [], [trunk(0, 0, 0.04)])
   }
   if (form === 'grass') {
     const stems = [-0.55, -0.28, 0, 0.28, 0.55]
-    return {
-      fills: stems.map((x, index) => scallop({ count: 6, inner: 0.5, outer: 0.92, turn: -1.2 + index * 0.05, wobble: 0.04, sx: 0.13, sy: 1.08, cx: x, cy: 0.02 })),
-      veins: [],
-      dots: [],
-    }
+    return drawn(
+      stems.map((x, index) => scallop({ count: 6, inner: 0.48, outer: 0.96, turn: -1.15 + index * 0.04, wobble: 0.05, sx: 0.12, sy: 1.05, cx: x, cy: 0 })),
+      [-1, 0, 1, 0, -1],
+      [],
+      stems.map((x, index) => ({ x, y: -0.72 - (index % 2) * 0.08, r: 0.045, bloom: true })),
+    )
   }
   if (form === 'spiral') {
-    return {
-      fills: [scallop({ count: 20, inner: 0.94, outer: 1, turn: 0.15, wobble: 0.015 })],
-      veins: [circle(0.7), circle(0.42), circle(0.18)],
-      dots: [],
-    }
+    return drawn(
+      [scallop({ count: 20, inner: 0.94, outer: 1, turn: 0.15, wobble: 0.012 }), circle(0.62), circle(0.28)],
+      [-1, 0, 1],
+      [circle(0.78), circle(0.46)],
+      [trunk(0, 0, 0.05)],
+    )
   }
-  const spots = around(5, 0.72, 0.3)
-  return {
-    fills: [scallop({ count: 10, inner: 0.78, outer: 1, turn: 0.15, wobble: 0.04, sx: 1.18, sy: 0.7 })],
-    veins: [],
-    dots: spots.map((spot) => ({ x: spot.x * 0.7, y: spot.y * 0.55, r: 0.07, bloom: true })),
-  }
+  return drawn(
+    [
+      scallop({ count: 10, inner: 0.72, outer: 1, turn: 0.15, wobble: 0.05, sx: 1.15, sy: 0.62 }),
+      scallop({ count: 8, inner: 0.5, outer: 0.7, turn: 0.8, wobble: 0.06, sx: 0.9, sy: 0.4 }),
+      disk(-0.16, -0.08, 0.16),
+    ],
+    [-1, 0, 1],
+    ribs(5, 0.4, 0.2, 1.05, 0.55),
+    around(6, 0.55, 0.4).map((spot) => ({ x: spot.x * 0.85, y: spot.y * 0.5, r: 0.06, bloom: true })),
+  )
 }
 
 export function plantMarkup(plant: Plant, ppm: number, k: number): string {
@@ -288,7 +410,7 @@ export function plantMarkup(plant: Plant, ppm: number, k: number): string {
   const paint = plantPaint(form)
   const pen = num(1.25 / k)
   const vein = num(0.9 / k)
-  const fills = glyph.fills.map((d) => `<path d="${d}" fill="${paint.leaf}" stroke="${paint.ink}" stroke-width="${pen}" vector-effect="non-scaling-stroke"/>`).join('')
+  const fills = glyph.fills.map((d, index) => `<path d="${d}" fill="${crownFill(paint, glyph.shade?.[index] ?? 0)}" stroke="${paint.ink}" stroke-width="${pen}" vector-effect="non-scaling-stroke"/>`).join('')
   const veins = glyph.veins.map((d) => `<path d="${d}" fill="none" stroke="${paint.vein}" stroke-width="${vein}" vector-effect="non-scaling-stroke"/>`).join('')
   const dots = glyph.dots.map((dot) => {
     const fill = dot.bloom ? paint.accent : paint.trunk
@@ -296,6 +418,10 @@ export function plantMarkup(plant: Plant, ppm: number, k: number): string {
     return `<circle cx="${num(dot.x)}" cy="${num(dot.y)}" r="${num(dot.r)}" fill="${fill}" stroke="${stroke}" stroke-width="${vein}" vector-effect="non-scaling-stroke"/>`
   }).join('')
   return `<g transform="translate(${num(plant.x)} ${num(plant.y)}) scale(${num(radius)})">${fills}${veins}${dots}</g>`
+}
+
+function drawn(fills: string[], shade: number[], veins: string[], dots: PlantDot[]): PlantGlyph {
+  return { fills, shade, veins, dots }
 }
 
 function trunk(x: number, y: number, r: number): PlantDot {
@@ -371,7 +497,22 @@ function frond(angle: number, len: number, width: number): string {
 }
 
 function circle(r: number): string {
-  return `M ${num(r)} 0 A ${num(r)} ${num(r)} 0 1 1 ${num(-r)} 0 A ${num(r)} ${num(r)} 0 1 1 ${num(r)} 0 Z`
+  return disk(0, 0, r)
+}
+
+function disk(cx: number, cy: number, r: number): string {
+  return `M ${num(cx + r)} ${num(cy)} A ${num(r)} ${num(r)} 0 1 1 ${num(cx - r)} ${num(cy)} A ${num(r)} ${num(r)} 0 1 1 ${num(cx + r)} ${num(cy)} Z`
+}
+
+function mixHex(from: string, to: string, t: number): string {
+  const a = Number.parseInt(from.slice(1), 16)
+  const b = Number.parseInt(to.slice(1), 16)
+  const ch = (shift: number) => {
+    const left = (a >> shift) & 255
+    const right = (b >> shift) & 255
+    return Math.round(left + (right - left) * t).toString(16).padStart(2, '0')
+  }
+  return `#${ch(16)}${ch(8)}${ch(0)}`
 }
 
 function roundedBox(size: number, radius: number): string {

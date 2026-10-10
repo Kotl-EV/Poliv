@@ -3,7 +3,10 @@ import { dist, pointInZone, zoneAreaPx } from './geom.ts'
 import { isDripKind } from './landscape.ts'
 import { nozzleById } from './nozzles.ts'
 import { barToHeadM, headLossM, MIN_SPRINKLER_BAR, pickPipe, seriesById } from './pipes.ts'
-import type { Analysis, Doc, Drip, Point, SegmentResult, Zone } from './types.ts'
+import type { Analysis, Doc, Drip, PipeRole, Point, SegmentResult, Valve, Zone } from './types.ts'
+
+/** Гибкий хвост дотягивается до головки не дальше этого расстояния. */
+const FUNNY_M = 1
 
 type Node = { id: number; x: number; y: number; points: Point[] }
 
@@ -72,6 +75,14 @@ function nearest(p: Point, nodes: Node[]): { node: Node; distance: number } | nu
     if (!best || distance < best.distance) best = { node, distance }
   }
   return best
+}
+
+function hitchPoint(point: Point, nodes: Node[], ppm: number | null): { node: Node; distance: number; tail: boolean } | null {
+  const hit = nearest(point, nodes)
+  if (!hit) return null
+  if (hit.distance <= SNAP_PX) return { ...hit, tail: false }
+  if (ppm && ppm > 0 && hit.distance <= FUNNY_M * ppm) return { ...hit, tail: true }
+  return null
 }
 
 function zoneRows(doc: Doc): Analysis['zones'] {
@@ -194,6 +205,7 @@ function blank(doc: Doc, warnings: string[], totalFlowLph: number): Analysis {
     stations: [],
     drips: dripSummary(doc),
     fittings: [],
+    tails: [],
     trench: trenchRow(doc),
     warnings,
   }
@@ -231,6 +243,13 @@ export function analyze(doc: Doc): Analysis {
   }
 
   const { nodes, index } = cluster(flat)
+  const pipeById = new Map(doc.pipes.map((pipe) => [pipe.id, pipe]))
+  const roleOf = (pipeId: string, parentStation: string, childStation: string): PipeRole => {
+    const set = pipeById.get(pipeId)?.role
+    if (set === 'main' || set === 'zone') return set
+    if (parentStation !== '' && childStation !== '') return 'zone'
+    return 'main'
+  }
   const edges: Edge[] = []
   let cursor = 0
   for (const pipe of doc.pipes) {
@@ -255,14 +274,18 @@ export function analyze(doc: Doc): Analysis {
   }
 
   const demand = new Map<number, number>()
+  const tails: Analysis['tails'] = []
   let loose = 0
   for (const sprinkler of doc.sprinklers) {
-    const hit = nearest(sprinkler, nodes)
-    if (!hit || hit.distance > SNAP_PX) {
+    const hit = hitchPoint(sprinkler, nodes, doc.pxPerMeter)
+    if (!hit) {
       loose += 1
       continue
     }
     demand.set(hit.node.id, (demand.get(hit.node.id) ?? 0) + sprinkler.flowLph)
+    if (hit.tail && doc.pxPerMeter) {
+      tails.push({ a: { x: hit.node.x, y: hit.node.y }, b: { x: sprinkler.x, y: sprinkler.y }, lengthM: hit.distance / doc.pxPerMeter })
+    }
   }
   if (loose) warnings.push(loose === 1 ? 'Один дождеватель не стоит на трубе и в расход сети не входит.' : `${loose} дождевателей не стоят на трубе и в расход сети не входят.`)
 
@@ -301,7 +324,7 @@ export function analyze(doc: Doc): Analysis {
   const series = seriesById(doc.pipeSeries)
 
   if (sourceId === null) {
-    for (const edge of edges) segments.push(segment(doc, edge, null, null, 'unfed'))
+    for (const edge of edges) segments.push(segment(doc, edge, null, null, 'unfed', roleOf(edge.pipeId, '', '')))
   } else {
     const parent = new Map<number, number | null>()
     const seen = new Set<number>([sourceId])
@@ -332,17 +355,37 @@ export function analyze(doc: Doc): Analysis {
       list.push(node)
       children.set(above, list)
     }
+    const pipeValve = new Map<string, string>()
+    for (const pipe of doc.pipes) {
+      if (pipe.valveId) pipeValve.set(pipe.id, pipe.valveId)
+    }
     const valveAt = new Map<number, string>()
+    const valveGroups = new Map<number, string[]>()
     let looseValve = 0
     let stackedValve = false
     for (const valve of doc.valves) {
-      const hit = nearest(valve, nodes)
+      const hit = nearest(valveAnchor(doc, valve), nodes)
       if (!hit || hit.distance > SNAP_PX || !seen.has(hit.node.id)) {
         looseValve += 1
         continue
       }
-      if (valveAt.has(hit.node.id)) stackedValve = true
-      else valveAt.set(hit.node.id, valve.id)
+      const list = valveGroups.get(hit.node.id) ?? []
+      list.push(valve.id)
+      valveGroups.set(hit.node.id, list)
+    }
+    for (const [nodeId, ids] of valveGroups) {
+      if (ids.length === 1) {
+        valveAt.set(nodeId, ids[0])
+        continue
+      }
+      const owned = new Set<string>()
+      for (const edge of adj.get(nodeId) ?? []) {
+        const tag = pipeValve.get(edge.pipeId)
+        if (tag && ids.includes(tag)) owned.add(tag)
+      }
+      if (owned.size > 0) continue
+      stackedValve = true
+      valveAt.set(nodeId, ids[0])
     }
     if (looseValve) warnings.push(looseValve === 1 ? 'Клапан не стоит на трубе.' : `${looseValve} клапанов не стоят на трубе.`)
     if (stackedValve) warnings.push('Два клапана на одной точке считаются одним.')
@@ -351,7 +394,12 @@ export function analyze(doc: Doc): Analysis {
     const assign = (node: number, station: string) => {
       const next = valveAt.get(node) ?? station
       stationOf.set(node, next)
-      for (const child of children.get(node) ?? []) assign(child, next)
+      for (const child of children.get(node) ?? []) {
+        const edge = edgeByChild.get(child)
+        const tag = edge ? pipeValve.get(edge.pipeId) : undefined
+        const here = valveGroups.get(node) ?? []
+        assign(child, tag && here.includes(tag) ? tag : next)
+      }
     }
     assign(sourceId, '')
 
@@ -361,7 +409,7 @@ export function analyze(doc: Doc): Analysis {
       if (above !== null && above !== undefined && stationOf.get(above)) nested = true
     }
     if (nested) warnings.push('Клапан стоит за другим клапаном. Труба считается по наибольшей станции, расходы станций не складываются.')
-    if (valveAt.size) {
+    if (valveAt.size || valveGroups.size) {
       let open = false
       for (const [nodeId, flow] of demand) {
         if (flow > 0 && stationOf.get(nodeId) === '') open = true
@@ -387,8 +435,10 @@ export function analyze(doc: Doc): Analysis {
     connectedFlowLph = designFlow(rootParts)
 
     stations = withStationRuntime(doc, nodes, seen, stationOf, doc.valves.flatMap((valve) => {
-      const hit = nearest(valve, nodes)
-      if (!hit || valveAt.get(hit.node.id) !== valve.id) return []
+      const hit = nearest(valveAnchor(doc, valve), nodes)
+      if (!hit || !seen.has(hit.node.id)) return []
+      const owns = valveAt.get(hit.node.id) === valve.id || [...stationOf.values()].includes(valve.id)
+      if (!owns) return []
       let flowLph = 0
       for (const [nodeId, flow] of demand) {
         if (stationOf.get(nodeId) === valve.id) flowLph += flow
@@ -432,6 +482,7 @@ export function analyze(doc: Doc): Analysis {
           headLossM: loss,
           residualHeadM: residual,
           status: 'ok',
+          role: roleOf(edge.pipeId, stationOf.get(current) ?? '', stationOf.get(child) ?? ''),
         })
         order.push(child)
       }
@@ -442,7 +493,7 @@ export function analyze(doc: Doc): Analysis {
       if (sized.has(edge.key)) continue
       const status = seen.has(edge.a) && seen.has(edge.b) ? 'cycle' : 'unfed'
       if (status === 'unfed') hanging = true
-      segments.push(segment(doc, edge, null, null, status))
+      segments.push(segment(doc, edge, null, null, status, roleOf(edge.pipeId, '', '')))
     }
     if (hanging) warnings.push('Часть труб не соединена с источником.')
 
@@ -476,6 +527,7 @@ export function analyze(doc: Doc): Analysis {
     stations,
     drips: dripSummary(doc),
     fittings: fittingsOf(doc, nodes, segments, sourceId),
+    tails,
     trench: trenchRow(doc),
     warnings: unique(warnings),
   }
@@ -498,8 +550,8 @@ function withStationRuntime(
     })
   }
   for (const sprinkler of doc.sprinklers) {
-    const hit = nearest(sprinkler, nodes)
-    if (!hit || hit.distance > SNAP_PX || !seen.has(hit.node.id)) continue
+    const hit = hitchPoint(sprinkler, nodes, doc.pxPerMeter)
+    if (!hit || !seen.has(hit.node.id)) continue
     take(sprinkler, stationOf.get(hit.node.id))
   }
   for (const drip of doc.drips) {
@@ -533,7 +585,7 @@ function withStationRuntime(
   })
 }
 
-function segment(doc: Doc, edge: Edge, flow: number | null, name: string | null, status: SegmentResult['status']): SegmentResult {
+function segment(doc: Doc, edge: Edge, flow: number | null, name: string | null, status: SegmentResult['status'], role: PipeRole): SegmentResult {
   return {
     pipeId: edge.pipeId,
     a: edge.p1,
@@ -547,7 +599,14 @@ function segment(doc: Doc, edge: Edge, flow: number | null, name: string | null,
     headLossM: null,
     residualHeadM: null,
     status,
+    role,
   }
+}
+
+function valveAnchor(doc: Doc, valve: Valve): Point {
+  if (!valve.boxId) return valve
+  const box = (doc.boxes ?? []).find((item) => item.id === valve.boxId)
+  return box ?? valve
 }
 
 function unique(items: string[]): string[] {
@@ -638,6 +697,15 @@ function fittingsOf(doc: Doc, nodes: Node[], segments: SegmentResult[], sourceId
     const hit = nearest(sprinkler, nodes)
     if (hit && hit.distance <= SNAP_PX) sprinklerNodes.add(hit.node.id)
   }
+  const hydrantNodes = new Set<number>()
+  let hydrants = 0
+  for (const hydrant of doc.hydrants ?? []) {
+    const hit = nearest(hydrant, nodes)
+    if (!hit || hit.distance > SNAP_PX) continue
+    hydrantNodes.add(hit.node.id)
+    hydrants += 1
+  }
+  if (hydrants) counts.set('Гидрант', hydrants)
   const dripNodes = new Set<number>()
   let dripStarts = 0
   for (const drip of doc.drips) {
@@ -652,7 +720,7 @@ function fittingsOf(doc: Doc, nodes: Node[], segments: SegmentResult[], sourceId
     const node = nodes[nodeId]
     if (!node) continue
     if (list.length === 1) {
-      if (nodeId === sourceId || sprinklerNodes.has(nodeId) || dripNodes.has(nodeId)) continue
+      if (nodeId === sourceId || sprinklerNodes.has(nodeId) || dripNodes.has(nodeId) || hydrantNodes.has(nodeId)) continue
       add(`Заглушка ПЭ ${list[0].od}`)
       continue
     }

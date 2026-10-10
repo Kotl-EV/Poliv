@@ -7,7 +7,8 @@ test('every crown is a closed drawing and the fallback matches the kind', () => 
   assert.equal(new Set(forms.map((item) => item.id)).size, forms.length)
   for (const item of forms) {
     const glyph = plantGlyph(item.id)
-    assert.ok(glyph.fills.length >= 1, item.id)
+    assert.ok(glyph.fills.length >= 2, item.id)
+    if (glyph.shade) assert.equal(glyph.shade.length, glyph.fills.length, item.id)
     for (const path of glyph.fills) {
       assert.ok(path.startsWith('M'), item.id)
       assert.ok(path.endsWith('Z'), item.id)

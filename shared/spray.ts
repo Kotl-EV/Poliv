@@ -32,8 +32,10 @@ type Option = {
   vertex: boolean
 }
 
+export type SprayFamily = 'auto' | 'fan' | 'rotor'
+
 /** Покрытие газона: минимум голов, head-to-head, без плотной укладки вокруг клумб. */
-export function placeSprayOnPolygon(ring: Point[], holes: Point[][], ppm: number): SpraySpot[] {
+export function placeSprayOnPolygon(ring: Point[], holes: Point[][], ppm: number, family: SprayFamily = 'auto'): SpraySpot[] {
   if (ring.length < 3 || !(ppm > 0)) return []
   const outer = orient(simplifyRing(ring, 0.2 * ppm), true)
   if (outer.length < 3) return []
@@ -50,7 +52,7 @@ export function placeSprayOnPolygon(ring: Point[], holes: Point[][], ppm: number
   const rings = [outer, ...holeRings]
   const weights = sampleWeights(samples, rings, ppm)
 
-  const rotorsOk = area >= 70 && minSpan >= 7.2
+  const rotorsOk = family === 'fan' ? false : family === 'rotor' ? minSpan >= 6 : area >= 70 && minSpan >= 7.2
   const primary = rotorsOk ? ROTOR_FAMILY : FAN_FAMILY
   const candidates = collectCandidates(outer, holeRings, ppm, inside, primary.radiusM)
   const primaryOpts: Option[] = []

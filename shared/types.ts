@@ -44,9 +44,16 @@ export type Sprinkler = {
   flowLph: number
 }
 
+/** Магистраль идёт от источника к клапанам, зональная — от клапана к дождевателям. */
+export type PipeRole = 'main' | 'zone'
+
 export type Pipe = {
   id: string
   points: Point[]
+  /** Пусто у старых файлов: участок за клапаном считается зональным, остальное магистралью. */
+  role?: PipeRole
+  /** Клапан, из которого выходит эта линия. Нужен, когда несколько клапанов стоят в одном боксе. */
+  valveId?: string
 }
 
 export type Valve = {
@@ -54,6 +61,27 @@ export type Valve = {
   name: string
   x: number
   y: number
+  /** Клапанный бокс. Пусто — клапан сам по себе. */
+  boxId?: string
+}
+
+export type ValveBox = {
+  id: string
+  name: string
+  x: number
+  y: number
+}
+
+export type Hydrant = {
+  id: string
+  x: number
+  y: number
+}
+
+export type Sleeve = {
+  id: string
+  a: Point
+  b: Point
 }
 
 export type Drip = {
@@ -142,6 +170,12 @@ export type Doc = {
   sprinklers: Sprinkler[]
   pipes: Pipe[]
   valves: Valve[]
+  /** Клапанные боксы. Пусто у старых файлов. */
+  boxes?: ValveBox[]
+  /** Гидранты. Пусто у старых файлов. */
+  hydrants?: Hydrant[]
+  /** Гильзы, футляры на пересечениях. Пусто у старых файлов. */
+  sleeves?: Sleeve[]
   drips: Drip[]
   source: Source | null
   trench: Trench
@@ -176,6 +210,7 @@ export type SegmentResult = {
   headLossM: number | null
   residualHeadM: number | null
   status: SegmentStatus
+  role: PipeRole
 }
 
 export type Analysis = {
@@ -207,6 +242,8 @@ export type Analysis = {
   stations: { id: string; name: string; flowLph: number; runtimeMin: number | null; cycles: number | null; soakMin: number }[]
   drips: { lengthM: number | null; emitters: number; flowLph: number }
   fittings: { name: string; count: number }[]
+  /** Короткий гибкий хвост от узла трубы до головки, не дальше метра. */
+  tails: { a: Point; b: Point; lengthM: number }[]
   trench: { widthM: number; depthM: number; lengthM: number | null; volumeM3: number | null }
   warnings: string[]
 }

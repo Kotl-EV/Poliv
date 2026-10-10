@@ -3,6 +3,9 @@ import { fixtureMarkup } from './fixtures.ts'
 import { plantMarkup } from './plants.ts'
 import { gridStepM, surfaceOf, SURFACES, DEFAULT_PPM, DEFAULT_SHEET_M, hatchOf, honeycomb } from './landscape.ts'
 import { sectorPath, zoneShapeD } from './geom.ts'
+import { sleeveLengthM } from './join.ts'
+import { funnyPoints, pipeTags } from './pipeview.ts'
+import { pipeWeight } from './pipes.ts'
 import type { Analysis, Doc, Plant, Point } from './types.ts'
 
 export const SHEET_DPI = 150
@@ -90,6 +93,12 @@ export function contentBounds(doc: Doc, underlay?: { w: number; h: number } | nu
     push({ x: head.x + r, y: head.y + r })
   }
   for (const valve of doc.valves) push(valve)
+  for (const box of doc.boxes ?? []) push(box)
+  for (const hydrant of doc.hydrants ?? []) push(hydrant)
+  for (const sleeve of doc.sleeves ?? []) {
+    push(sleeve.a)
+    push(sleeve.b)
+  }
   for (const note of doc.notes ?? []) push(note)
   for (const plant of doc.plants ?? []) {
     const r = plant.radiusM * ppm
@@ -190,9 +199,19 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
   }
   if (layers.pipes) {
     for (const segment of analysis.segments) {
-      const dash = segment.status === 'ok' ? '' : ` stroke-dasharray="${fmt(8 / k)} ${fmt(6 / k)}"`
       parts.push(
-        `<line x1="${fmt(segment.a.x)}" y1="${fmt(segment.a.y)}" x2="${fmt(segment.b.x)}" y2="${fmt(segment.b.y)}" stroke="${pipeColor(segment.odMm, segment.status)}" stroke-width="${fmt(3.2 / k)}" stroke-linecap="round"${dash}/>`,
+        `<line x1="${fmt(segment.a.x)}" y1="${fmt(segment.a.y)}" x2="${fmt(segment.b.x)}" y2="${fmt(segment.b.y)}" stroke="${pipeColor(segment.odMm, segment.status)}" stroke-width="${fmt(pipeWeight(segment.role) / k)}" stroke-linecap="round"/>`,
+      )
+    }
+    for (const tail of analysis.tails) {
+      const pts = funnyPoints(tail.a, tail.b).map((point) => `${fmt(point.x)},${fmt(point.y)}`).join(' ')
+      parts.push(
+        `<polyline points="${pts}" fill="none" stroke="#8a5a16" stroke-width="${fmt(2.2 / k)}" stroke-linecap="round"/>`,
+      )
+    }
+    for (const tag of pipeTags(analysis.segments, doc.pxPerMeter, k)) {
+      parts.push(
+        `<text x="${fmt(tag.x)}" y="${fmt(tag.y)}" fill="#1c2822" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle" transform="rotate(${fmt(tag.rotate)} ${fmt(tag.x)} ${fmt(tag.y)})">${xml(tag.text)}</text>`,
       )
     }
   }
@@ -215,6 +234,25 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
     }
   }
   if (layers.fittings) {
+    for (const sleeve of doc.sleeves ?? []) {
+      parts.push(
+        `<line x1="${fmt(sleeve.a.x)}" y1="${fmt(sleeve.a.y)}" x2="${fmt(sleeve.b.x)}" y2="${fmt(sleeve.b.y)}" stroke="#5c564e" stroke-width="${fmt(7 / k)}" stroke-linecap="round"/>`,
+        `<line x1="${fmt(sleeve.a.x)}" y1="${fmt(sleeve.a.y)}" x2="${fmt(sleeve.b.x)}" y2="${fmt(sleeve.b.y)}" stroke="#f4efe4" stroke-width="${fmt(2.4 / k)}" stroke-linecap="round"/>`,
+      )
+    }
+    for (const box of doc.boxes ?? []) {
+      const w = 22 / k
+      const h = 14 / k
+      parts.push(
+        `<rect x="${fmt(box.x - w)}" y="${fmt(box.y - h)}" width="${fmt(w * 2)}" height="${fmt(h * 2)}" rx="${fmt(2 / k)}" fill="#efe8dc" stroke="#5c3d24" stroke-width="${fmt(1.6 / k)}"/>`,
+      )
+    }
+    for (const hydrant of doc.hydrants ?? []) {
+      const r = 4.5 / k
+      parts.push(
+        `<circle cx="${fmt(hydrant.x)}" cy="${fmt(hydrant.y)}" r="${fmt(r)}" fill="#1f4d6e" stroke="#14364c" stroke-width="${fmt(1.4 / k)}"/>`,
+      )
+    }
     for (const valve of doc.valves) {
       const r = 5 / k
       parts.push(
@@ -283,6 +321,17 @@ function specPage(doc: Doc, analysis: Analysis, opts: SheetOpts): SheetPage {
     push('Капельницы', `${analysis.drips.emitters} шт.`)
     push('Расход', `${num(analysis.drips.flowLph, 0)} л/ч`)
   }
+  if (analysis.tails.length) {
+    pushTitle('Гибкие хвосты')
+    const length = analysis.tails.reduce((sum, tail) => sum + tail.lengthM, 0)
+    push('Хвост', `${analysis.tails.length} шт.`, `${num(length)} м`)
+  }
+  const sleeves = doc.sleeves ?? []
+  if (sleeves.length) {
+    pushTitle('Гильзы')
+    const length = sleeveLengthM(sleeves, doc.pxPerMeter)
+    push('Гильза', `${sleeves.length} шт.`, length === null ? '—' : `${num(length)} м`)
+  }
   pushTitle('Траншея')
   push('Сечение', `${num(doc.trench.widthM, 2)} × ${num(doc.trench.depthM, 2)} м`)
   push('Длина', analysis.trench.lengthM === null ? '—' : `${num(analysis.trench.lengthM)} м`)
@@ -339,12 +388,24 @@ function legendSvg(doc: Doc, analysis: Analysis, layers: SheetLayers, x: number,
   }
   if (layers.spray && doc.sprinklers.length) items.push({ swatch: `<circle cx="6" cy="6" r="5" fill="#fffdf8" stroke="#1c2822"/>`, label: 'Дождеватель' })
   if (layers.drip && doc.drips.length) items.push({ swatch: `<line x1="0" y1="6" x2="12" y2="6" stroke="#6b3fa0" stroke-width="2" stroke-dasharray="4 3"/>`, label: 'Капля' })
+  if (layers.pipes && analysis.segments.some((segment) => segment.role === 'main')) {
+    items.push({ swatch: `<line x1="0" y1="6" x2="12" y2="6" stroke="#1c2822" stroke-width="4" stroke-linecap="round"/>`, label: 'Магистраль' })
+  }
+  if (layers.pipes && analysis.segments.some((segment) => segment.role === 'zone')) {
+    items.push({ swatch: `<line x1="0" y1="6" x2="12" y2="6" stroke="#2f6f97" stroke-width="2" stroke-linecap="round"/>`, label: 'Зональная' })
+  }
+  if (layers.pipes && analysis.tails.length) {
+    items.push({ swatch: `<path d="M0 6 Q3 2 6 6 T12 6" fill="none" stroke="#8a5a16" stroke-width="1.6"/>`, label: 'Гибкий хвост' })
+  }
   if (layers.pipes) {
     for (const row of analysis.pipes) {
       items.push({ swatch: `<line x1="0" y1="6" x2="12" y2="6" stroke="${pipeColor(row.odMm, 'ok')}" stroke-width="3"/>`, label: row.name })
     }
   }
   if (layers.fittings && doc.valves.length) items.push({ swatch: `<polygon points="6,1 11,6 6,11 1,6" fill="#f7f3ea" stroke="#6b3fa0"/>`, label: 'Клапан' })
+  if (layers.fittings && (doc.boxes ?? []).length) items.push({ swatch: `<rect x="1" y="2" width="10" height="8" rx="1" fill="#efe8dc" stroke="#5c3d24"/>`, label: 'Клапанный бокс' })
+  if (layers.fittings && (doc.hydrants ?? []).length) items.push({ swatch: `<circle cx="6" cy="6" r="4" fill="#1f4d6e" stroke="#14364c"/>`, label: 'Гидрант' })
+  if (layers.fittings && (doc.sleeves ?? []).length) items.push({ swatch: `<line x1="0" y1="6" x2="12" y2="6" stroke="#5c564e" stroke-width="4" stroke-linecap="round"/>`, label: 'Гильза' })
   if (layers.fittings && doc.source) items.push({ swatch: `<rect x="1" y="1" width="10" height="10" fill="#1f6b45" stroke="#143c28"/>`, label: 'Источник' })
   const parts = [`<g font-family="Segoe UI, PT Sans, Arial, sans-serif">`]
   parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#f7f3ea" stroke="#1c2822" stroke-width="1.2"/>`)

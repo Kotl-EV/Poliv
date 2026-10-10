@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { analyze } from './analyze.ts'
-import { parseDoc } from './doc.ts'
+import { emptyDoc, parseDoc } from './doc.ts'
 import { exampleDoc } from './example.ts'
 import { headLossM, velocityMs } from './pipes.ts'
 
@@ -15,6 +15,7 @@ test('example network on SDR 11 picks PE 25 at the source and PE 20 after the fi
   const main = analysis.segments.find((item) => item.a.x === 40 && item.b.x === 200)
   assert.ok(main)
   assert.equal(main.flowLph, 1440)
+  assert.equal(main.role, 'main')
   assert.equal(main.odMm, 25)
   assert.equal(main.idMm, 20.4)
   assert.ok((main.velocity ?? 0) <= 1.5)
@@ -24,6 +25,7 @@ test('example network on SDR 11 picks PE 25 at the source and PE 20 after the fi
   const lateral = analysis.segments.find((item) => item.a.x === 200 && item.b.y === 150)
   assert.ok(lateral)
   assert.equal(lateral.flowLph, 360)
+  assert.equal(lateral.role, 'zone')
   assert.equal(lateral.odMm, 20)
 
   const pe25 = analysis.pipes.find((item) => item.odMm === 25)
@@ -122,10 +124,53 @@ test('valves run one at a time, so the main follows the larger station', () => {
   const supply = analysis.segments.find((item) => item.a.x === 0 && item.b.x === 100)
   assert.equal(supply?.flowLph, 1000)
   assert.equal(supply?.odMm, 20)
+  assert.equal(supply?.role, 'main')
+  const pastValve = analysis.segments.find((item) => item.a.x === 100 && item.a.y === 50 && item.b.y === 100)
+  assert.equal(pastValve?.role, 'zone')
+  doc.pipes = doc.pipes.map((pipe) => (pipe.id === 'main' ? { ...pipe, role: 'zone' } : pipe))
+  assert.equal(analyze(doc).segments.find((item) => item.a.x === 0 && item.b.x === 100)?.role, 'zone')
   const second = analysis.segments.find((item) => item.a.x === 100 && item.a.y === 0 && item.b.x === 200)
   assert.equal(second?.flowLph, 400)
   assert.equal(analysis.fittings.find((item) => item.name === 'Тройник ПЭ 20')?.count, 1)
   assert.equal(analysis.fittings.find((item) => item.name === 'Угол ПЭ 20')?.count, 1)
+})
+
+test('valves in one box keep their own stations when each zone pipe names a valve', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 20
+  doc.source = { x: 0, y: 0, pressureBar: 3, flowLimitLph: null }
+  doc.boxes = [{ id: 'box', name: 'Бокс 1', x: 100, y: 0 }]
+  doc.valves = [
+    { id: 'va', name: 'Клапан 1', x: 100, y: 6, boxId: 'box' },
+    { id: 'vb', name: 'Клапан 2', x: 108, y: 6, boxId: 'box' },
+  ]
+  doc.sprinklers = [
+    { id: 'a', nozzleId: 'fan180', x: 100, y: 80, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 300 },
+    { id: 'b', nozzleId: 'fan180', x: 180, y: 0, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 500 },
+  ]
+  doc.pipes = [
+    { id: 'main', role: 'main', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] },
+    { id: 'za', role: 'zone', valveId: 'va', points: [{ x: 100, y: 6 }, { x: 100, y: 80 }] },
+    { id: 'zb', role: 'zone', valveId: 'vb', points: [{ x: 108, y: 6 }, { x: 180, y: 0 }] },
+  ]
+  const analysis = analyze(doc)
+  assert.equal(analysis.connectedFlowLph, 500)
+  assert.deepEqual(analysis.stations.map((item) => item.flowLph).sort((a, b) => a - b), [300, 500])
+  assert.equal(analysis.warnings.some((item) => item.includes('одной точке')), false)
+})
+
+test('a hydrant on a dead end replaces the cap', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 20
+  doc.zones = []
+  doc.sprinklers = []
+  doc.valves = []
+  doc.source = { x: 0, y: 0, pressureBar: 3, flowLimitLph: null }
+  doc.pipes = [{ id: 'run', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] }]
+  doc.hydrants = [{ id: 'h', x: 100, y: 0 }]
+  const analysis = analyze(doc)
+  assert.equal(analysis.fittings.find((item) => item.name === 'Гидрант')?.count, 1)
+  assert.equal(analysis.fittings.some((item) => item.name.startsWith('Заглушка')), false)
 })
 
 test('a dead end gets a cap and a straight joint of one size does not', () => {
@@ -265,4 +310,67 @@ test('an older project without a pipe series still opens', () => {
   assert.deepEqual(parsed?.valves, [])
   assert.deepEqual(parsed?.drips, [])
   assert.equal(parseDoc({ ...raw, zones: [{ ...raw.zones[0], doseMm: 80 }] }), null)
+})
+
+test('a head within a metre of a pipe end joins through a flexible tail', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 20
+  doc.source = { x: 0, y: 0, pressureBar: 3, flowLimitLph: null }
+  doc.pipes = [{ id: 'p', role: 'main', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] }]
+  doc.sprinklers = [{
+    id: 's',
+    nozzleId: 'fan180',
+    x: 100,
+    y: 16,
+    radiusM: 4.5,
+    arcDeg: 180,
+    rotationDeg: 0,
+    flowLph: 360,
+  }]
+  const analysis = analyze(doc)
+  assert.equal(analysis.connectedFlowLph, 360)
+  assert.equal(analysis.tails.length, 1)
+  assert.ok(Math.abs(analysis.tails[0].lengthM - 0.8) < 1e-9)
+  assert.equal(analysis.warnings.some((item) => item.includes('не стоит на трубе')), false)
+})
+
+test('a head farther than a metre stays off the network', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 20
+  doc.source = { x: 0, y: 0, pressureBar: 3, flowLimitLph: null }
+  doc.pipes = [{ id: 'p', role: 'main', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] }]
+  doc.sprinklers = [{
+    id: 's',
+    nozzleId: 'fan180',
+    x: 100,
+    y: 30,
+    radiusM: 4.5,
+    arcDeg: 180,
+    rotationDeg: 0,
+    flowLph: 360,
+  }]
+  const analysis = analyze(doc)
+  assert.equal(analysis.connectedFlowLph, 0)
+  assert.equal(analysis.tails.length, 0)
+  assert.ok(analysis.warnings.some((item) => item.includes('не стоит на трубе')))
+})
+
+test('without a scale a head just outside the snap stays loose', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = null
+  doc.source = { x: 0, y: 0, pressureBar: 3, flowLimitLph: null }
+  doc.pipes = [{ id: 'p', role: 'main', points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] }]
+  doc.sprinklers = [{
+    id: 's',
+    nozzleId: 'fan180',
+    x: 100,
+    y: 16,
+    radiusM: 4.5,
+    arcDeg: 180,
+    rotationDeg: 0,
+    flowLph: 360,
+  }]
+  const analysis = analyze(doc)
+  assert.equal(analysis.tails.length, 0)
+  assert.equal(analysis.connectedFlowLph, 0)
 })

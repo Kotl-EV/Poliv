@@ -159,6 +159,8 @@ test('layout from a drawn lawn and a source places heads and pipes', () => {
   assert.equal(next.zones.length, 1)
   assert.ok(next.sprinklers.length >= 4)
   assert.ok(next.pipes.length >= 1)
+  assert.ok(next.pipes.some((pipe) => pipe.role === 'main'))
+  assert.ok(next.pipes.some((pipe) => pipe.role === 'zone'))
   assert.ok(next.source && next.source.x === 60)
   const analysis = analyze(next)
   assert.ok(analysis.connectedFlowLph > 0)
@@ -336,6 +338,18 @@ test('an L-shaped lawn is covered without heads in the cutout', () => {
   ]
   assert.equal(next.sprinklers.some((head) => pointInPolygon(head, cutout)), false)
   assert.ok(coveredShare(next.zones[0].points, next.sprinklers, 10) >= 0.82)
+})
+
+test('a chosen fan stays at 4.5 m even on a large lawn', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 10
+  doc.zones = [zone('lawn', 'lawn', 100, 80, 200, 140)]
+  doc.source = { x: 60, y: 150, pressureBar: 3, flowLimitLph: null }
+  const next = layoutIrrigation(doc, 'fan')
+  assert.ok(next)
+  assert.ok(next.sprinklers.length >= 4)
+  assert.ok(next.sprinklers.every((head) => head.radiusM === 4.5))
+  assert.ok(coveredShare(next.zones[0].points, next.sprinklers, 10) >= 0.85)
 })
 
 test('a large lawn uses rotors and covers most of the grass', () => {

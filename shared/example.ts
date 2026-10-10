@@ -28,11 +28,11 @@ export function exampleDoc(): Doc {
     drips: [],
     trench: { widthM: 0.3, depthM: 0.4 },
     pipes: [
-      { id: 'pipe-main', points: [{ x: 40, y: 300 }, { x: 200, y: 300 }, { x: 450, y: 300 }, { x: 700, y: 300 }] },
-      { id: 'pipe-n1', points: [{ x: 200, y: 300 }, { x: 200, y: 150 }] },
-      { id: 'pipe-s1', points: [{ x: 200, y: 300 }, { x: 200, y: 450 }] },
-      { id: 'pipe-n2', points: [{ x: 450, y: 300 }, { x: 450, y: 150 }] },
-      { id: 'pipe-s3', points: [{ x: 700, y: 300 }, { x: 700, y: 450 }] },
+      { id: 'pipe-main', role: 'main', points: [{ x: 40, y: 300 }, { x: 200, y: 300 }, { x: 450, y: 300 }, { x: 700, y: 300 }] },
+      { id: 'pipe-n1', role: 'zone', points: [{ x: 200, y: 300 }, { x: 200, y: 150 }] },
+      { id: 'pipe-s1', role: 'zone', points: [{ x: 200, y: 300 }, { x: 200, y: 450 }] },
+      { id: 'pipe-n2', role: 'zone', points: [{ x: 450, y: 300 }, { x: 450, y: 150 }] },
+      { id: 'pipe-s3', role: 'zone', points: [{ x: 700, y: 300 }, { x: 700, y: 450 }] },
     ],
     sprinklers: [
       { id: 's1', nozzleId: 'fan180', x: 200, y: 150, radiusM: 4.5, arcDeg: 180, rotationDeg: 180, flowLph: 360 },

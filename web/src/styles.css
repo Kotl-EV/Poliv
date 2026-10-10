@@ -347,7 +347,14 @@ input, select {
 .source { fill: #1f6b45; stroke: #143c28; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .valve { fill: #f7f3ea; stroke: #6b3fa0; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .valve.selected { stroke: #b86a09; }
+.box { fill: #efe8dc; stroke: #5c3d24; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.box.selected { stroke: #b86a09; }
+.hydrant { fill: #1f4d6e; stroke: #14364c; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.hydrant.selected { stroke: #b86a09; }
+.join-head { fill: none; stroke: #2f9e4a; vector-effect: non-scaling-stroke; }
 .drip { fill: none; stroke: #6b3fa0; }
+.funny { fill: none; stroke: #8a5a16; stroke-linecap: round; }
+.pipe-tag { fill: #1c2822; font-family: "Segoe UI", "PT Sans", sans-serif; font-weight: 600; }
 .drip-hit { stroke: transparent; }
 .emitter { fill: #6b3fa0; stroke: #fffdf8; }
 .handle, .scale-point { fill: #fffdf8; stroke-width: 2; vector-effect: non-scaling-stroke; }

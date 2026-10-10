@@ -1,6 +1,8 @@
 import { asClimate, asSlope, asSoil, defaultDose } from '@shared/doc.ts'
+import { dist } from '@shared/geom.ts'
+import { sleeveLengthM } from '@shared/join.ts'
 import { SURFACES } from '@shared/landscape.ts'
-import type { Analysis, Doc, Drip, Source, Sprinkler, Valve, Zone } from '@shared/types.ts'
+import type { Analysis, Doc, Drip, PipeRole, Source, Sprinkler, Valve, Zone } from '@shared/types.ts'
 import { NOZZLES } from '@shared/nozzles.ts'
 import { SERIES, seriesById, type PipeSeriesId } from '@shared/pipes.ts'
 
@@ -43,6 +45,8 @@ export function Spec({
   onDrip,
   onSeries,
   onTrench,
+  onPipe,
+  onBox,
   onDelete,
 }: {
   doc: Doc
@@ -53,6 +57,8 @@ export function Spec({
   onSource: (patch: Partial<Source>) => void
   onValve: (id: string, patch: Partial<Valve>) => void
   onDrip: (id: string, patch: Partial<Drip>) => void
+  onPipe: (id: string, role: PipeRole) => void
+  onBox: (id: string, name: string) => void
   onSeries: (id: PipeSeriesId) => void
   onTrench: (patch: Partial<Doc['trench']>) => void
   onDelete: () => void
@@ -60,9 +66,16 @@ export function Spec({
   const zone = selection?.kind === 'zone' ? doc.zones.find((item) => item.id === selection.id) : undefined
   const zoneRow = zone ? analysis.zones.find((item) => item.id === zone.id) : undefined
   const sprinkler = selection?.kind === 'sprinkler' ? doc.sprinklers.find((item) => item.id === selection.id) : undefined
-  const pipeSegments = selection?.kind === 'pipe' ? analysis.segments.filter((item) => item.pipeId === selection.id) : []
+  const pipe = selection?.kind === 'pipe' ? doc.pipes.find((item) => item.id === selection.id) : undefined
+  const pipeSegments = pipe ? analysis.segments.filter((item) => item.pipeId === pipe.id) : []
   const valve = selection?.kind === 'valve' ? doc.valves.find((item) => item.id === selection.id) : undefined
+  const box = selection?.kind === 'box' ? (doc.boxes ?? []).find((item) => item.id === selection.id) : undefined
+  const hydrant = selection?.kind === 'hydrant' ? (doc.hydrants ?? []).find((item) => item.id === selection.id) : undefined
+  const sleeve = selection?.kind === 'sleeve' ? (doc.sleeves ?? []).find((item) => item.id === selection.id) : undefined
   const drip = selection?.kind === 'drip' ? doc.drips.find((item) => item.id === selection.id) : undefined
+  const sleeves = doc.sleeves ?? []
+  const sleeveM = sleeveLengthM(sleeves, doc.pxPerMeter)
+  const oneSleeveM = sleeve && doc.pxPerMeter ? dist(sleeve.a, sleeve.b) / doc.pxPerMeter : null
 
   return (
     <aside className="spec">
@@ -193,6 +206,31 @@ export function Spec({
           <button className="ghost" onClick={onDelete}>Удалить клапан</button>
         </div>
       )}
+      {box && (
+        <div className="props">
+          <h2>Клапанный бокс</h2>
+          <label>
+            Название
+            <input value={box.name} aria-label="Название бокса" onChange={(event) => onBox(box.id, event.target.value)} />
+          </label>
+          <p>Клапаны в боксе остаются разными станциями. Зональную трубу начинайте с ромба нужного клапана.</p>
+          <button className="ghost" onClick={onDelete}>Удалить бокс</button>
+        </div>
+      )}
+      {hydrant && (
+        <div className="props">
+          <h2>Гидрант</h2>
+          <p>На узле трубы гидрант попадает в фитинги и занимает этот конец.</p>
+          <button className="ghost" onClick={onDelete}>Удалить гидрант</button>
+        </div>
+      )}
+      {sleeve && (
+        <div className="props">
+          <h2>Гильза</h2>
+          <p>{oneSleeveM === null ? 'Длина появится после масштаба.' : `Длина ${meters(oneSleeveM)} м.`}</p>
+          <button className="ghost" onClick={onDelete}>Удалить гильзу</button>
+        </div>
+      )}
       {drip && (
         <div className="props">
           <h2>Капельная трубка</h2>
@@ -207,9 +245,13 @@ export function Spec({
           <button className="ghost" onClick={onDelete}>Удалить трубку</button>
         </div>
       )}
-      {selection?.kind === 'pipe' && (
+      {pipe && (
         <div className="props">
-          <h2>Труба</h2>
+          <h2>{pipe.role === 'zone' ? 'Зональная труба' : 'Магистраль'}</h2>
+          <div className="hatch-row">
+            <button className={pipe.role === 'zone' ? 'tool' : 'tool active'} onClick={() => onPipe(pipe.id, 'main')}>Магистраль</button>
+            <button className={pipe.role === 'zone' ? 'tool active' : 'tool'} onClick={() => onPipe(pipe.id, 'zone')}>Зональная</button>
+          </div>
           <ul className="plain">
             {pipeSegments.map((segment, index) => (
               <li key={index}>
@@ -329,6 +371,23 @@ export function Spec({
           </tr>
         </tbody>
       </table>
+      {analysis.tails.length > 0 && (
+        <>
+          <h3>Гибкие хвосты</h3>
+          <table>
+            <tbody>
+              <tr>
+                <td>Количество</td>
+                <td>{analysis.tails.length} шт.</td>
+              </tr>
+              <tr>
+                <td>Длина</td>
+                <td>{meters(analysis.tails.reduce((sum, tail) => sum + tail.lengthM, 0))} м</td>
+              </tr>
+            </tbody>
+          </table>
+        </>
+      )}
       <h3>Клапаны</h3>
       <table>
         <tbody>
@@ -373,6 +432,25 @@ export function Spec({
           )}
         </tbody>
       </table>
+      {sleeves.length > 0 && (
+        <>
+          <h3>Гильзы</h3>
+          <table>
+            <tbody>
+              <tr>
+                <td>Количество</td>
+                <td>{sleeves.length} шт.</td>
+              </tr>
+              <tr>
+                <td>Длина</td>
+                <td>{sleeveM === null ? '—' : `${meters(sleeveM)} м`}</td>
+              </tr>
+            </tbody>
+          </table>
+        </>
+      )}
+      {(doc.boxes ?? []).length > 0 && <p className="note">Клапанных боксов: {(doc.boxes ?? []).length}. Клапаны внутри остаются разными станциями.</p>}
+      {(doc.hydrants ?? []).length > 0 && <p className="note">Гидрантов на чертеже: {(doc.hydrants ?? []).length}. В фитингах они считаются, когда стоят на трубе.</p>}
       <h3>Фитинги</h3>
       <table>
         <tbody>

@@ -35,12 +35,13 @@ import {
 } from '@shared/geom.ts'
 import { fixtureGlyph, fixtureKinds, fixtureSpec, FIXTURE_GROUPS, groupOf } from '@shared/fixtures.ts'
 import { DEFAULT_PPM, DEFAULT_SHEET_M, gridStepM, hatchOf, hatchesFor, HATCHES, INKS, isDripKind, isSprayKind, isWetKind, SURFACES, surfaceOf } from '@shared/landscape.ts'
-import { formOf, formsFor, plantGlyph, plantPaint } from '@shared/plants.ts'
+import { crownFill, formOf, formsFor, plantGlyph, plantPaint } from '@shared/plants.ts'
 import { DEFAULT_SHEET_LAYERS, PAPERS, type PaperId, type SheetLayers } from '@shared/sheet.ts'
 import { nozzleById, NOZZLES } from '@shared/nozzles.ts'
 import { SERIES, type PipeSeriesId } from '@shared/pipes.ts'
-import type { Doc, Drip, Fixture, FixtureKind, HatchId, Measure, Note, Pipe, Plant, PlantForm, PlantKind, Point, Source, Sprinkler, Valve, Zone, ZoneKind } from '@shared/types.ts'
+import type { Doc, Drip, Fixture, FixtureKind, HatchId, Hydrant, Measure, Note, Pipe, PipeRole, Plant, PlantForm, PlantKind, Point, Sleeve, Source, Sprinkler, Valve, ValveBox, Zone, ZoneKind } from '@shared/types.ts'
 import { api, type User } from '../api'
+import { draftHeadFlow, joinableHeads, sleeveLengthM, stickTarget, valveSlot } from '@shared/join.ts'
 import { layoutIrrigation } from '@shared/plan.ts'
 import { Board, readHit, worldPoint, type Hit, type View } from '../editor/Board'
 import { exportProjectSheets } from '../pdf/exportSheet'
@@ -49,9 +50,9 @@ import { Spec } from '../editor/Spec'
 
 configurePdfWorker(workerUrl)
 
-type Tool = 'select' | 'scale' | 'zone' | 'rect' | 'circle' | 'brush' | 'text' | 'tree' | 'bush' | 'fixture' | 'dim' | 'sprinkler' | 'pipe' | 'valve' | 'drip' | 'source'
+type Tool = 'select' | 'scale' | 'zone' | 'rect' | 'circle' | 'brush' | 'text' | 'tree' | 'bush' | 'fixture' | 'dim' | 'sprinkler' | 'pipe' | 'valve' | 'box' | 'hydrant' | 'sleeve' | 'drip' | 'source'
 type Step = 'draw' | 'irrig' | 'layout' | 'spec'
-type Sel = { kind: 'sprinkler' | 'zone' | 'pipe' | 'source' | 'valve' | 'drip' | 'note' | 'plant' | 'fixture' | 'dim'; id?: string } | null
+type Sel = { kind: 'sprinkler' | 'zone' | 'pipe' | 'source' | 'valve' | 'box' | 'hydrant' | 'sleeve' | 'drip' | 'note' | 'plant' | 'fixture' | 'dim'; id?: string } | null
 
 type Clip =
   | { kind: 'zone'; item: Zone }
@@ -60,6 +61,9 @@ type Clip =
   | { kind: 'note'; item: Note }
   | { kind: 'sprinkler'; item: Sprinkler }
   | { kind: 'valve'; item: Valve }
+  | { kind: 'box'; item: ValveBox }
+  | { kind: 'hydrant'; item: Hydrant }
+  | { kind: 'sleeve'; item: Sleeve }
   | { kind: 'pipe'; item: Pipe }
   | { kind: 'drip'; item: Drip }
   | { kind: 'dim'; item: Measure }
@@ -112,6 +116,19 @@ function snapTo(point: Point, targets: Point[], limit: number): Point {
   return best
 }
 
+function nearestBox(doc: Doc, point: Point, limit: number): ValveBox | null {
+  let best: ValveBox | null = null
+  let bestDistance = limit
+  for (const box of doc.boxes ?? []) {
+    const distance = dist(point, box)
+    if (distance <= bestDistance) {
+      best = box
+      bestDistance = distance
+    }
+  }
+  return best
+}
+
 function targetsOf(doc: Doc): Point[] {
   const points: Point[] = []
   if (doc.source) points.push(doc.source)
@@ -123,6 +140,9 @@ function targetsOf(doc: Doc): Point[] {
   for (const note of doc.notes ?? []) points.push(note)
   for (const plant of doc.plants ?? []) points.push(plant)
   for (const fixture of doc.fixtures ?? []) points.push(fixture)
+  for (const box of doc.boxes ?? []) points.push(box)
+  for (const hydrant of doc.hydrants ?? []) points.push(hydrant)
+  for (const sleeve of doc.sleeves ?? []) points.push(sleeve.a, sleeve.b)
   for (const measure of doc.measures ?? []) {
     points.push(measure.a, measure.b)
   }
@@ -137,6 +157,9 @@ function collectVertices(doc: Doc): Point[] {
   for (const drip of doc.drips) points.push(...drip.points)
   for (const pipe of doc.pipes) points.push(...pipe.points)
   for (const zone of doc.zones) points.push(...zone.points)
+  for (const box of doc.boxes ?? []) points.push({ x: box.x, y: box.y })
+  for (const hydrant of doc.hydrants ?? []) points.push({ x: hydrant.x, y: hydrant.y })
+  for (const sleeve of doc.sleeves ?? []) points.push(sleeve.a, sleeve.b)
   for (const measure of doc.measures ?? []) points.push(measure.a, measure.b)
   return points
 }
@@ -147,6 +170,11 @@ function vertexAt(doc: Doc, hit: Hit): Point | null {
     const measure = (doc.measures ?? []).find((item) => item.id === hit.id)
     if (!measure) return null
     return hit.index === 0 ? measure.a : measure.b
+  }
+  if (hit.kind === 'sleeve-point') {
+    const sleeve = (doc.sleeves ?? []).find((item) => item.id === hit.id)
+    if (!sleeve) return null
+    return hit.index === 0 ? sleeve.a : sleeve.b
   }
   return null
 }
@@ -188,6 +216,7 @@ export function EditorPage({
   const [scaleMeters, setScaleMeters] = useState('5')
   const [zoneKind, setZoneKind] = useState<ZoneKind>('lawn')
   const [nozzleId, setNozzleId] = useState('fan180')
+  const [pipeRole, setPipeRole] = useState<PipeRole>('main')
   const [brushM, setBrushM] = useState(0.8)
   const [brushTip, setBrushTip] = useState<BrushTip>('round')
   const [drawHatch, setDrawHatch] = useState<HatchId | null>(null)
@@ -234,8 +263,11 @@ export function EditorPage({
   const shapeStart = useRef<Point | null>(null)
   const brushing = useRef(false)
   const clipboard = useRef<Clip | null>(null)
+  const lastMark = useRef<Clip | null>(null)
   const lineRef = useRef<Point[]>([])
   const dimRef = useRef<Point[]>([])
+  const sleeveRef = useRef<Point[]>([])
+  const [sleevePts, setSleevePts] = useState<Point[]>([])
   const didFit = useRef(false)
   docRef.current = doc
   draftRef.current = draft
@@ -258,6 +290,13 @@ export function EditorPage({
     if (dimRef.current.length === 0) return
     dimRef.current = []
     setDimPts([])
+  }, [tool])
+
+  useEffect(() => {
+    if (tool === 'sleeve') return
+    if (sleeveRef.current.length === 0) return
+    sleeveRef.current = []
+    setSleevePts([])
   }, [tool])
 
   useEffect(() => {
@@ -372,13 +411,30 @@ export function EditorPage({
           setDim([])
           return
         }
+        if (sleeveRef.current.length) {
+          setSleeve([])
+          return
+        }
         shapeStart.current = null
         brushing.current = false
         setDraftPoints([])
         setScalePoints([])
         setSelection(null)
       }
-      if (event.key === 'Enter') finishDraft()
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        if (draftRef.current.length > 0) {
+          finishDraft()
+          return
+        }
+        if (dimRef.current.length || sleeveRef.current.length) return
+        if (selection?.id) {
+          duplicateSelected()
+          return
+        }
+        const clip = lastMark.current
+        if (clip) placeClip(clip)
+      }
       if (event.key === 'Delete' || event.key === 'Backspace') {
         event.preventDefault()
         removeSelection()
@@ -437,6 +493,7 @@ export function EditorPage({
     }
     commit({ ...current, zones: [...current.zones, zone] })
     setSelection({ kind: 'zone', id: zone.id })
+    laid({ kind: 'zone', item: zone })
     return true
   }
 
@@ -456,9 +513,11 @@ export function EditorPage({
         return
       }
       if (tool === 'pipe' && points.length >= 2) {
-        const pipe = { id: uid('pipe'), points }
+        const home = stickTarget(current, points[0], pipeRole, [], SNAP_PX)
+        const pipe: Pipe = { id: uid('pipe'), points, role: pipeRole, ...(home?.valveId ? { valveId: home.valveId } : {}) }
         commit({ ...current, pipes: [...current.pipes, pipe] })
         setSelection({ kind: 'pipe', id: pipe.id })
+        laid({ kind: 'pipe', item: pipe })
         setDraftPoints([])
         return
       }
@@ -466,11 +525,25 @@ export function EditorPage({
         const drip: Drip = { id: uid('drip'), points, spacingM: 0.3, emitterLph: 2 }
         commit({ ...current, drips: [...current.drips, drip] })
         setSelection({ kind: 'drip', id: drip.id })
+        laid({ kind: 'drip', item: drip })
         setDraftPoints([])
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось замкнуть контур')
     }
+  }
+
+  function pickPipe(role: PipeRole) {
+    if (tool !== 'pipe' || pipeRole !== role) setDraftPoints([])
+    setPipeRole(role)
+    setTool('pipe')
+  }
+
+  function assignPipe(id: string, role: PipeRole) {
+    commit({
+      ...docRef.current,
+      pipes: docRef.current.pipes.map((item) => (item.id === id ? { ...item, role } : item)),
+    })
   }
 
   function removeSelection() {
@@ -480,6 +553,20 @@ export function EditorPage({
     if (selection.kind === 'zone') commit({ ...current, zones: current.zones.filter((item) => item.id !== selection.id) })
     if (selection.kind === 'pipe') commit({ ...current, pipes: current.pipes.filter((item) => item.id !== selection.id) })
     if (selection.kind === 'valve') commit({ ...current, valves: current.valves.filter((item) => item.id !== selection.id) })
+    if (selection.kind === 'box') {
+      commit({
+        ...current,
+        boxes: (current.boxes ?? []).filter((item) => item.id !== selection.id),
+        valves: current.valves.map((item) => {
+          if (item.boxId !== selection.id) return item
+          const next = { ...item }
+          delete next.boxId
+          return next
+        }),
+      })
+    }
+    if (selection.kind === 'hydrant') commit({ ...current, hydrants: (current.hydrants ?? []).filter((item) => item.id !== selection.id) })
+    if (selection.kind === 'sleeve') commit({ ...current, sleeves: (current.sleeves ?? []).filter((item) => item.id !== selection.id) })
     if (selection.kind === 'drip') commit({ ...current, drips: current.drips.filter((item) => item.id !== selection.id) })
     if (selection.kind === 'note') commit({ ...current, notes: (current.notes ?? []).filter((item) => item.id !== selection.id) })
     if (selection.kind === 'plant') commit({ ...current, plants: (current.plants ?? []).filter((item) => item.id !== selection.id) })
@@ -497,6 +584,11 @@ export function EditorPage({
   function setDim(points: Point[]) {
     dimRef.current = points
     setDimPts(points)
+  }
+
+  function setSleeve(points: Point[]) {
+    sleeveRef.current = points
+    setSleevePts(points)
   }
 
   function armLine(op: LineOp) {
@@ -606,24 +698,25 @@ export function EditorPage({
       return
     }
     const drafting = (tool === 'zone' || tool === 'pipe' || tool === 'drip') && draftRef.current.length > 0
-    const placingDim = tool === 'dim' && hit.kind !== 'dim' && hit.kind !== 'dim-point'
-    const editHit = !placingDim && (hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc' || hit.kind === 'zone-point' || hit.kind === 'zone-mid' || hit.kind === 'pipe-point' || hit.kind === 'drip-point' || hit.kind === 'sprinkler' || hit.kind === 'source' || hit.kind === 'valve' || hit.kind === 'note' || hit.kind === 'plant' || hit.kind === 'plant-size' || hit.kind === 'fixture' || hit.kind === 'fixture-size' || hit.kind === 'dim' || hit.kind === 'dim-point')
+    const placingMark = (tool === 'dim' && hit.kind !== 'dim' && hit.kind !== 'dim-point')
+      || (tool === 'sleeve' && hit.kind !== 'sleeve' && hit.kind !== 'sleeve-point')
+    const editHit = !placingMark && tool !== 'pipe' && (hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc' || hit.kind === 'zone-point' || hit.kind === 'zone-mid' || hit.kind === 'pipe-point' || hit.kind === 'drip-point' || hit.kind === 'sprinkler' || hit.kind === 'source' || hit.kind === 'valve' || hit.kind === 'box' || hit.kind === 'hydrant' || hit.kind === 'sleeve' || hit.kind === 'sleeve-point' || hit.kind === 'note' || hit.kind === 'plant' || hit.kind === 'plant-size' || hit.kind === 'fixture' || hit.kind === 'fixture-size' || hit.kind === 'dim' || hit.kind === 'dim-point')
     if (!drafting && editHit) {
       remember()
       event.currentTarget.setPointerCapture(event.pointerId)
       drag.current = hit
       if (hit.kind === 'plant-size' || hit.kind === 'fixture-size') stretch.current = null
-      if (hit.kind === 'dim') grab.current = raw
+      if (hit.kind === 'dim' || hit.kind === 'sleeve') grab.current = raw
       click.current = { hit, x: event.clientX, y: event.clientY, moved: false }
       setSelection(selectionFromHit(hit))
       return
     }
-    if (!drafting && !placingDim && hit.kind === 'zone-edge') {
+    if (!drafting && !placingMark && hit.kind === 'zone-edge') {
       click.current = { hit, x: event.clientX, y: event.clientY, moved: false }
       setSelection({ kind: 'zone', id: hit.id })
       return
     }
-    if (!drafting && !placingDim && hit.kind === 'zone' && selection?.kind === 'zone' && selection.id === hit.id) {
+    if (!drafting && !placingMark && hit.kind === 'zone' && selection?.kind === 'zone' && selection.id === hit.id) {
       remember()
       event.currentTarget.setPointerCapture(event.pointerId)
       drag.current = hit
@@ -654,9 +747,48 @@ export function EditorPage({
       return
     }
     if (tool === 'valve') {
-      const valve: Valve = { id: uid('valve'), name: `Клапан ${doc.valves.length + 1}`, x: point.x, y: point.y }
-      commit({ ...doc, valves: [...doc.valves, valve] })
+      const current = docRef.current
+      const box = nearestBox(current, raw, 36)
+      const slot = box ? valveSlot(box, current.valves.filter((item) => item.boxId === box.id).length) : point
+      const valve: Valve = {
+        id: uid('valve'),
+        name: `Клапан ${current.valves.length + 1}`,
+        x: slot.x,
+        y: slot.y,
+        ...(box ? { boxId: box.id } : {}),
+      }
+      commit({ ...current, valves: [...current.valves, valve] })
       setSelection({ kind: 'valve', id: valve.id })
+      laid({ kind: 'valve', item: valve })
+      setPlanNote(box ? 'Клапан встал в бокс. Зональную трубу начните с этого ромба.' : '')
+      return
+    }
+    if (tool === 'box') {
+      const current = docRef.current
+      if ((current.boxes ?? []).length >= 200) {
+        setPlanNote('На чертеже уже 200 боксов')
+        return
+      }
+      const box: ValveBox = { id: uid('box'), name: `Бокс ${(current.boxes ?? []).length + 1}`, x: point.x, y: point.y }
+      commit({ ...current, boxes: [...(current.boxes ?? []), box] })
+      setSelection({ kind: 'box', id: box.id })
+      laid({ kind: 'box', item: box })
+      setPlanNote('')
+      return
+    }
+    if (tool === 'hydrant') {
+      const current = docRef.current
+      if ((current.hydrants ?? []).length >= 400) {
+        setPlanNote('На чертеже уже 400 гидрантов')
+        return
+      }
+      const nodes = current.pipes.flatMap((pipe) => pipe.points)
+      const spot = nodes.length ? snapTo(point, nodes, SNAP_PX) : point
+      const hydrant: Hydrant = { id: uid('hydrant'), x: spot.x, y: spot.y }
+      commit({ ...current, hydrants: [...(current.hydrants ?? []), hydrant] })
+      setSelection({ kind: 'hydrant', id: hydrant.id })
+      laid({ kind: 'hydrant', item: hydrant })
+      setPlanNote('')
       return
     }
     if (tool === 'sprinkler') {
@@ -673,6 +805,7 @@ export function EditorPage({
       }
       commit({ ...doc, sprinklers: [...doc.sprinklers, sprinkler] })
       setSelection({ kind: 'sprinkler', id: sprinkler.id })
+      laid({ kind: 'sprinkler', item: sprinkler })
       return
     }
     if (tool === 'text' || tool === 'tree' || tool === 'bush') {
@@ -706,6 +839,33 @@ export function EditorPage({
       const measure = { id: uid('dim'), a: next[0], b: next[1] }
       commit({ ...docRef.current, measures: [...(docRef.current.measures ?? []), measure] })
       setSelection({ kind: 'dim', id: measure.id })
+      laid({ kind: 'dim', item: measure })
+      setPlanNote('')
+      return
+    }
+    if (tool === 'sleeve') {
+      let mark = point
+      const prev = sleeveRef.current
+      if (lineLocked(event.shiftKey) && prev.length === 1) mark = orthoFrom(prev[0], raw)
+      const next = [...prev, mark]
+      if (next.length < 2) {
+        setSleeve(next)
+        return
+      }
+      setSleeve([])
+      if (dist(next[0], next[1]) < 2) {
+        setPlanNote('Гильза слишком короткая')
+        return
+      }
+      const current = docRef.current
+      if ((current.sleeves ?? []).length >= 400) {
+        setPlanNote('На чертеже уже 400 гильз')
+        return
+      }
+      const sleeve: Sleeve = { id: uid('sleeve'), a: next[0], b: next[1] }
+      commit({ ...current, sleeves: [...(current.sleeves ?? []), sleeve] })
+      setSelection({ kind: 'sleeve', id: sleeve.id })
+      laid({ kind: 'sleeve', item: sleeve })
       setPlanNote('')
       return
     }
@@ -742,15 +902,20 @@ export function EditorPage({
         finishDraft()
         return
       }
+      let vertex = point
+      if (tool === 'pipe') {
+        const stuck = stickTarget(docRef.current, raw, pipeRole, draftRef.current, SNAP_PX)
+        if (stuck) vertex = { x: stuck.x, y: stuck.y }
+      }
       const last = draftRef.current[draftRef.current.length - 1]
       const canFinish = tool === 'zone' ? draftRef.current.length >= 3 : draftRef.current.length >= 2
       if (canFinish && last && dist(raw, last) * view.k <= 28) {
         finishDraft()
         return
       }
-      if (last && dist(point, last) * view.k < 4) return
-      setHover(point)
-      setDraftPoints([...draftRef.current, point])
+      if (last && dist(vertex, last) * view.k < 4) return
+      setHover(vertex)
+      setDraftPoints([...draftRef.current, vertex])
     }
   }
 
@@ -770,11 +935,16 @@ export function EditorPage({
       return
     }
     const rawMove = worldPoint(event, svgRef.current, view)
-    const drawing = tool === 'zone' || tool === 'pipe' || tool === 'drip' || tool === 'rect' || tool === 'circle' || tool === 'brush' || tool === 'dim'
+    const drawing = tool === 'zone' || tool === 'pipe' || tool === 'drip' || tool === 'rect' || tool === 'circle' || tool === 'brush' || tool === 'dim' || tool === 'sleeve'
     let point = drawing ? worldSnap(rawMove, (tool === 'zone' || tool === 'pipe' || tool === 'drip') && lineLocked(event.shiftKey)) : rawMove
     if (lineOp && lineLocked(event.shiftKey) && lineRef.current.length === 1) point = orthoFrom(lineRef.current[0], rawMove)
     else if (lineOp) point = worldSnap(rawMove, false)
     else if (tool === 'dim' && lineLocked(event.shiftKey) && dimRef.current.length === 1) point = orthoFrom(dimRef.current[0], rawMove)
+    else if (tool === 'sleeve' && lineLocked(event.shiftKey) && sleeveRef.current.length === 1) point = orthoFrom(sleeveRef.current[0], rawMove)
+    if (tool === 'pipe') {
+      const stuck = stickTarget(docRef.current, rawMove, pipeRole, draftRef.current, SNAP_PX)
+      if (stuck) point = { x: stuck.x, y: stuck.y }
+    }
     setHover(point)
     if (shapeStart.current && (tool === 'rect' || tool === 'circle')) {
       setDraftPoints(tool === 'rect' ? rectPoints(shapeStart.current, point, event.shiftKey) : circlePoints(shapeStart.current, point))
@@ -808,10 +978,21 @@ export function EditorPage({
       }))
       return
     }
-    if (active.kind === 'dim' && grab.current) {
+    if ((active.kind === 'dim' || active.kind === 'sleeve') && grab.current) {
       const dx = rawMove.x - grab.current.x
       const dy = rawMove.y - grab.current.y
       grab.current = rawMove
+      if (active.kind === 'sleeve') {
+        setDoc((current) => ({
+          ...current,
+          sleeves: (current.sleeves ?? []).map((item) => (item.id === active.id ? {
+            ...item,
+            a: { x: item.a.x + dx, y: item.a.y + dy },
+            b: { x: item.b.x + dx, y: item.b.y + dy },
+          } : item)),
+        }))
+        return
+      }
       setDoc((current) => ({
         ...current,
         measures: (current.measures ?? []).map((item) => (item.id === active.id ? {
@@ -834,7 +1015,7 @@ export function EditorPage({
       setDoc((current) => resizeMark(current, active, rawMove, scale, shift))
       return
     }
-    const vertexDrag = active.kind === 'zone-point' || active.kind === 'dim-point'
+    const vertexDrag = active.kind === 'zone-point' || active.kind === 'dim-point' || active.kind === 'sleeve-point'
     const snapped = vertexDrag
       ? worldSnap(rawMove, false, vertexAt(docRef.current, active))
       : (doc.snapGrid === true ? worldSnap(point) : point)
@@ -986,6 +1167,7 @@ export function EditorPage({
     setLineOp(null)
     setLine([])
     setDim([])
+    setSleeve([])
     setAnchorPick(false)
     setAlignPick(null)
     setTool(STEP_DEFAULT_TOOL[next])
@@ -1009,7 +1191,7 @@ export function EditorPage({
       && !confirm('Заменить текущую схему новым расчётом?')) return
     setError('')
     setStatus('Считаю схему…')
-    const next = layoutIrrigation(current)
+    const next = layoutIrrigation(current, nozzleId.startsWith('rotor') ? 'rotor' : 'fan')
     if (!next) {
       const hasSpray = current.zones.some((zone) => isSprayKind(zone.kind))
       const hasPlant = (current.plants ?? []).length > 0
@@ -1372,6 +1554,7 @@ export function EditorPage({
       const note: Note = { id: uid('note'), x: point.x, y: point.y, text: 'Подпись', sizeM: 0.45 }
       commit({ ...current, notes: [...(current.notes ?? []), note] })
       setSelection({ kind: 'note', id: note.id })
+      laid({ kind: 'note', item: note })
       return null
     }
     const plantKind = kind === 'tree' ? 'tree' : 'bush'
@@ -1386,6 +1569,7 @@ export function EditorPage({
     }
     commit({ ...current, plants: [...(current.plants ?? []), plant] })
     setSelection({ kind: 'plant', id: plant.id })
+    laid({ kind: 'plant', item: plant })
     rememberFav({ kind: plantKind, form })
     return plant.id
   }
@@ -1406,6 +1590,7 @@ export function EditorPage({
     }
     commit({ ...current, fixtures: [...(current.fixtures ?? []), item] })
     setSelection({ kind: 'fixture', id: item.id })
+    laid({ kind: 'fixture', item })
     setPlanNote('')
     rememberFav({ kind: 'fixture', form: fixtureKind })
     return item.id
@@ -1447,6 +1632,18 @@ export function EditorPage({
       const item = current.valves.find((entry) => entry.id === sel.id)
       return item ? { kind: 'valve', item: structuredClone(item) } : null
     }
+    if (sel.kind === 'box') {
+      const item = (current.boxes ?? []).find((entry) => entry.id === sel.id)
+      return item ? { kind: 'box', item: structuredClone(item) } : null
+    }
+    if (sel.kind === 'hydrant') {
+      const item = (current.hydrants ?? []).find((entry) => entry.id === sel.id)
+      return item ? { kind: 'hydrant', item: structuredClone(item) } : null
+    }
+    if (sel.kind === 'sleeve') {
+      const item = (current.sleeves ?? []).find((entry) => entry.id === sel.id)
+      return item ? { kind: 'sleeve', item: structuredClone(item) } : null
+    }
     if (sel.kind === 'pipe') {
       const item = current.pipes.find((entry) => entry.id === sel.id)
       return item ? { kind: 'pipe', item: structuredClone(item) } : null
@@ -1479,6 +1676,11 @@ export function EditorPage({
     if (placed) clipboard.current = placed
   }
 
+  function laid(clip: Clip): Clip {
+    lastMark.current = clip
+    return clip
+  }
+
   function placeClip(clip: Clip): Clip | null {
     const current = docRef.current
     const step = 28
@@ -1491,7 +1693,7 @@ export function EditorPage({
       commit({ ...current, zones: [...current.zones, copy] })
       setSelection({ kind: 'zone', id: copy.id })
       setPlanNote('')
-      return { kind: 'zone', item: copy }
+      return laid({ kind: 'zone', item: copy })
     }
     if (clip.kind === 'plant') {
       if ((current.plants ?? []).length >= 800) {
@@ -1502,7 +1704,7 @@ export function EditorPage({
       commit({ ...current, plants: [...(current.plants ?? []), copy] })
       setSelection({ kind: 'plant', id: copy.id })
       setPlanNote('')
-      return { kind: 'plant', item: copy }
+      return laid({ kind: 'plant', item: copy })
     }
     if (clip.kind === 'fixture') {
       if ((current.fixtures ?? []).length >= 800) {
@@ -1513,7 +1715,7 @@ export function EditorPage({
       commit({ ...current, fixtures: [...(current.fixtures ?? []), copy] })
       setSelection({ kind: 'fixture', id: copy.id })
       setPlanNote('')
-      return { kind: 'fixture', item: copy }
+      return laid({ kind: 'fixture', item: copy })
     }
     if (clip.kind === 'note') {
       if ((current.notes ?? []).length >= 400) {
@@ -1524,7 +1726,7 @@ export function EditorPage({
       commit({ ...current, notes: [...(current.notes ?? []), copy] })
       setSelection({ kind: 'note', id: copy.id })
       setPlanNote('')
-      return { kind: 'note', item: copy }
+      return laid({ kind: 'note', item: copy })
     }
     if (clip.kind === 'sprinkler') {
       if (current.sprinklers.length >= 2000) {
@@ -1535,7 +1737,7 @@ export function EditorPage({
       commit({ ...current, sprinklers: [...current.sprinklers, copy] })
       setSelection({ kind: 'sprinkler', id: copy.id })
       setPlanNote('')
-      return { kind: 'sprinkler', item: copy }
+      return laid({ kind: 'sprinkler', item: copy })
     }
     if (clip.kind === 'valve') {
       if (current.valves.length >= 500) {
@@ -1546,7 +1748,45 @@ export function EditorPage({
       commit({ ...current, valves: [...current.valves, copy] })
       setSelection({ kind: 'valve', id: copy.id })
       setPlanNote('')
-      return { kind: 'valve', item: copy }
+      return laid({ kind: 'valve', item: copy })
+    }
+    if (clip.kind === 'box') {
+      if ((current.boxes ?? []).length >= 200) {
+        setPlanNote('На чертеже уже 200 боксов')
+        return null
+      }
+      const copy: ValveBox = { ...structuredClone(clip.item), id: uid('box'), x: clip.item.x + step, y: clip.item.y + step }
+      commit({ ...current, boxes: [...(current.boxes ?? []), copy] })
+      setSelection({ kind: 'box', id: copy.id })
+      setPlanNote('')
+      return laid({ kind: 'box', item: copy })
+    }
+    if (clip.kind === 'hydrant') {
+      if ((current.hydrants ?? []).length >= 400) {
+        setPlanNote('На чертеже уже 400 гидрантов')
+        return null
+      }
+      const copy: Hydrant = { ...structuredClone(clip.item), id: uid('hydrant'), x: clip.item.x + step, y: clip.item.y + step }
+      commit({ ...current, hydrants: [...(current.hydrants ?? []), copy] })
+      setSelection({ kind: 'hydrant', id: copy.id })
+      setPlanNote('')
+      return laid({ kind: 'hydrant', item: copy })
+    }
+    if (clip.kind === 'sleeve') {
+      if ((current.sleeves ?? []).length >= 400) {
+        setPlanNote('На чертеже уже 400 гильз')
+        return null
+      }
+      const copy: Sleeve = {
+        ...structuredClone(clip.item),
+        id: uid('sleeve'),
+        a: { x: clip.item.a.x + step, y: clip.item.a.y + step },
+        b: { x: clip.item.b.x + step, y: clip.item.b.y + step },
+      }
+      commit({ ...current, sleeves: [...(current.sleeves ?? []), copy] })
+      setSelection({ kind: 'sleeve', id: copy.id })
+      setPlanNote('')
+      return laid({ kind: 'sleeve', item: copy })
     }
     if (clip.kind === 'pipe') {
       if (current.pipes.length >= 2000) {
@@ -1561,7 +1801,7 @@ export function EditorPage({
       commit({ ...current, pipes: [...current.pipes, copy] })
       setSelection({ kind: 'pipe', id: copy.id })
       setPlanNote('')
-      return { kind: 'pipe', item: copy }
+      return laid({ kind: 'pipe', item: copy })
     }
     if (clip.kind === 'drip') {
       if (current.drips.length >= 400) {
@@ -1576,7 +1816,7 @@ export function EditorPage({
       commit({ ...current, drips: [...current.drips, copy] })
       setSelection({ kind: 'drip', id: copy.id })
       setPlanNote('')
-      return { kind: 'drip', item: copy }
+      return laid({ kind: 'drip', item: copy })
     }
     if ((current.measures ?? []).length >= 400) {
       setPlanNote('На чертеже уже 400 размеров')
@@ -1590,7 +1830,7 @@ export function EditorPage({
     commit({ ...current, measures: [...(current.measures ?? []), copy] })
     setSelection({ kind: 'dim', id: copy.id })
     setPlanNote('')
-    return { kind: 'dim', item: copy }
+    return laid({ kind: 'dim', item: copy })
   }
 
   if (!loaded) return <div className="boot">{error || 'Загрузка проекта…'}</div>
@@ -1601,11 +1841,24 @@ export function EditorPage({
   const selectedPlant = selection?.kind === 'plant' ? (doc.plants ?? []).find((item) => item.id === selection.id) : undefined
   const selectedFixture = selection?.kind === 'fixture' ? (doc.fixtures ?? []).find((item) => item.id === selection.id) : undefined
   const selectedMeasure = selection?.kind === 'dim' ? (doc.measures ?? []).find((item) => item.id === selection.id) : undefined
+  const selectedPipe = selection?.kind === 'pipe' ? doc.pipes.find((item) => item.id === selection.id) : undefined
+  const selectedBox = selection?.kind === 'box' ? (doc.boxes ?? []).find((item) => item.id === selection.id) : undefined
+  const selectedHydrant = selection?.kind === 'hydrant' ? (doc.hydrants ?? []).find((item) => item.id === selection.id) : undefined
+  const selectedSleeve = selection?.kind === 'sleeve' ? (doc.sleeves ?? []).find((item) => item.id === selection.id) : undefined
+  const sleeveM = selectedSleeve ? sleeveLengthM([selectedSleeve], ppm) : null
+  const pipeDiameters = selectedPipe
+    ? [...new Set(analysis.segments.flatMap((item) => (item.pipeId === selectedPipe.id && item.odMm ? [item.odMm] : [])))]
+    : []
   const shapeOn = isShapeTool(tool)
   const elementOn = tool === 'scale' || tool === 'dim' || anchorPick || (tool === 'fixture' && groupOf(fixtureKind) === 'mark')
   const objectOn = tool === 'fixture' && groupOf(fixtureKind) !== 'mark'
   const shapeLabel = tool === 'brush' ? 'Кисть' : tool === 'rect' ? 'Прямоуг.' : tool === 'circle' ? 'Круг' : 'Полигон'
   const rotorOn = nozzleId.startsWith('rotor')
+  const zoneDraft = tool === 'pipe' && pipeRole === 'zone'
+  const previewPoints = zoneDraft && hover ? [...draft, hover] : draft
+  const liveFlow = zoneDraft ? draftHeadFlow(doc, previewPoints, SNAP_PX) : 0
+  const draftWarn = Boolean(zoneDraft && doc.source?.flowLimitLph && liveFlow > doc.source.flowLimitLph + 1e-6)
+  const joinIds = zoneDraft ? joinableHeads(doc, draft, SNAP_PX).map((head) => head.id) : []
   const snapMark = hover && doc.snapVertex !== false ? nearestScreen(hover, collectVertices(doc), view.k, 1.5) : null
   const hoverLen = draft.length > 0 && hover ? dist(draft[draft.length - 1], hover) / ppm : 0
   const zoneArea = selectedZone ? zoneAreaPx(selectedZone.points, selectedZone.holes) / (ppm * ppm) : 0
@@ -1881,8 +2134,20 @@ export function EditorPage({
               <RailButton active={tool === 'valve'} label="Клапан" onClick={() => setTool('valve')}>
                 <Glyph><path d="M12 4 L20 12 L12 20 L4 12 Z" {...pen} /></Glyph>
               </RailButton>
-              <RailButton active={tool === 'pipe'} label="Труба" onClick={() => { setTool('pipe'); setDraftPoints([]) }}>
-                <Glyph><path d="M4 16 H14 L20 8" {...pen} /></Glyph>
+              <RailButton active={tool === 'box'} label="Бокс" onClick={() => setTool('box')}>
+                <Glyph><rect x="4" y="7" width="16" height="10" rx="2" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'hydrant'} label="Гидрант" onClick={() => setTool('hydrant')}>
+                <Glyph><circle cx="12" cy="8" r="3.2" {...pen} /><path d="M12 11 V19 M8 16 H16" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'sleeve'} label="Гильза" onClick={() => { setTool('sleeve'); setSleeve([]) }}>
+                <Glyph><path d="M4 16 H20" {...pen} strokeWidth={4.2} /><path d="M5 16 H19" {...pen} strokeWidth={1.15} /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'pipe' && pipeRole === 'main'} label="Магистраль" onClick={() => pickPipe('main')}>
+                <Glyph><path d="M3 16 H13 L20 7" {...pen} strokeWidth={3.1} /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'pipe' && pipeRole === 'zone'} label="Зональная" onClick={() => pickPipe('zone')}>
+                <Glyph><path d="M4 16 H14 L20 8" {...pen} strokeWidth={1.35} /></Glyph>
               </RailButton>
               <button className="rail-go" onClick={runLayout}>Схема</button>
             </div>
@@ -1896,6 +2161,12 @@ export function EditorPage({
                     </button>
                   ))}
                 </>
+              )}
+              {tool === 'box' && <p className="hint">Коробка для нескольких клапанов. Клапан рядом садится в свободный слот.</p>}
+              {tool === 'hydrant' && <p className="hint">Точка на трубе. В спецификации на этом конце стоит гидрант.</p>}
+              {tool === 'sleeve' && <p className="hint">Два клика по концам. Длина попадёт в спецификацию.</p>}
+              {tool === 'pipe' && (
+                <p className="hint">{pipeRole === 'main' ? 'Магистраль толще и идёт к клапанам.' : 'Зональная тоньше и идёт от клапана к дождевателям. Подходящие подсвечены.'}</p>
               )}
               <p className="tool-label">Трубы</p>
               <select
@@ -1973,10 +2244,13 @@ export function EditorPage({
           sketch={tool === 'rect' || tool === 'circle' || tool === 'brush' ? tool : 'poly'}
           brushWidth={brushM * ppm}
           brushTip={brushTip}
-          guide={linePts.length ? linePts : tool === 'dim' ? dimPts : []}
+          guide={linePts.length ? linePts : tool === 'dim' ? dimPts : tool === 'sleeve' ? sleevePts : []}
           snapMark={snapMark}
+          draftLine={tool === 'drip' ? 'drip' : tool === 'pipe' ? pipeRole : 'poly'}
+          draftWarn={draftWarn}
+          joinIds={joinIds}
           showOk={(tool === 'zone' && draft.length >= 3) || ((tool === 'pipe' || tool === 'drip') && draft.length >= 2)}
-          hover={tool === 'zone' || tool === 'pipe' || tool === 'drip' || tool === 'scale' || tool === 'rect' || tool === 'circle' || tool === 'brush' || tool === 'dim' ? hover : null}
+          hover={tool === 'zone' || tool === 'pipe' || tool === 'drip' || tool === 'scale' || tool === 'rect' || tool === 'circle' || tool === 'brush' || tool === 'dim' || tool === 'sleeve' ? hover : null}
           scalePoints={scalePoints}
           selectionId={selection?.id ?? null}
           selectionKind={selection?.kind ?? null}
@@ -2178,6 +2452,57 @@ export function EditorPage({
             <button className="tool" onClick={removeSelection}>Удалить</button>
           </div>
         )}
+        {selectedPipe && draft.length === 0 && (
+          <div className="ops">
+            <button className={selectedPipe.role === 'zone' ? 'tool' : 'tool active'} onClick={() => assignPipe(selectedPipe.id, 'main')}>Магистраль</button>
+            <button className={selectedPipe.role === 'zone' ? 'tool active' : 'tool'} onClick={() => assignPipe(selectedPipe.id, 'zone')}>Зональная</button>
+            {pipeDiameters.length > 0 && <span>{pipeDiameters.map((od) => `Ø${od}`).join(' · ')}</span>}
+            <button className="tool" onClick={duplicateSelected} title="Копия, Ctrl+D">Копия</button>
+            <button className="tool" onClick={removeSelection}>Удалить</button>
+          </div>
+        )}
+        {selectedBox && draft.length === 0 && (
+          <div className="ops">
+            <label className="inline">
+              имя
+              <input
+                value={selectedBox.name}
+                className="wide"
+                aria-label="Имя клапанного бокса"
+                onChange={(event) => {
+                  const name = event.target.value.slice(0, 80)
+                  setDoc((current) => ({
+                    ...current,
+                    boxes: (current.boxes ?? []).map((item) => (item.id === selectedBox.id ? { ...item, name } : item)),
+                  }))
+                }}
+                onBlur={() => {
+                  if (selectedBox.name.trim()) return
+                  setDoc((current) => ({
+                    ...current,
+                    boxes: (current.boxes ?? []).map((item) => (item.id === selectedBox.id ? { ...item, name: 'Бокс' } : item)),
+                  }))
+                }}
+              />
+            </label>
+            <button className="tool" onClick={duplicateSelected} title="Копия, Ctrl+D">Копия</button>
+            <button className="tool" onClick={removeSelection}>Удалить</button>
+          </div>
+        )}
+        {selectedHydrant && draft.length === 0 && (
+          <div className="ops">
+            <span>Гидрант</span>
+            <button className="tool" onClick={duplicateSelected} title="Копия, Ctrl+D">Копия</button>
+            <button className="tool" onClick={removeSelection}>Удалить</button>
+          </div>
+        )}
+        {selectedSleeve && draft.length === 0 && (
+          <div className="ops">
+            <span>Гильза {sleeveM === null ? '—' : `${sleeveM.toFixed(2)} м`}</span>
+            <button className="tool" onClick={duplicateSelected} title="Копия, Ctrl+D">Копия</button>
+            <button className="tool" onClick={removeSelection}>Удалить</button>
+          </div>
+        )}
         {selectedMeasure && draft.length === 0 && (
           <div className="ops">
             <span>Размер {(dist(selectedMeasure.a, selectedMeasure.b) / ppm).toFixed(2)} м</span>
@@ -2344,6 +2669,11 @@ export function EditorPage({
               drips: current.drips.map((item) => (item.id === id ? cleanDrip(item, patch) : item)),
             }))}
             onSeries={(id) => setDoc((current) => ({ ...current, pipeSeries: id }))}
+            onPipe={(id, role) => assignPipe(id, role)}
+            onBox={(id, name) => setDoc((current) => ({
+              ...current,
+              boxes: (current.boxes ?? []).map((item) => (item.id === id ? { ...item, name: name.trim() ? name.slice(0, 80) : item.name } : item)),
+            }))}
             onTrench={(patch) => setDoc((current) => ({ ...current, trench: cleanTrench(current.trench, patch) }))}
             onDelete={removeSelection}
           />
@@ -2370,6 +2700,13 @@ export function EditorPage({
         {lineOp === 'mirror' && <span>Зеркало: два клика по оси. Появится отражённая копия.</span>}
         {alignPick && <span>Выравнивание: кликните контур-образец. Клик по пустому месту сажает эту сторону на якорь. Esc — отмена.</span>}
         {tool === 'text' && !lineOp && <span>Текст: клик ставит подпись. Потом её можно перетащить и переписать.</span>}
+        {tool === 'pipe' && pipeRole === 'main' && <span>Магистраль: кликайте от источника к клапанам. Линия жирная. Со второй точки нажмите OK.</span>}
+        {tool === 'pipe' && pipeRole === 'zone' && <span>Зональная: начните с ромба клапана. Подходящие дождеватели подсвечены. Со второй точки нажмите OK.</span>}
+        {draft.length === 0 && selection?.id && <span>Enter ставит ещё одну копию.</span>}
+        {zoneDraft && liveFlow > 0 && <span>На линии {Math.round(liveFlow)} л/ч{draftWarn ? ', выше лимита' : ''}</span>}
+        {tool === 'box' && <span>Клапанный бокс: клик ставит коробку. Следующий клапан рядом садится в свободный слот.</span>}
+        {tool === 'hydrant' && <span>Гидрант: клик ставит точку. На узле трубы он попадает в спецификацию.</span>}
+        {tool === 'sleeve' && <span>Гильза: два клика. Shift и кнопка ⊥ держат линию прямой. Длина попадёт в спецификацию.</span>}
         {tool === 'tree' && !lineOp && <span>Дерево: выберите крону слева и кликните на чертёж. Радиус задаётся у выбранного дерева.</span>}
         {tool === 'bush' && !lineOp && <span>Куст: выберите форму слева и кликните на чертёж. Капельницы расчёта встанут к нему.</span>}
         {step === 'irrig' && !doc.source && <span>Поставьте источник воды, затем «Рассчитать схему».</span>}
@@ -2432,6 +2769,9 @@ function selectionFromHit(hit: Hit): Sel {
   if (hit.kind === 'drip' || hit.kind === 'drip-point') return { kind: 'drip', id: hit.id }
   if (hit.kind === 'sprinkler' || hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc') return { kind: 'sprinkler', id: hit.id }
   if (hit.kind === 'valve') return { kind: 'valve', id: hit.id }
+  if (hit.kind === 'box') return { kind: 'box', id: hit.id }
+  if (hit.kind === 'hydrant') return { kind: 'hydrant', id: hit.id }
+  if (hit.kind === 'sleeve' || hit.kind === 'sleeve-point') return { kind: 'sleeve', id: hit.id }
   if (hit.kind === 'note') return { kind: 'note', id: hit.id }
   if (hit.kind === 'plant' || hit.kind === 'plant-size') return { kind: 'plant', id: hit.id }
   if (hit.kind === 'fixture' || hit.kind === 'fixture-size') return { kind: 'fixture', id: hit.id }
@@ -2477,7 +2817,34 @@ function snapDrag(doc: Doc, hit: Hit): Doc {
   if (hit.kind === 'valve') {
     return {
       ...doc,
-      valves: doc.valves.map((item) => (item.id === hit.id ? { ...item, ...snapTo(item, points, SNAP_PX) } : item)),
+      valves: doc.valves.map((item) => {
+        if (item.id !== hit.id) return item
+        const next: Valve = { ...item, ...snapTo(item, points, SNAP_PX) }
+        if (next.boxId) {
+          const home = (doc.boxes ?? []).find((entry) => entry.id === next.boxId)
+          if (!home || dist(next, home) > 28) delete next.boxId
+        }
+        return next
+      }),
+    }
+  }
+  if (hit.kind === 'hydrant') {
+    return {
+      ...doc,
+      hydrants: (doc.hydrants ?? []).map((item) => (item.id === hit.id ? { ...item, ...snapTo(item, points, SNAP_PX) } : item)),
+    }
+  }
+  if (hit.kind === 'box') {
+    const box = (doc.boxes ?? []).find((item) => item.id === hit.id)
+    if (!box) return doc
+    const next = snapTo(box, points, SNAP_PX)
+    const dx = next.x - box.x
+    const dy = next.y - box.y
+    if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) return doc
+    return {
+      ...doc,
+      boxes: (doc.boxes ?? []).map((item) => (item.id === hit.id ? { ...item, x: next.x, y: next.y } : item)),
+      valves: doc.valves.map((item) => (item.boxId === hit.id ? { ...item, x: item.x + dx, y: item.y + dy } : item)),
     }
   }
   return doc
@@ -2527,7 +2894,41 @@ function moveHit(doc: Doc, hit: Hit, point: Point): Doc {
   }
   if (hit.kind === 'source') return withSourcePoint(doc, point)
   if (hit.kind === 'valve') {
-    return { ...doc, valves: doc.valves.map((item) => (item.id === hit.id ? { ...item, x: point.x, y: point.y } : item)) }
+    return {
+      ...doc,
+      valves: doc.valves.map((item) => {
+        if (item.id !== hit.id) return item
+        const next: Valve = { ...item, x: point.x, y: point.y }
+        if (next.boxId) {
+          const home = (doc.boxes ?? []).find((entry) => entry.id === next.boxId)
+          if (!home || dist(point, home) > 28) delete next.boxId
+        }
+        return next
+      }),
+    }
+  }
+  if (hit.kind === 'box') {
+    const box = (doc.boxes ?? []).find((item) => item.id === hit.id)
+    if (!box) return doc
+    const dx = point.x - box.x
+    const dy = point.y - box.y
+    return {
+      ...doc,
+      boxes: (doc.boxes ?? []).map((item) => (item.id === hit.id ? { ...item, x: point.x, y: point.y } : item)),
+      valves: doc.valves.map((item) => (item.boxId === hit.id ? { ...item, x: item.x + dx, y: item.y + dy } : item)),
+    }
+  }
+  if (hit.kind === 'hydrant') {
+    return { ...doc, hydrants: (doc.hydrants ?? []).map((item) => (item.id === hit.id ? { ...item, x: point.x, y: point.y } : item)) }
+  }
+  if (hit.kind === 'sleeve-point') {
+    return {
+      ...doc,
+      sleeves: (doc.sleeves ?? []).map((item) => {
+        if (item.id !== hit.id) return item
+        return hit.index === 0 ? { ...item, a: point } : { ...item, b: point }
+      }),
+    }
   }
   if (hit.kind === 'note') {
     return { ...doc, notes: (doc.notes ?? []).map((item) => (item.id === hit.id ? { ...item, x: point.x, y: point.y } : item)) }
@@ -2673,7 +3074,7 @@ function PlantRailIcon({ form }: { form: PlantForm }) {
   return (
     <svg className="rail-svg" viewBox="-1.25 -1.25 2.5 2.5" aria-hidden="true">
       {glyph.fills.slice(0, 4).map((d, index) => (
-        <path key={index} d={d} fill={paint.leaf} stroke={paint.ink} strokeWidth={0.08} />
+        <path key={index} d={d} fill={crownFill(paint, glyph.shade?.[index] ?? 0)} stroke={paint.ink} strokeWidth={0.08} />
       ))}
     </svg>
   )
@@ -2739,7 +3140,7 @@ function PlantThumb({ form }: { form: PlantForm }) {
   return (
     <svg viewBox="-1.25 -1.25 2.5 2.5" aria-hidden="true">
       {glyph.fills.map((d, index) => (
-        <path key={index} d={d} fill={paint.leaf} stroke={paint.ink} strokeWidth={0.06} />
+        <path key={index} d={d} fill={crownFill(paint, glyph.shade?.[index] ?? 0)} stroke={paint.ink} strokeWidth={0.06} />
       ))}
       {glyph.veins.map((d, index) => (
         <path key={`v${index}`} d={d} fill="none" stroke={paint.vein} strokeWidth={0.04} />

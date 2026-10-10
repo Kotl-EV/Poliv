@@ -154,4 +154,24 @@ test('stroke, opacity, note colour, anchor and ortho survive a reload', () => {
     zones: [{ id: 'z', name: 'Газон', kind: 'lawn', points, doseMm: 6, opacity: 2 }],
   }), null)
   assert.equal(parseDoc({ ...emptyDoc(), notes: [{ id: 'n', x: 1, y: 2, text: 'Кран', sizeM: 0.4, bold: 'yes' }] }), null)
+  const zoned = parseDoc({ ...emptyDoc(), pipes: [{ id: 'p', points: [{ x: 0, y: 0 }, { x: 10, y: 0 }], role: 'zone' }] })
+  assert.equal(zoned?.pipes[0].role, 'zone')
+  const plainPipe = parseDoc({ ...emptyDoc(), pipes: [{ id: 'p', points: [{ x: 0, y: 0 }, { x: 10, y: 0 }] }] })
+  assert.equal(plainPipe?.pipes[0].role, undefined)
+  assert.equal(parseDoc({ ...emptyDoc(), pipes: [{ id: 'p', points: [{ x: 0, y: 0 }, { x: 10, y: 0 }], role: 'hose' }] }), null)
+  const gear = parseDoc({
+    ...emptyDoc(),
+    boxes: [{ id: 'b', name: 'Бокс 1', x: 1, y: 2 }],
+    hydrants: [{ id: 'h', x: 3, y: 4 }],
+    sleeves: [{ id: 's', a: { x: 0, y: 0 }, b: { x: 8, y: 0 } }],
+    valves: [{ id: 'v', name: 'Клапан 1', x: 1, y: 8, boxId: 'b' }],
+    pipes: [{ id: 'p', points: [{ x: 0, y: 0 }, { x: 10, y: 0 }], role: 'zone', valveId: 'v' }],
+  })
+  assert.equal(gear?.boxes?.[0].name, 'Бокс 1')
+  assert.equal(gear?.hydrants?.[0].x, 3)
+  assert.equal(gear?.sleeves?.[0].b.x, 8)
+  assert.equal(gear?.valves[0].boxId, 'b')
+  assert.equal(gear?.pipes[0].valveId, 'v')
+  assert.equal(parseDoc({ ...emptyDoc(), valves: [{ id: 'v', name: 'Клапан', x: 0, y: 0, boxId: 1 }] }), null)
+  assert.equal(parseDoc(emptyDoc())?.boxes?.length, 0)
 })

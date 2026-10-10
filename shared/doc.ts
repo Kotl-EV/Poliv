@@ -3,7 +3,7 @@ import { parseFixtureKind } from './fixtures.ts'
 import { parsePlantForm } from './plants.ts'
 import { nozzleById } from './nozzles.ts'
 import { DEFAULT_SERIES, seriesById } from './pipes.ts'
-import type { Climate, Doc, Drip, Fixture, HatchId, Measure, Note, Pipe, Plant, PlantKind, Point, Slope, Soil, Source, Sprinkler, Trench, Valve, Zone, ZoneKind } from './types.ts'
+import type { Climate, Doc, Drip, Fixture, HatchId, Hydrant, Measure, Note, Pipe, Plant, PlantKind, Point, Sleeve, Slope, Soil, Source, Sprinkler, Trench, Valve, ValveBox, Zone, ZoneKind } from './types.ts'
 
 export const SNAP_PX = 14
 
@@ -19,6 +19,9 @@ export function emptyDoc(): Doc {
     sprinklers: [],
     pipes: [],
     valves: [],
+    boxes: [],
+    hydrants: [],
+    sleeves: [],
     drips: [],
     source: null,
     trench: { widthM: 0.3, depthM: 0.4 },
@@ -206,7 +209,16 @@ export function parseDoc(value: unknown): Doc | null {
     const id = text(item.id, 80)
     const pts = points(item.points, 2, 500)
     if (!id || !pts) return null
-    pipes.push({ id, points: pts })
+    const role = (item as { role?: unknown }).role
+    if (role !== undefined && role !== 'main' && role !== 'zone') return null
+    const valveId = (item as { valveId?: unknown }).valveId
+    if (valveId !== undefined && (typeof valveId !== 'string' || valveId.trim() === '' || valveId.length > 80)) return null
+    pipes.push({
+      id,
+      points: pts,
+      ...(role === 'main' || role === 'zone' ? { role } : {}),
+      ...(typeof valveId === 'string' ? { valveId } : {}),
+    })
   }
 
   let source: Source | null = null
@@ -216,12 +228,15 @@ export function parseDoc(value: unknown): Doc | null {
   }
 
   const valves = parseValves(raw.valves)
+  const boxes = parseBoxes(raw.boxes)
+  const hydrants = parseHydrants(raw.hydrants)
+  const sleeves = parseSleeves(raw.sleeves)
   const drips = parseDrips(raw.drips)
   const notes = parseNotes(raw.notes)
   const plants = parsePlants(raw.plants)
   const fixtures = parseFixtures(raw.fixtures)
   const measures = parseMeasures(raw.measures)
-  if (!valves || !drips || !notes || !plants || !fixtures || !measures) return null
+  if (!valves || !boxes || !hydrants || !sleeves || !drips || !notes || !plants || !fixtures || !measures) return null
 
   const pipeSeries = seriesById(typeof raw.pipeSeries === 'string' ? raw.pipeSeries : DEFAULT_SERIES).id
   const trench = parseTrench(raw.trench)
@@ -255,6 +270,9 @@ export function parseDoc(value: unknown): Doc | null {
     sprinklers,
     pipes,
     valves,
+    boxes,
+    hydrants,
+    sleeves,
     drips,
     source,
     trench,
@@ -433,9 +451,55 @@ function parseValves(value: unknown): Valve[] | null {
     const name = text(item.name, 80)
     const place = point(item)
     if (!id || !name || !place) return null
-    valves.push({ id, name, x: place.x, y: place.y })
+    const boxId = (item as { boxId?: unknown }).boxId
+    if (boxId !== undefined && (typeof boxId !== 'string' || boxId.trim() === '' || boxId.length > 80)) return null
+    valves.push({ id, name, x: place.x, y: place.y, ...(typeof boxId === 'string' ? { boxId } : {}) })
   }
   return valves
+}
+
+function parseBoxes(value: unknown): ValveBox[] | null {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > 200) return null
+  const boxes: ValveBox[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') return null
+    const id = text(item.id, 80)
+    const name = text(item.name, 80)
+    const place = point(item)
+    if (!id || !name || !place) return null
+    boxes.push({ id, name, x: place.x, y: place.y })
+  }
+  return boxes
+}
+
+function parseHydrants(value: unknown): Hydrant[] | null {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > 400) return null
+  const hydrants: Hydrant[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') return null
+    const id = text(item.id, 80)
+    const place = point(item)
+    if (!id || !place) return null
+    hydrants.push({ id, x: place.x, y: place.y })
+  }
+  return hydrants
+}
+
+function parseSleeves(value: unknown): Sleeve[] | null {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > 400) return null
+  const sleeves: Sleeve[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') return null
+    const id = text(item.id, 80)
+    const a = point((item as Sleeve).a)
+    const b = point((item as Sleeve).b)
+    if (!id || !a || !b) return null
+    sleeves.push({ id, a, b })
+  }
+  return sleeves
 }
 
 function parseDrips(value: unknown): Drip[] | null {

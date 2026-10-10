@@ -1,5 +1,12 @@
 /** Внутренние диаметры ПЭ по SDR. Шероховатость 0,005 мм. */
 
+import type { PipeRole } from './types.ts'
+
+/** Толщина линии на экране, в пикселях до деления на масштаб вида. */
+export function pipeWeight(role: PipeRole): number {
+  return role === 'main' ? 6.4 : 3.2
+}
+
 export const V_MAX = 1.5
 export const ROUGHNESS_MM = 0.005
 export const MIN_SPRINKLER_BAR = 2
