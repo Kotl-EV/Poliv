@@ -109,6 +109,16 @@ test('stroke, opacity, anchor and a coloured note reach the sheet', () => {
   assert.match(svg, /font-weight="700"/)
 })
 
+test('a conifer crown reaches the printed sheet', () => {
+  const doc = {
+    ...emptyDoc(),
+    plants: [{ id: 'p', kind: 'tree' as const, x: 20, y: 20, radiusM: 2, form: 'conifer' as const }],
+  }
+  const svg = buildSheetPages(doc, analyze(doc), { title: 'Т', date: '01.01.2026', includeSpec: false })[0].svg
+  assert.match(svg, /fill="#1e4a34"/)
+  assert.match(svg, / L /)
+})
+
 test('jpeg pages become a pdf with one image per page', () => {
   const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9, 1, 2, 3])
   const pdf = pdfFromJpegPages([

@@ -1,6 +1,6 @@
 import { SNAP_PX, defaultDose, emptyDoc } from './doc.ts'
-import { placeDripOnPolygon } from './drip.ts'
-import { dist, outlineOf, pointInPolygon, pointInZone, polygonAreaPx, zoneAreaPx } from './geom.ts'
+import { placeDripAtPlant } from './drip.ts'
+import { dist, pointInPolygon, pointInZone, polygonAreaPx, zoneAreaPx } from './geom.ts'
 import { isDripKind, isObstacleKind, isSprayKind, isWetKind } from './landscape.ts'
 import { nozzleById } from './nozzles.ts'
 import { placeSprayOnPolygon, ringsOverlap } from './spray.ts'
@@ -14,7 +14,7 @@ const MAX_HEADS = 120
 const MAX_DRIPS = 48
 const STATION_LPH = 1500
 const MIN_LAWN_M2 = 8
-const MIN_BED_M2 = 2.5
+const PLANT_DRIP_MIN = 90
 
 type HeadSpot = { key: number; point: Point; nozzleId: string; rotationDeg: number }
 type DripSpot = { key: number; points: Point[]; spacingM: number; emitterLph: number }
@@ -292,16 +292,6 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
   if (heads.length > MAX_HEADS) heads.length = MAX_HEADS
 
   const drips: DripSpot[] = []
-  for (const ring of bedRings) {
-    const holes = buildings.filter((building) => ringsOverlap(ring, building))
-    const runs = placeDripOnPolygon(ring, holes, ppm, { kind: 'bed', soil: 'loam' })
-    for (const run of runs) {
-      if (drips.length >= MAX_DRIPS || run.points.length < 2) continue
-      const spot = nearestKey(run.points[0], allowed, center)
-      if (spot === null) continue
-      drips.push({ key: spot, points: [center(spot), ...run.points], spacingM: run.spacingM, emitterLph: run.emitterLph })
-    }
-  }
 
   if (heads.length === 0 && drips.length === 0) return null
 
@@ -328,7 +318,6 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
       drip.key = -1
       continue
     }
-    drip.points = [center(next), ...drip.points.slice(1)]
     drip.key = next
     taken.add(next)
   }
@@ -355,6 +344,7 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
       if (pointInZone(head.point, zone.points, zone.holes)) flow += nozzleById(head.nozzleId).flowLph
     }
     for (const drip of keptDrips) {
+      if (!isDripKind(zone.kind)) continue
       if (pointInZone(centroid(drip.points), zone.points, zone.holes)) flow += dripFlow(drip, ppm)
     }
     zoneRuntime.set(zone.id, flow > 0 ? (zone.doseMm / (flow / area)) * 60 : 0)
@@ -369,7 +359,7 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
   }
   const runtimeOf = new Map<number, number>()
   for (const head of keptHeads) runtimeOf.set(head.key, Math.max(runtimeOf.get(head.key) ?? 0, runtimeAt(head.point)))
-  for (const drip of keptDrips) runtimeOf.set(drip.key, Math.max(runtimeOf.get(drip.key) ?? 0, runtimeAt(centroid(drip.points))))
+  for (const drip of keptDrips) runtimeOf.set(drip.key, PLANT_DRIP_MIN)
   consumers.sort((a, b) => (runtimeOf.get(b.key) ?? 0) - (runtimeOf.get(a.key) ?? 0) || b.flow - a.flow || a.key - b.key)
   const groups: { key: number; flow: number; kind: 'spray' | 'drip' }[][] = []
   const bins: { flow: number; runtime: number; kind: 'spray' | 'drip' }[] = []
@@ -585,24 +575,14 @@ export function layoutIrrigation(doc: Doc): Doc | null {
   if (heads.length > MAX_HEADS) heads.length = MAX_HEADS
 
   const drips: DripSpot[] = []
-  for (const zone of doc.zones) {
-    if (!isDripKind(zone.kind) || zone.points.length < 3) continue
-    if (zoneAreaPx(zone.points, zone.holes) / (ppm * ppm) < MIN_BED_M2) continue
-    const ring = outlineOf(zone.points, zone.bends)
-    const holes = [
-      ...(zone.holes ?? []),
-      ...doc.zones
-        .filter((other) => other.id !== zone.id && (isObstacleKind(other.kind) || isSprayKind(other.kind)))
-        .filter((other) => ringsOverlap(zone.points, other.points))
-        .map((other) => outlineOf(other.points, other.bends)),
-    ]
-    const runs = placeDripOnPolygon(ring, holes, ppm, { kind: zone.kind, soil: zone.soil })
-    for (const run of runs) {
-      if (drips.length >= MAX_DRIPS || run.points.length < 2) continue
-      const spot = nearestKey(run.points[0], allowed, center)
-      if (spot === null) continue
-      drips.push({ key: spot, points: [center(spot), ...run.points], spacingM: run.spacingM, emitterLph: run.emitterLph })
-    }
+  for (const plant of doc.plants ?? []) {
+    if (drips.length >= MAX_DRIPS) break
+    if (!plantGetsDrip(plant, doc.zones)) continue
+    const run = placeDripAtPlant(plant, ppm)
+    if (!run || run.points.length < 2) continue
+    const spot = nearestKey(run.points[0], allowed, center)
+    if (spot === null) continue
+    drips.push({ key: spot, points: run.points, spacingM: run.spacingM, emitterLph: run.emitterLph })
   }
 
   if (heads.length === 0 && drips.length === 0) return null
@@ -630,7 +610,6 @@ export function layoutIrrigation(doc: Doc): Doc | null {
       drip.key = -1
       continue
     }
-    drip.points = [center(next), ...drip.points.slice(1)]
     drip.key = next
     taken.add(next)
   }
@@ -657,6 +636,7 @@ export function layoutIrrigation(doc: Doc): Doc | null {
       if (pointInZone(head.point, zone.points, zone.holes)) flow += nozzleById(head.nozzleId).flowLph
     }
     for (const drip of keptDrips) {
+      if (!isDripKind(zone.kind)) continue
       if (pointInZone(centroid(drip.points), zone.points, zone.holes)) flow += dripFlow(drip, ppm)
     }
     zoneRuntime.set(zone.id, flow > 0 ? (zone.doseMm / (flow / area)) * 60 : 0)
@@ -671,7 +651,7 @@ export function layoutIrrigation(doc: Doc): Doc | null {
   }
   const runtimeOf = new Map<number, number>()
   for (const head of keptHeads) runtimeOf.set(head.key, Math.max(runtimeOf.get(head.key) ?? 0, runtimeAt(head.point)))
-  for (const drip of keptDrips) runtimeOf.set(drip.key, Math.max(runtimeOf.get(drip.key) ?? 0, runtimeAt(centroid(drip.points))))
+  for (const drip of keptDrips) runtimeOf.set(drip.key, PLANT_DRIP_MIN)
   consumers.sort((a, b) => (runtimeOf.get(b.key) ?? 0) - (runtimeOf.get(a.key) ?? 0) || b.flow - a.flow || a.key - b.key)
   const groups: { key: number; flow: number; kind: 'spray' | 'drip' }[][] = []
   const bins: { flow: number; runtime: number; kind: 'spray' | 'drip' }[] = []
@@ -775,6 +755,11 @@ export function layoutIrrigation(doc: Doc): Doc | null {
   for (const head of finalHeads) {
     const at = center(head.key)
     if (dist(at, head.point) > 1) pipes.push({ id: ids('pipe'), points: [at, head.point] })
+  }
+  for (const drip of finalDrips) {
+    const at = center(drip.key)
+    const start = drip.points[0]
+    if (start && dist(at, start) > 1) pipes.push({ id: ids('pipe'), points: [at, start] })
   }
 
   pipes.unshift({ id: ids('pipe'), points: [{ x: source.x, y: source.y }, center(root)] })
@@ -1646,6 +1631,16 @@ function polylinePx(points: Point[]): number {
   let sum = 0
   for (let i = 1; i < points.length; i++) sum += dist(points[i - 1], points[i])
   return sum
+}
+
+function plantGetsDrip(plant: Point, zones: Zone[]): boolean {
+  let wet = false
+  for (const zone of zones) {
+    if (zone.points.length < 3 || !pointInZone(plant, zone.points, zone.holes)) continue
+    if (isObstacleKind(zone.kind)) return false
+    if (isWetKind(zone.kind)) wet = true
+  }
+  return wet
 }
 
 function dripFlow(drip: DripSpot, ppm: number): number {

@@ -19,6 +19,64 @@ export type DripRun = {
   emitterLph: number
 }
 
+/** Кольцо капельниц у ствола. Куст — две капельницы, дерево — по кроне. */
+export function placeDripAtPlant(
+  plant: { kind: 'tree' | 'bush'; x: number; y: number; radiusM: number },
+  ppm: number,
+): DripRun | null {
+  if (!(ppm > 0) || !(plant.radiusM > 0)) return null
+  const tree = plant.kind === 'tree'
+  const radiusM = tree ? clamp(plant.radiusM * 0.55, 0.35, 1.2) : clamp(plant.radiusM * 0.45, 0.18, 0.45)
+  const count = tree ? clampInt(Math.round((2 * Math.PI * radiusM) / 0.6), 3, 6) : 2
+  const steps = 16
+  const radiusPx = radiusM * ppm
+  const points: Point[] = []
+  for (let i = 0; i <= steps; i++) {
+    const angle = (i / steps) * Math.PI * 2
+    points.push({ x: plant.x + Math.cos(angle) * radiusPx, y: plant.y + Math.sin(angle) * radiusPx })
+  }
+  let px = 0
+  for (let i = 1; i < points.length; i++) px += dist(points[i - 1], points[i])
+  const spacingM = px / ppm / count
+  if (!(spacingM >= 0.05) || spacingM > 2) return null
+  return { points, spacingM, emitterLph: tree ? 4 : EMITTER_LPH }
+}
+
+/** Точки капельниц вдоль трубки. Число совпадает с расчётом расхода. */
+export function emitterPoints(points: Point[], spacingM: number, ppm: number): Point[] {
+  if (!(ppm > 0) || !(spacingM > 0) || points.length < 2) return []
+  const spacing = spacingM * ppm
+  let length = 0
+  for (let i = 1; i < points.length; i++) length += dist(points[i - 1], points[i])
+  if (!(length > 0)) return []
+  const count = Math.max(1, Math.round(length / spacing))
+  const step = length / count
+  const out: Point[] = []
+  let walked = 0
+  let target = step / 2
+  for (let i = 1; i < points.length && out.length < count; i++) {
+    const a = points[i - 1]
+    const b = points[i]
+    const seg = dist(a, b)
+    if (seg < 1e-9) continue
+    while (target <= walked + seg + 1e-6 && out.length < count) {
+      const t = Math.max(0, Math.min(1, (target - walked) / seg))
+      out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t })
+      target += step
+    }
+    walked += seg
+  }
+  return out
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value))
+}
+
+function clampInt(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Math.round(value)))
+}
+
 type Lateral = { offset: number; a: Point; b: Point }
 
 /** Капельные линии: латерали вдоль длинной стороны, змейка только внутри контура. */

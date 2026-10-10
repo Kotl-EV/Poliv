@@ -1,5 +1,7 @@
 import { forwardRef, type MouseEvent, type PointerEvent } from 'react'
 import type { BrushTip } from '@shared/clip.ts'
+import { emitterPoints } from '@shared/drip.ts'
+import { formOf, plantGlyph, plantPaint } from '@shared/plants.ts'
 import { centroid, dist, handleFromControl, midpoint, polar, sectorPath, zonePathD, zoneShapeD } from '@shared/geom.ts'
 import { DEFAULT_PPM, gridStepM, hatchOf, honeycomb, surfaceOf } from '@shared/landscape.ts'
 import type { Analysis, Doc, Measure, Note, Plant, Point, Sprinkler, Zone, ZoneKind } from '@shared/types.ts'
@@ -243,6 +245,19 @@ export const Board = forwardRef<SVGSVGElement, {
             pointerEvents="none"
           />
         ))}
+        {doc.drips.flatMap((drip) =>
+          emitterPoints(drip.points, drip.spacingM, ppm).map((point, index) => (
+            <circle
+              key={`${drip.id}-em-${index}`}
+              cx={point.x}
+              cy={point.y}
+              r={3.2 / view.k}
+              className="emitter"
+              strokeWidth={0.8 / view.k}
+              pointerEvents="none"
+            />
+          )),
+        )}
         {doc.drips.map((drip) =>
           drip.points.slice(0, -1).map((point, index) => (
             <line
@@ -756,23 +771,34 @@ function SurfacePatterns({ ppm }: { ppm: number }) {
 }
 
 function PlantMark({ plant, ppm, k, selected }: { plant: Plant; ppm: number; k: number; selected: boolean }) {
-  const r = Math.max(plant.radiusM * ppm, 8 / k)
-  const canopy = plant.kind === 'tree' ? r * 0.55 : r * 0.72
+  const radius = Math.max(plant.radiusM * ppm, 8 / k)
+  const form = formOf(plant)
+  const glyph = plantGlyph(form)
+  const paint = plantPaint(form)
+  const ink = selected ? '#b86a09' : paint.ink
   return (
-    <g className={selected ? 'plant selected' : 'plant'}>
-      {plant.kind === 'tree' && (
-        <line
-          x1={plant.x}
-          y1={plant.y + r * 0.05}
-          x2={plant.x}
-          y2={plant.y + r * 0.55}
-          stroke="#5a3a22"
-          strokeWidth={Math.max(2 / k, r * 0.08)}
-          pointerEvents="none"
-        />
-      )}
-      <circle cx={plant.x} cy={plant.kind === 'tree' ? plant.y - canopy * 0.2 : plant.y} r={canopy} className="canopy" pointerEvents="none" />
-      <circle data-hit="plant" data-id={plant.id} cx={plant.x} cy={plant.y} r={Math.max(canopy, 10 / k)} fill="transparent" />
+    <g className={selected ? 'plant selected' : 'plant'} transform={`translate(${plant.x} ${plant.y})`}>
+      <g transform={`scale(${radius})`} pointerEvents="none">
+        {glyph.fills.map((d, index) => (
+          <path key={`f${index}`} d={d} fill={paint.leaf} stroke={ink} strokeWidth={1.35} vectorEffect="non-scaling-stroke" />
+        ))}
+        {glyph.veins.map((d, index) => (
+          <path key={`v${index}`} d={d} fill="none" stroke={paint.vein} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+        ))}
+        {glyph.dots.map((dot, index) => (
+          <circle
+            key={`d${index}`}
+            cx={dot.x}
+            cy={dot.y}
+            r={dot.r}
+            fill={dot.bloom ? paint.accent : paint.trunk}
+            stroke={dot.bloom ? paint.ink : '#3e2614'}
+            strokeWidth={0.8}
+            vectorEffect="non-scaling-stroke"
+          />
+        ))}
+      </g>
+      <circle data-hit="plant" data-id={plant.id} r={Math.max(radius, 10 / k)} fill="transparent" />
     </g>
   )
 }

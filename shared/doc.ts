@@ -1,4 +1,5 @@
 import { DEFAULT_PPM, DEFAULT_SHEET_M, HATCHES, surfaceOf } from './landscape.ts'
+import { parsePlantForm } from './plants.ts'
 import { nozzleById } from './nozzles.ts'
 import { DEFAULT_SERIES, seriesById } from './pipes.ts'
 import type { Climate, Doc, Drip, HatchId, Measure, Note, Pipe, Plant, PlantKind, Point, Slope, Soil, Source, Sprinkler, Trench, Valve, Zone, ZoneKind } from './types.ts'
@@ -350,7 +351,9 @@ function parsePlants(value: unknown): Plant[] | null {
     const kind = item.kind === 'tree' || item.kind === 'bush' ? item.kind as PlantKind : null
     if (!id || !kind || x === null || y === null || radiusM === null) return null
     if (radiusM < 0.2 || radiusM > 8) return null
-    plants.push({ id, kind, x, y, radiusM })
+    const form = parsePlantForm(item.form, kind)
+    if (form === null) return null
+    plants.push({ id, kind, x, y, radiusM, ...(form ? { form } : {}) })
   }
   return plants
 }

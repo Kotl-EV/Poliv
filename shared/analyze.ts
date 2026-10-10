@@ -1,8 +1,9 @@
 import { climateFactor, cyclePlan, defaultDose, intakeMmH, SNAP_PX } from './doc.ts'
 import { dist, pointInZone, zoneAreaPx } from './geom.ts'
+import { isDripKind } from './landscape.ts'
 import { nozzleById } from './nozzles.ts'
 import { barToHeadM, headLossM, MIN_SPRINKLER_BAR, pickPipe, seriesById } from './pipes.ts'
-import type { Analysis, Doc, Drip, Point, SegmentResult } from './types.ts'
+import type { Analysis, Doc, Drip, Point, SegmentResult, Zone } from './types.ts'
 
 type Node = { id: number; x: number; y: number; points: Point[] }
 
@@ -76,6 +77,7 @@ function nearest(p: Point, nodes: Node[]): { node: Node; distance: number } | nu
 function zoneRows(doc: Doc): Analysis['zones'] {
   return doc.zones.map((zone) => {
     const areaM2 = doc.pxPerMeter ? zoneAreaPx(zone.points, zone.holes) / (doc.pxPerMeter * doc.pxPerMeter) : null
+    const wetM2 = canopyM2(zone, doc) ?? areaM2
     let flow = 0
     for (const sprinkler of doc.sprinklers) {
       if (pointInZone(sprinkler, zone.points, zone.holes)) flow += sprinkler.flowLph
@@ -83,7 +85,7 @@ function zoneRows(doc: Doc): Analysis['zones'] {
     for (const drip of doc.drips) {
       if (pointInZone(centroid(drip.points), zone.points, zone.holes)) flow += dripMeasure(drip, doc.pxPerMeter).flowLph
     }
-    const precipMmH = areaM2 && areaM2 > 0 ? flow / areaM2 : null
+    const precipMmH = wetM2 && wetM2 > 0 ? flow / wetM2 : null
     const doseMm = zone.doseMm >= 0 && zone.doseMm <= 40 ? zone.doseMm : defaultDose(zone.kind)
     const climate = zone.climate ?? 'open'
     const appliedMm = doseMm * climateFactor(climate)
@@ -550,6 +552,18 @@ function segment(doc: Doc, edge: Edge, flow: number | null, name: string | null,
 
 function unique(items: string[]): string[] {
   return [...new Set(items)]
+}
+
+/** Площадь крон на клумбе или в кустах. По ней считается мм/ч капельного полива. */
+function canopyM2(zone: Zone, doc: Doc): number | null {
+  if (!isDripKind(zone.kind)) return null
+  const plants = (doc.plants ?? []).filter((plant) => pointInZone(plant, zone.points, zone.holes))
+  if (!plants.length) return null
+  let area = 0
+  for (const plant of plants) {
+    if (plant.radiusM > 0) area += Math.PI * plant.radiusM * plant.radiusM
+  }
+  return area > 0.05 ? area : null
 }
 
 export function dripMeasure(drip: Drip, pxPerMeter: number | null): { lengthM: number | null; emitters: number; flowLph: number } {

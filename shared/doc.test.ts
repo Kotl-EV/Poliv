@@ -38,6 +38,21 @@ test('notes and plants survive a reload and a blank text is rejected', () => {
   })
   assert.equal(saved?.notes?.[0].text, 'Кран')
   assert.equal(saved?.plants?.[0].kind, 'tree')
+  assert.equal(saved?.plants?.[0].form, undefined)
+  const crowned = parseDoc({
+    ...emptyDoc(),
+    plants: [{ id: 'p', kind: 'tree', x: 3, y: 4, radiusM: 1.5, form: 'palm' }],
+  })
+  assert.equal(crowned?.plants?.[0].form, 'palm')
+  const foreign = parseDoc({
+    ...emptyDoc(),
+    plants: [{ id: 'p', kind: 'bush', x: 3, y: 4, radiusM: 0.6, form: 'palm' }],
+  })
+  assert.equal(foreign?.plants?.[0].form, undefined)
+  assert.equal(parseDoc({
+    ...emptyDoc(),
+    plants: [{ id: 'p', kind: 'tree', x: 3, y: 4, radiusM: 1.5, form: 4 }],
+  }), null)
   assert.equal(parseDoc({ ...emptyDoc(), notes: [{ id: 'n', x: 1, y: 2, text: '   ', sizeM: 0.4 }] }), null)
   assert.equal(parseDoc(emptyDoc())?.plants?.length, 0)
 })

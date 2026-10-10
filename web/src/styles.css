@@ -302,6 +302,7 @@ input, select {
 .valve.selected { stroke: #b86a09; }
 .drip { fill: none; stroke: #6b3fa0; }
 .drip-hit { stroke: transparent; }
+.emitter { fill: #6b3fa0; stroke: #fffdf8; }
 .handle, .scale-point { fill: #fffdf8; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .scale-point { stroke: #8d2b1f; }
 .guide { stroke: #8d2b1f; stroke-width: 1.6; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; }
@@ -319,8 +320,18 @@ input, select {
 .hatch-row .tool { flex: 1 1 auto; padding: 4px 6px; font-size: 12px; }
 .side-field { font-size: 12px; color: #3c3834; }
 .side-field input { width: 100%; box-sizing: border-box; }
-.plant .canopy { fill: #2f6a34; stroke: #1d4a24; stroke-width: 1.4; vector-effect: non-scaling-stroke; }
-.plant.selected .canopy { stroke: #b86a09; stroke-width: 2.4; }
+.plant-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; width: 100%; }
+.plant-pick {
+  padding: 2px;
+  background: #fffdf8;
+  border: 1px solid #d9d0c2;
+  border-radius: 4px;
+  line-height: 0;
+}
+.plant-pick.active { border-color: #1c2822; outline: 2px solid #1c2822; outline-offset: 1px; }
+.plant-pick svg { width: 100%; height: 36px; display: block; }
+.ops .plant-grid { width: 248px; }
+.ops .plant-pick svg { height: 28px; }
 .note text { fill: #1c2822; font-family: "Segoe UI", sans-serif; }
 .note.selected text { fill: #8d2b1f; }
 .side {

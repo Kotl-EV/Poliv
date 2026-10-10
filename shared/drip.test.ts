@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { dripPitch, placeDripOnPolygon } from './drip.ts'
+import { dripPitch, emitterPoints, placeDripAtPlant, placeDripOnPolygon } from './drip.ts'
 import { dist, pointInPolygon } from './geom.ts'
 import { layoutIrrigation } from './plan.ts'
 import { emptyDoc } from './doc.ts'
@@ -157,10 +157,28 @@ test('a narrow strip gets a single centerline', () => {
   assert.equal(longSegs(runs, 1, PPM).length, 1)
 })
 
-test('layoutIrrigation still feeds a lone bed and an L-bed', () => {
-  const doc = emptyDoc()
-  doc.pxPerMeter = PPM
-  doc.zones = [{
+test('a bush gets two emitters and a tree gets a crown ring', () => {
+  const bush = placeDripAtPlant({ kind: 'bush', x: 50, y: 40, radiusM: 0.6 }, PPM)
+  assert.ok(bush)
+  const bushM = runLen([bush], PPM)
+  assert.ok(bushM > 0.8 && bushM < 4, `bush ring ${bushM}m`)
+  assert.equal(emitterPoints(bush.points, bush.spacingM, PPM).length, 2)
+  for (const point of bush.points) {
+    assert.ok(Math.hypot(point.x - 50, point.y - 40) / PPM < 0.6)
+  }
+  const tree = placeDripAtPlant({ kind: 'tree', x: 0, y: 0, radiusM: 1.6 }, PPM)
+  assert.ok(tree)
+  const treeM = runLen([tree], PPM)
+  assert.ok(treeM < 8, `tree ring ${treeM}m`)
+  const emitters = emitterPoints(tree.points, tree.spacingM, PPM).length
+  assert.ok(emitters >= 3 && emitters <= 6, `tree emitters ${emitters}`)
+  assert.equal(tree.emitterLph, 4)
+})
+
+test('layoutIrrigation waters plants and leaves an empty bed dry', () => {
+  const empty = emptyDoc()
+  empty.pxPerMeter = PPM
+  empty.zones = [{
     id: 'bed',
     name: 'bed',
     kind: 'bed',
@@ -170,39 +188,29 @@ test('layoutIrrigation still feeds a lone bed and an L-bed', () => {
     climate: 'open',
     points: rect(100, 80, 50, 40),
   }]
-  doc.source = { x: 60, y: 100, pressureBar: 3, flowLimitLph: null }
+  empty.source = { x: 60, y: 100, pressureBar: 3, flowLimitLph: null }
+  assert.equal(layoutIrrigation(empty), null)
+
+  const doc = emptyDoc()
+  doc.pxPerMeter = PPM
+  doc.zones = empty.zones
+  doc.source = empty.source
+  doc.plants = [
+    { id: 'bush', kind: 'bush', x: 120, y: 100, radiusM: 0.6 },
+    { id: 'tree', kind: 'tree', x: 135, y: 105, radiusM: 1.6 },
+  ]
   const next = layoutIrrigation(doc)
   assert.ok(next)
-  assert.ok(next.drips.length >= 1)
-  assert.ok(next.drips[0].spacingM > 0)
-
-  const L = emptyDoc()
-  L.pxPerMeter = PPM
-  L.zones = [{
-    id: 'L',
-    name: 'L',
-    kind: 'bed',
-    doseMm: 8,
-    soil: 'loam',
-    slope: 'flat',
-    climate: 'open',
-    points: [
-      { x: 100, y: 80 },
-      { x: 180, y: 80 },
-      { x: 180, y: 100 },
-      { x: 140, y: 100 },
-      { x: 140, y: 140 },
-      { x: 100, y: 140 },
-    ],
-  }]
-  L.source = { x: 60, y: 110, pressureBar: 3, flowLimitLph: null }
-  const laid = layoutIrrigation(L)
-  assert.ok(laid)
-  assert.ok(laid.drips.length >= 1)
-  let px = 0
-  for (const drip of laid.drips) {
-    for (let i = 1; i < drip.points.length; i++) px += dist(drip.points[i - 1], drip.points[i])
+  assert.equal(next.drips.length, 2)
+  assert.equal(next.sprinklers.length, 0)
+  const lengthM = runLen(next.drips, PPM)
+  assert.ok(lengthM < 12, `plant drip ${lengthM}m should stay at the plants`)
+  for (const drip of next.drips) {
+    const mid = {
+      x: drip.points.reduce((sum, point) => sum + point.x, 0) / drip.points.length,
+      y: drip.points.reduce((sum, point) => sum + point.y, 0) / drip.points.length,
+    }
+    const near = doc.plants.some((plant) => Math.hypot(plant.x - mid.x, plant.y - mid.y) < 2 * PPM)
+    assert.ok(near)
   }
-  const lengthM = px / PPM
-  assert.ok(lengthM < 220, `layout L drip ${lengthM}m`)
 })

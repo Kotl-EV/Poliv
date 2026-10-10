@@ -1,3 +1,5 @@
+import { emitterPoints } from './drip.ts'
+import { plantMarkup } from './plants.ts'
 import { gridStepM, surfaceOf, SURFACES, DEFAULT_PPM, DEFAULT_SHEET_M, hatchOf, honeycomb } from './landscape.ts'
 import { sectorPath, zoneShapeD } from './geom.ts'
 import type { Analysis, Doc, Plant, Point } from './types.ts'
@@ -187,11 +189,15 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
     }
   }
   if (layers.drip) {
+    const ppm = doc.pxPerMeter && doc.pxPerMeter > 0 ? doc.pxPerMeter : DEFAULT_PPM
     for (const drip of doc.drips) {
       const pts = drip.points.map((p) => `${fmt(p.x)},${fmt(p.y)}`).join(' ')
       parts.push(
         `<polyline points="${pts}" fill="none" stroke="#6b3fa0" stroke-width="${fmt(2.2 / k)}" stroke-dasharray="${fmt(7 / k)} ${fmt(5 / k)}" stroke-linecap="round"/>`,
       )
+      for (const point of emitterPoints(drip.points, drip.spacingM, ppm)) {
+        parts.push(`<circle cx="${fmt(point.x)}" cy="${fmt(point.y)}" r="${fmt(2.4 / k)}" fill="#6b3fa0"/>`)
+      }
     }
   }
   if (layers.spray) {
@@ -455,13 +461,7 @@ function measureSvg(measure: { a: Point; b: Point }, ppm: number, k: number): st
 }
 
 function plantSvg(plant: Plant, ppm: number, k: number): string {
-  const r = Math.max(plant.radiusM * ppm, 4)
-  const canopy = plant.kind === 'tree' ? r * 0.55 : r * 0.72
-  const cy = plant.kind === 'tree' ? plant.y - canopy * 0.2 : plant.y
-  const trunk = plant.kind === 'tree'
-    ? `<line x1="${fmt(plant.x)}" y1="${fmt(plant.y)}" x2="${fmt(plant.x)}" y2="${fmt(plant.y + r * 0.55)}" stroke="#5a3a22" stroke-width="${fmt(Math.max(1.4 / k, r * 0.08))}"/>`
-    : ''
-  return `${trunk}<circle cx="${fmt(plant.x)}" cy="${fmt(cy)}" r="${fmt(canopy)}" fill="#2f6a34" stroke="#1d4a24" stroke-width="${fmt(1.2 / k)}"/>`
+  return plantMarkup(plant, ppm, k)
 }
 
 function xml(value: string): string {

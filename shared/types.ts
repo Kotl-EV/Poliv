@@ -88,12 +88,18 @@ export type Note = {
 
 export type PlantKind = 'tree' | 'bush'
 
+export type PlantForm =
+  | 'leaf' | 'round' | 'spread' | 'conifer' | 'column' | 'weep' | 'palm' | 'clump'
+  | 'ball' | 'wide' | 'needle' | 'bloom' | 'group' | 'cushion'
+
 export type Plant = {
   id: string
   kind: PlantKind
   x: number
   y: number
   radiusM: number
+  /** Крона. Пусто — лиственное дерево или шаровидный куст. */
+  form?: PlantForm
 }
 
 export type Measure = {
@@ -118,7 +124,7 @@ export type Doc = {
   trench: Trench
   /** Подписи на чертеже. Пусто у старых файлов. */
   notes?: Note[]
-  /** Деревья и кусты, только рисунок. */
+  /** Деревья и кусты. Расчёт ставит капельницы к ним. */
   plants?: Plant[]
   /** Размеры, которые остаются на чертеже. */
   measures?: Measure[]

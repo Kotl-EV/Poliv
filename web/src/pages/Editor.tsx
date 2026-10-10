@@ -29,14 +29,16 @@ import {
   scaleAround,
   snapToGrid,
   withinScreen,
+  pointInZone,
   zoneAreaPx,
   type AlignSide,
 } from '@shared/geom.ts'
-import { DEFAULT_PPM, DEFAULT_SHEET_M, gridStepM, hatchOf, hatchesFor, HATCHES, INKS, isWetKind, SURFACES, surfaceOf } from '@shared/landscape.ts'
+import { DEFAULT_PPM, DEFAULT_SHEET_M, gridStepM, hatchOf, hatchesFor, HATCHES, INKS, isDripKind, isSprayKind, isWetKind, SURFACES, surfaceOf } from '@shared/landscape.ts'
+import { formOf, formsFor, plantGlyph, plantPaint } from '@shared/plants.ts'
 import { DEFAULT_SHEET_LAYERS, PAPERS, type PaperId, type SheetLayers } from '@shared/sheet.ts'
 import { nozzleById, NOZZLES } from '@shared/nozzles.ts'
 import { SERIES, type PipeSeriesId } from '@shared/pipes.ts'
-import type { Doc, Drip, HatchId, Note, Plant, Point, Source, Sprinkler, Valve, Zone, ZoneKind } from '@shared/types.ts'
+import type { Doc, Drip, HatchId, Note, Plant, PlantForm, PlantKind, Point, Source, Sprinkler, Valve, Zone, ZoneKind } from '@shared/types.ts'
 import { api, type User } from '../api'
 import { layoutIrrigation } from '@shared/plan.ts'
 import { Board, readHit, worldPoint, type Hit, type View } from '../editor/Board'
@@ -176,6 +178,8 @@ export function EditorPage({
   const [brushTip, setBrushTip] = useState<BrushTip>('round')
   const [drawHatch, setDrawHatch] = useState<HatchId | null>(null)
   const [diameterM, setDiameterM] = useState('')
+  const [treeForm, setTreeForm] = useState<PlantForm>('leaf')
+  const [bushForm, setBushForm] = useState<PlantForm>('ball')
   const [dimPts, setDimPts] = useState<Point[]>([])
   const [offsetM, setOffsetM] = useState('0.5')
   const [sizeW, setSizeW] = useState('1')
@@ -966,12 +970,22 @@ export function EditorPage({
     setStatus('Считаю схему…')
     const next = layoutIrrigation(current)
     if (!next) {
-      setError('Не удалось развести сеть. Проверьте масштаб и контуры зон.')
+      const hasSpray = current.zones.some((zone) => isSprayKind(zone.kind))
+      const hasPlant = (current.plants ?? []).length > 0
+      setError(hasSpray || hasPlant
+        ? 'Не удалось развести сеть. Проверьте масштаб и контуры зон.'
+        : 'Капельницы ставятся к деревьям и кустам. Поставьте растение на клумбу и повторите расчёт.')
       setStatus('Сохранено')
       return
     }
     commit(next)
-    setPlanNote(`Дождевателей: ${next.sprinklers.length}. Клапанов: ${next.valves.length}. Капельных линий: ${next.drips.length}.`)
+    const bare = current.zones.filter((zone) =>
+      isDripKind(zone.kind)
+      && zone.points.length >= 3
+      && !(current.plants ?? []).some((plant) => pointInZone(plant, zone.points, zone.holes)),
+    )
+    const plantNote = bare.length ? ' Капля идёт к деревьям и кустам. Поставьте растение на пустую клумбу.' : ''
+    setPlanNote(`Дождевателей: ${next.sprinklers.length}. Клапанов: ${next.valves.length}. Капельных линий: ${next.drips.length}.${plantNote}`)
     setStatus('Сохранено')
     setTool('select')
   }
@@ -1259,6 +1273,19 @@ export function EditorPage({
     setSelection({ kind: 'zone', id: copy.id })
   }
 
+  function pickForm(kind: PlantKind, form: PlantForm) {
+    if (kind === 'tree') setTreeForm(form)
+    else setBushForm(form)
+    const current = docRef.current
+    const id = selection?.kind === 'plant' ? selection.id : ''
+    const plant = (current.plants ?? []).find((item) => item.id === id)
+    if (!plant || plant.kind !== kind || formOf(plant) === form) return
+    commit({
+      ...current,
+      plants: (current.plants ?? []).map((item) => (item.id === plant.id ? { ...item, form } : item)),
+    })
+  }
+
   function placeMark(kind: 'text' | 'tree' | 'bush', point: Point) {
     const current = docRef.current
     if (kind === 'text') {
@@ -1267,7 +1294,15 @@ export function EditorPage({
       setSelection({ kind: 'note', id: note.id })
       return
     }
-    const plant: Plant = { id: uid('plant'), kind: kind === 'tree' ? 'tree' : 'bush', x: point.x, y: point.y, radiusM: kind === 'tree' ? 1.6 : 0.7 }
+    const plantKind = kind === 'tree' ? 'tree' : 'bush'
+    const plant: Plant = {
+      id: uid('plant'),
+      kind: plantKind,
+      x: point.x,
+      y: point.y,
+      radiusM: plantKind === 'tree' ? 1.6 : 0.7,
+      form: plantKind === 'tree' ? treeForm : bushForm,
+    }
     commit({ ...current, plants: [...(current.plants ?? []), plant] })
     setSelection({ kind: 'plant', id: plant.id })
   }
@@ -1416,6 +1451,9 @@ export function EditorPage({
             <button className={tool === 'text' ? 'tool active' : 'tool'} onClick={() => { setTool('text'); setLineOp(null); setLine([]) }}>Текст</button>
             <button className={tool === 'tree' ? 'tool active' : 'tool'} onClick={() => { setTool('tree'); setLineOp(null); setLine([]) }}>Дерево</button>
             <button className={tool === 'bush' ? 'tool active' : 'tool'} onClick={() => { setTool('bush'); setLineOp(null); setLine([]) }}>Куст</button>
+            {(tool === 'tree' || tool === 'bush') && (
+              <PlantPicker kind={tool} active={tool === 'tree' ? treeForm : bushForm} onPick={pickForm} />
+            )}
             <label className="tool file">
               Подложка
               <input
@@ -1649,7 +1687,8 @@ export function EditorPage({
         )}
         {selectedPlant && draft.length === 0 && (
           <div className="ops">
-            <span>{selectedPlant.kind === 'tree' ? 'Дерево' : 'Куст'}</span>
+            <span>{formsFor(selectedPlant.kind).find((item) => item.id === formOf(selectedPlant))?.label}</span>
+            <PlantPicker kind={selectedPlant.kind} active={formOf(selectedPlant)} onPick={pickForm} />
             <label className="inline">
               радиус, м
               <input
@@ -1859,8 +1898,8 @@ export function EditorPage({
         {lineOp === 'mirror' && <span>Зеркало: два клика по оси. Появится отражённая копия.</span>}
         {alignPick && <span>Выравнивание: кликните контур-образец. Клик по пустому месту сажает эту сторону на якорь. Esc — отмена.</span>}
         {tool === 'text' && !lineOp && <span>Текст: клик ставит подпись. Потом её можно перетащить и переписать.</span>}
-        {tool === 'tree' && !lineOp && <span>Дерево: клик ставит крону. Радиус задаётся снизу.</span>}
-        {tool === 'bush' && !lineOp && <span>Куст: клик ставит куст. На полив не влияет.</span>}
+        {tool === 'tree' && !lineOp && <span>Дерево: выберите крону слева и кликните на чертёж. Радиус задаётся у выбранного дерева.</span>}
+        {tool === 'bush' && !lineOp && <span>Куст: выберите форму слева и кликните на чертёж. Капельницы расчёта встанут к нему.</span>}
         {step === 'irrig' && !doc.source && <span>Поставьте источник воды, затем «Рассчитать схему».</span>}
         {step === 'layout' && <span>Скачайте PDF схемы и спецификации. Слои слева — что попадёт на лист.</span>}
       </footer>
@@ -2072,6 +2111,43 @@ function withHatch(zone: Zone, hatch: HatchId): Zone {
   if (hatch === surfaceOf(zone.kind).pattern) delete next.hatch
   else next.hatch = hatch
   return next
+}
+
+function PlantPicker({ kind, active, onPick }: { kind: PlantKind; active: PlantForm; onPick: (kind: PlantKind, form: PlantForm) => void }) {
+  return (
+    <div className="plant-grid">
+      {formsFor(kind).map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          className={active === item.id ? 'plant-pick active' : 'plant-pick'}
+          title={item.label}
+          aria-label={item.label}
+          onClick={() => onPick(kind, item.id)}
+        >
+          <PlantThumb form={item.id} />
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function PlantThumb({ form }: { form: PlantForm }) {
+  const glyph = plantGlyph(form)
+  const paint = plantPaint(form)
+  return (
+    <svg viewBox="-1.25 -1.25 2.5 2.5" aria-hidden="true">
+      {glyph.fills.map((d, index) => (
+        <path key={index} d={d} fill={paint.leaf} stroke={paint.ink} strokeWidth={0.06} />
+      ))}
+      {glyph.veins.map((d, index) => (
+        <path key={`v${index}`} d={d} fill="none" stroke={paint.vein} strokeWidth={0.04} />
+      ))}
+      {glyph.dots.map((dot, index) => (
+        <circle key={`d${index}`} cx={dot.x} cy={dot.y} r={dot.r} fill={dot.bloom ? paint.accent : paint.trunk} />
+      ))}
+    </svg>
+  )
 }
 
 function mapZone(zone: Zone, fn: (point: Point) => Point): Zone {
