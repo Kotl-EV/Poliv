@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 import { analyze } from '@shared/analyze.ts'
 import { brushOutline, clipRegions, mirrorAcross, splitRegion, type BrushTip, type ClipOp } from '@shared/clip.ts'
@@ -180,6 +180,8 @@ export function EditorPage({
   const [diameterM, setDiameterM] = useState('')
   const [treeForm, setTreeForm] = useState<PlantForm>('leaf')
   const [bushForm, setBushForm] = useState<PlantForm>('ball')
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const underlayRef = useRef<HTMLInputElement>(null)
   const [dimPts, setDimPts] = useState<Point[]>([])
   const [offsetM, setOffsetM] = useState('0.5')
   const [sizeW, setSizeW] = useState('1')
@@ -1369,135 +1371,182 @@ export function EditorPage({
       <aside className="ws-tools">
         {step === 'draw' && (
           <>
-            <button className={tool === 'zone' ? 'tool active' : 'tool'} onClick={() => { setTool('zone'); setDraftPoints([]) }}>Полигон</button>
-            <button className={tool === 'rect' ? 'tool active' : 'tool'} onClick={() => { setTool('rect'); setDraftPoints([]) }}>Прямоугольник</button>
-            <button className={tool === 'circle' ? 'tool active' : 'tool'} onClick={() => { setTool('circle'); setDraftPoints([]) }}>Круг</button>
-            <button className={tool === 'brush' ? 'tool active' : 'tool'} onClick={() => { setTool('brush'); setDraftPoints([]) }}>Кисть</button>
-            {tool === 'circle' && (
-              <label className="side-field">
-                Диаметр, м
-                <input
-                  value={diameterM}
-                  inputMode="decimal"
-                  aria-label="Диаметр круга, м"
-                  onChange={(event) => setDiameterM(event.target.value)}
-                />
-              </label>
-            )}
-            {tool === 'brush' && (
-              <>
-                <div className="brush-sizes">
-                  {([
-                    ['round', 'Круг'],
-                    ['square', 'Квадрат'],
-                    ['triangle', 'Треуг.'],
-                  ] as const).map(([tip, label]) => (
-                    <button
-                      key={tip}
-                      className={brushTip === tip ? 'tool active' : 'tool'}
-                      onClick={() => setBrushTip(tip)}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <div className="brush-sizes">
-                  {[0.4, 0.8, 1.6].map((width) => (
-                    <button
-                      key={width}
-                      className={brushM === width ? 'tool active' : 'tool'}
-                      onClick={() => setBrushM(width)}
-                    >
-                      {width} м
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-            <div className="tool-gap" />
-            <p className="tool-label">Поверхность</p>
-            {SURFACES.map((surface) => (
-              <button
-                key={surface.id}
-                className={zoneKind === surface.id ? 'swatch active' : 'swatch'}
-                onClick={() => {
-                  setZoneKind(surface.id)
-                  setDrawHatch(null)
-                  if (tool !== 'rect' && tool !== 'circle' && tool !== 'brush') setTool('zone')
-                }}
-              >
-                <i className={`chip ${surface.pattern}`} />
-                {surface.label}
-              </button>
-            ))}
-            {hatchesFor(zoneKind).length > 1 && (
-              <div className="hatch-row">
-                {hatchesFor(zoneKind).map((item) => (
-                  <button
-                    key={item.id}
-                    className={hatchOf({ kind: zoneKind, hatch: drawHatch }) === item.id ? 'tool active' : 'tool'}
-                    onClick={() => setDrawHatch(item.id === surfaceOf(zoneKind).pattern ? null : item.id)}
-                  >
-                    {item.label}
-                  </button>
-                ))}
+            <div className="tool-rail">
+              <RailButton active={tool === 'zone'} label="Полигон" onClick={() => { setSheetOpen(false); setTool('zone'); setDraftPoints([]) }}>
+                <Glyph><path d="M5 8 L12 4 L20 8 L17 19 L7 19 Z" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'rect'} label="Прямоуг." onClick={() => { setSheetOpen(false); setTool('rect'); setDraftPoints([]) }}>
+                <Glyph><rect x="4" y="6" width="16" height="12" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'circle'} label="Круг" onClick={() => { setSheetOpen(false); setTool('circle'); setDraftPoints([]) }}>
+                <Glyph><circle cx="12" cy="12" r="7" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'brush'} label="Кисть" onClick={() => { setSheetOpen(false); setTool('brush'); setDraftPoints([]) }}>
+                <Glyph><path d="M5 19 C8 12 10 11 14 6 C16 4 19 5 18 8 C16 12 14 13 8 18 Z" {...pen} /></Glyph>
+              </RailButton>
+              <i className="rail-split" />
+              {SURFACES.map((surface) => (
+                <RailButton
+                  key={surface.id}
+                  active={zoneKind === surface.id && (tool === 'zone' || tool === 'rect' || tool === 'circle' || tool === 'brush')}
+                  label={surface.label}
+                  onClick={() => {
+                    setZoneKind(surface.id)
+                    setDrawHatch(null)
+                    setSheetOpen(false)
+                    if (tool !== 'rect' && tool !== 'circle' && tool !== 'brush') {
+                      setTool('zone')
+                      setDraftPoints([])
+                    }
+                  }}
+                >
+                  <i className={`chip ${surface.pattern}`} />
+                </RailButton>
+              ))}
+              <i className="rail-split" />
+              <RailButton active={tool === 'text'} label="Текст" onClick={() => { setSheetOpen(false); setTool('text'); setLineOp(null); setLine([]) }}>
+                <Glyph><path d="M6 6 H18 M12 6 V19" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'tree'} label="Дерево" onClick={() => { setSheetOpen(false); setTool('tree'); setLineOp(null); setLine([]) }}>
+                <PlantRailIcon form={treeForm} />
+              </RailButton>
+              <RailButton active={tool === 'bush'} label="Куст" onClick={() => { setSheetOpen(false); setTool('bush'); setLineOp(null); setLine([]) }}>
+                <PlantRailIcon form={bushForm} />
+              </RailButton>
+              <RailButton active={tool === 'scale'} label="Линейка" onClick={() => { setSheetOpen(false); setTool('scale'); setScalePoints([]); setLineOp(null) }}>
+                <Glyph><path d="M4 16 L16 4 M7 13 L9 15 M10 10 L12 12 M13 7 L15 9" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'dim'} label="Размер" onClick={() => { setSheetOpen(false); setTool('dim'); setLineOp(null); setLine([]); setDim([]); setAnchorPick(false) }}>
+                <Glyph><path d="M4 17 H20 M4 14 V20 M20 14 V20" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={anchorPick} label="Якорь" onClick={() => { setSheetOpen(false); armAnchor() }}>
+                <Glyph><path d="M12 4 V20 M8 8 H16 M7 16 H17" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={sheetOpen} label="Лист" onClick={() => setSheetOpen((open) => !open)}>
+                <Glyph><path d="M6 4 H14 L18 8 V20 H6 Z M14 4 V8 H18" {...pen} /></Glyph>
+              </RailButton>
+            </div>
+            {sheetOpen && (
+              <div className="tool-fly">
+                <p className="tool-label">Подложка</p>
+                <button className="tool" onClick={() => underlayRef.current?.click()}>Загрузить план</button>
+                {backgroundUrl && <button className="tool" onClick={() => clearBackground().catch((err: Error) => setError(err.message))}>Убрать подложку</button>}
+                <button className="tool" onClick={loadExample}>Пример</button>
+                {doc.anchor && <button className="tool" onClick={clearAnchor}>Убрать якорь</button>}
               </div>
             )}
-            <div className="tool-gap" />
-            <button className={tool === 'scale' ? 'tool active' : 'tool'} onClick={() => { setTool('scale'); setScalePoints([]); setLineOp(null) }}>Линейка</button>
-            <button className={tool === 'dim' ? 'tool active' : 'tool'} onClick={() => { setTool('dim'); setLineOp(null); setLine([]); setDim([]); setAnchorPick(false) }}>Размер</button>
-            <button className={anchorPick ? 'tool active' : 'tool'} onClick={armAnchor}>Якорь</button>
-            {doc.anchor && <button className="tool" onClick={clearAnchor}>Убрать якорь</button>}
-            <button className={tool === 'text' ? 'tool active' : 'tool'} onClick={() => { setTool('text'); setLineOp(null); setLine([]) }}>Текст</button>
-            <button className={tool === 'tree' ? 'tool active' : 'tool'} onClick={() => { setTool('tree'); setLineOp(null); setLine([]) }}>Дерево</button>
-            <button className={tool === 'bush' ? 'tool active' : 'tool'} onClick={() => { setTool('bush'); setLineOp(null); setLine([]) }}>Куст</button>
-            {(tool === 'tree' || tool === 'bush') && (
-              <PlantPicker kind={tool} active={tool === 'tree' ? treeForm : bushForm} onPick={pickForm} />
+            {!sheetOpen && (tool === 'tree' || tool === 'bush') && (
+              <div className="tool-fly">
+                <p className="tool-label">{tool === 'tree' ? 'Деревья' : 'Кусты'}</p>
+                <PlantPicker labeled kind={tool} active={tool === 'tree' ? treeForm : bushForm} onPick={pickForm} />
+              </div>
             )}
-            <label className="tool file">
-              Подложка
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.pdf"
-                onChange={(event) => {
-                  const file = event.target.files?.[0]
-                  if (file) onBackground(file).catch((err: Error) => setError(err.message))
-                  event.target.value = ''
-                }}
-              />
-            </label>
-            {backgroundUrl && <button className="tool" onClick={() => clearBackground().catch((err: Error) => setError(err.message))}>Убрать подложку</button>}
-            <button className="tool" onClick={loadExample}>Пример</button>
+            {!sheetOpen && (tool === 'zone' || tool === 'rect' || tool === 'circle' || tool === 'brush') && (
+              <div className="tool-fly">
+                <p className="tool-label">{surfaceOf(zoneKind).label}</p>
+                {hatchesFor(zoneKind).length > 1 && (
+                  <div className="hatch-row">
+                    {hatchesFor(zoneKind).map((item) => (
+                      <button
+                        key={item.id}
+                        className={hatchOf({ kind: zoneKind, hatch: drawHatch }) === item.id ? 'tool active' : 'tool'}
+                        onClick={() => setDrawHatch(item.id === surfaceOf(zoneKind).pattern ? null : item.id)}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {tool === 'circle' && (
+                  <label className="side-field">
+                    Диаметр, м
+                    <input
+                      value={diameterM}
+                      inputMode="decimal"
+                      aria-label="Диаметр круга, м"
+                      onChange={(event) => setDiameterM(event.target.value)}
+                    />
+                  </label>
+                )}
+                {tool === 'brush' && (
+                  <>
+                    <div className="brush-sizes">
+                      {([
+                        ['round', 'Круг'],
+                        ['square', 'Квадрат'],
+                        ['triangle', 'Треуг.'],
+                      ] as const).map(([tip, label]) => (
+                        <button key={tip} className={brushTip === tip ? 'tool active' : 'tool'} onClick={() => setBrushTip(tip)}>{label}</button>
+                      ))}
+                    </div>
+                    <div className="brush-sizes">
+                      {[0.4, 0.8, 1.6].map((width) => (
+                        <button key={width} className={brushM === width ? 'tool active' : 'tool'} onClick={() => setBrushM(width)}>{width} м</button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            <input
+              ref={underlayRef}
+              type="file"
+              hidden
+              accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,.pdf"
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                if (file) onBackground(file).catch((err: Error) => setError(err.message))
+                event.target.value = ''
+              }}
+            />
           </>
         )}
         {step === 'irrig' && (
           <>
-            <button className={tool === 'source' ? 'tool active' : 'tool'} onClick={() => setTool('source')}>Источник</button>
-            <button className={tool === 'sprinkler' ? 'tool active' : 'tool'} onClick={() => setTool('sprinkler')}>Дождеватель</button>
-            <button className={tool === 'pipe' ? 'tool active' : 'tool'} onClick={() => { setTool('pipe'); setDraftPoints([]) }}>Труба</button>
-            <button className={tool === 'valve' ? 'tool active' : 'tool'} onClick={() => setTool('valve')}>Клапан</button>
-            <button className={tool === 'drip' ? 'tool active' : 'tool'} onClick={() => { setTool('drip'); setDraftPoints([]) }}>Капля</button>
-            {tool === 'sprinkler' && (
-              <select value={nozzleId} onChange={(event) => setNozzleId(event.target.value)} aria-label="Форсунка">
-                {NOZZLES.map((nozzle) => (
-                  <option key={nozzle.id} value={nozzle.id}>{nozzle.name}</option>
+            <div className="tool-rail">
+              <RailButton active={tool === 'source'} label="Источник" onClick={() => setTool('source')}>
+                <Glyph><rect x="6" y="6" width="12" height="12" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'sprinkler'} label="Головка" onClick={() => setTool('sprinkler')}>
+                <Glyph><circle cx="12" cy="12" r="3" {...pen} /><path d="M12 5 A7 7 0 0 1 19 12" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'pipe'} label="Труба" onClick={() => { setTool('pipe'); setDraftPoints([]) }}>
+                <Glyph><path d="M4 16 H14 L20 8" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'valve'} label="Клапан" onClick={() => setTool('valve')}>
+                <Glyph><path d="M12 4 L20 12 L12 20 L4 12 Z" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'drip'} label="Капля" onClick={() => { setTool('drip'); setDraftPoints([]) }}>
+                <Glyph><path d="M4 12 H20" {...pen} strokeDasharray="3 2" /></Glyph>
+              </RailButton>
+              <button className="rail-go" onClick={runLayout}>Схема</button>
+            </div>
+            <div className="tool-fly">
+              {tool === 'sprinkler' && (
+                <>
+                  <p className="tool-label">Форсунка</p>
+                  {NOZZLES.map((nozzle) => (
+                    <button key={nozzle.id} className={nozzleId === nozzle.id ? 'tool active' : 'tool'} onClick={() => setNozzleId(nozzle.id)}>
+                      {nozzle.name}
+                    </button>
+                  ))}
+                </>
+              )}
+              <p className="tool-label">Трубы</p>
+              <select
+                value={doc.pipeSeries}
+                aria-label="Ряд труб"
+                onChange={(event) => setDoc((current) => ({ ...current, pipeSeries: event.target.value as PipeSeriesId }))}
+              >
+                {SERIES.map((series) => (
+                  <option key={series.id} value={series.id}>{series.name}</option>
                 ))}
               </select>
-            )}
-            <select
-              value={doc.pipeSeries}
-              aria-label="Ряд труб"
-              onChange={(event) => setDoc((current) => ({ ...current, pipeSeries: event.target.value as PipeSeriesId }))}
-            >
-              {SERIES.map((series) => (
-                <option key={series.id} value={series.id}>{series.name}</option>
-              ))}
-            </select>
-            <button className="primary" onClick={runLayout}>Рассчитать схему</button>
+            </div>
           </>
         )}
         {step === 'layout' && (
-          <>
+          <div className="tool-panel">
             <p className="tool-label">Формат</p>
             {PAPERS.map((item) => (
               <button
@@ -1537,10 +1586,12 @@ export function EditorPage({
             </button>
             <button className="tool" disabled={printBusy} onClick={() => runPrint('png')}>Скачать PNG</button>
             <p className="hint">На листе — рамка, легенда и масштаб. ПКМ двигает чертёж.</p>
-          </>
+          </div>
         )}
         {step === 'spec' && (
-          <p className="hint">Спецификация справа. Вернитесь в «Полив», если нужно пересчитать схему.</p>
+          <div className="tool-panel">
+            <p className="hint">Спецификация справа. Вернитесь в «Полив», если нужно пересчитать схему.</p>
+          </div>
         )}
       </aside>
       <div className="stage">
@@ -2113,7 +2164,38 @@ function withHatch(zone: Zone, hatch: HatchId): Zone {
   return next
 }
 
-function PlantPicker({ kind, active, onPick }: { kind: PlantKind; active: PlantForm; onPick: (kind: PlantKind, form: PlantForm) => void }) {
+const pen = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
+
+function RailButton({ active, label, onClick, children }: { active: boolean; label: string; onClick: () => void; children: ReactNode }) {
+  return (
+    <button type="button" className={active ? 'rail-btn active' : 'rail-btn'} title={label} aria-label={label} onClick={onClick}>
+      <span className="rail-ico">{children}</span>
+      <span className="rail-cap">{label}</span>
+    </button>
+  )
+}
+
+function Glyph({ children }: { children: ReactNode }) {
+  return (
+    <svg className="rail-svg" viewBox="0 0 24 24" aria-hidden="true">
+      {children}
+    </svg>
+  )
+}
+
+function PlantRailIcon({ form }: { form: PlantForm }) {
+  const glyph = plantGlyph(form)
+  const paint = plantPaint(form)
+  return (
+    <svg className="rail-svg" viewBox="-1.25 -1.25 2.5 2.5" aria-hidden="true">
+      {glyph.fills.slice(0, 4).map((d, index) => (
+        <path key={index} d={d} fill={paint.leaf} stroke={paint.ink} strokeWidth={0.08} />
+      ))}
+    </svg>
+  )
+}
+
+function PlantPicker({ kind, active, labeled, onPick }: { kind: PlantKind; active: PlantForm; labeled?: boolean; onPick: (kind: PlantKind, form: PlantForm) => void }) {
   return (
     <div className="plant-grid">
       {formsFor(kind).map((item) => (
@@ -2126,6 +2208,7 @@ function PlantPicker({ kind, active, onPick }: { kind: PlantKind; active: PlantF
           onClick={() => onPick(kind, item.id)}
         >
           <PlantThumb form={item.id} />
+          {labeled && <span className="plant-name">{item.label}</span>}
         </button>
       ))}
     </div>
