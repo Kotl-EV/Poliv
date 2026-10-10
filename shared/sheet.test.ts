@@ -119,6 +119,20 @@ test('a conifer crown reaches the printed sheet', () => {
   assert.match(svg, / L /)
 })
 
+test('a car and a scale bar reach the printed sheet', () => {
+  const doc = {
+    ...emptyDoc(),
+    fixtures: [
+      { id: 'c', kind: 'sedan' as const, x: 30, y: 20, radiusM: 2.25, rotationDeg: 90 },
+      { id: 'b', kind: 'scalebar' as const, x: 10, y: 40, radiusM: 2 },
+    ],
+  }
+  const svg = buildSheetPages(doc, analyze(doc), { title: 'Т', date: '01.01.2026', includeSpec: false })[0].svg
+  assert.match(svg, /fill="#3e4c5e"/)
+  assert.match(svg, /rotate\(90\)/)
+  assert.match(svg, /4 м/)
+})
+
 test('jpeg pages become a pdf with one image per page', () => {
   const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9, 1, 2, 3])
   const pdf = pdfFromJpegPages([

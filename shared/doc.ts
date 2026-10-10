@@ -1,8 +1,9 @@
 import { DEFAULT_PPM, DEFAULT_SHEET_M, HATCHES, surfaceOf } from './landscape.ts'
+import { parseFixtureKind } from './fixtures.ts'
 import { parsePlantForm } from './plants.ts'
 import { nozzleById } from './nozzles.ts'
 import { DEFAULT_SERIES, seriesById } from './pipes.ts'
-import type { Climate, Doc, Drip, HatchId, Measure, Note, Pipe, Plant, PlantKind, Point, Slope, Soil, Source, Sprinkler, Trench, Valve, Zone, ZoneKind } from './types.ts'
+import type { Climate, Doc, Drip, Fixture, HatchId, Measure, Note, Pipe, Plant, PlantKind, Point, Slope, Soil, Source, Sprinkler, Trench, Valve, Zone, ZoneKind } from './types.ts'
 
 export const SNAP_PX = 14
 
@@ -23,6 +24,7 @@ export function emptyDoc(): Doc {
     trench: { widthM: 0.3, depthM: 0.4 },
     notes: [],
     plants: [],
+    fixtures: [],
     measures: [],
     snapVertex: true,
     ortho: false,
@@ -217,8 +219,9 @@ export function parseDoc(value: unknown): Doc | null {
   const drips = parseDrips(raw.drips)
   const notes = parseNotes(raw.notes)
   const plants = parsePlants(raw.plants)
+  const fixtures = parseFixtures(raw.fixtures)
   const measures = parseMeasures(raw.measures)
-  if (!valves || !drips || !notes || !plants || !measures) return null
+  if (!valves || !drips || !notes || !plants || !fixtures || !measures) return null
 
   const pipeSeries = seriesById(typeof raw.pipeSeries === 'string' ? raw.pipeSeries : DEFAULT_SERIES).id
   const trench = parseTrench(raw.trench)
@@ -257,6 +260,7 @@ export function parseDoc(value: unknown): Doc | null {
     trench,
     notes,
     plants,
+    fixtures,
     measures,
     snapVertex,
     ortho,
@@ -336,6 +340,31 @@ function parseNotes(value: unknown): Note[] | null {
     })
   }
   return notes
+}
+
+function parseFixtures(value: unknown): Fixture[] | null {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > 800) return null
+  const fixtures: Fixture[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') return null
+    const id = text(item.id, 80)
+    const x = num(item.x)
+    const y = num(item.y)
+    const radiusM = num(item.radiusM)
+    const kind = parseFixtureKind(item.kind)
+    if (!id || !kind || x === null || y === null || radiusM === null) return null
+    if (radiusM < 0.1 || radiusM > 20) return null
+    let rotationDeg: number | undefined
+    if (item.rotationDeg !== undefined) {
+      const turn = num(item.rotationDeg)
+      if (turn === null) return null
+      const norm = ((turn % 360) + 360) % 360
+      if (norm !== 0) rotationDeg = norm
+    }
+    fixtures.push({ id, kind, x, y, radiusM, ...(rotationDeg !== undefined ? { rotationDeg } : {}) })
+  }
+  return fixtures
 }
 
 function parsePlants(value: unknown): Plant[] | null {

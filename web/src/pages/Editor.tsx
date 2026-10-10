@@ -33,12 +33,13 @@ import {
   zoneAreaPx,
   type AlignSide,
 } from '@shared/geom.ts'
+import { fixtureGlyph, fixtureKinds, fixtureSpec, FIXTURE_GROUPS, groupOf } from '@shared/fixtures.ts'
 import { DEFAULT_PPM, DEFAULT_SHEET_M, gridStepM, hatchOf, hatchesFor, HATCHES, INKS, isDripKind, isSprayKind, isWetKind, SURFACES, surfaceOf } from '@shared/landscape.ts'
 import { formOf, formsFor, plantGlyph, plantPaint } from '@shared/plants.ts'
 import { DEFAULT_SHEET_LAYERS, PAPERS, type PaperId, type SheetLayers } from '@shared/sheet.ts'
 import { nozzleById, NOZZLES } from '@shared/nozzles.ts'
 import { SERIES, type PipeSeriesId } from '@shared/pipes.ts'
-import type { Doc, Drip, HatchId, Note, Plant, PlantForm, PlantKind, Point, Source, Sprinkler, Valve, Zone, ZoneKind } from '@shared/types.ts'
+import type { Doc, Drip, Fixture, FixtureKind, HatchId, Note, Plant, PlantForm, PlantKind, Point, Source, Sprinkler, Valve, Zone, ZoneKind } from '@shared/types.ts'
 import { api, type User } from '../api'
 import { layoutIrrigation } from '@shared/plan.ts'
 import { Board, readHit, worldPoint, type Hit, type View } from '../editor/Board'
@@ -48,9 +49,10 @@ import { Spec } from '../editor/Spec'
 
 configurePdfWorker(workerUrl)
 
-type Tool = 'select' | 'scale' | 'zone' | 'rect' | 'circle' | 'brush' | 'text' | 'tree' | 'bush' | 'dim' | 'sprinkler' | 'pipe' | 'valve' | 'drip' | 'source'
+type Tool = 'select' | 'scale' | 'zone' | 'rect' | 'circle' | 'brush' | 'text' | 'tree' | 'bush' | 'fixture' | 'dim' | 'sprinkler' | 'pipe' | 'valve' | 'drip' | 'source'
 type Step = 'draw' | 'irrig' | 'layout' | 'spec'
-type Sel = { kind: 'sprinkler' | 'zone' | 'pipe' | 'source' | 'valve' | 'drip' | 'note' | 'plant' | 'dim'; id?: string } | null
+type Sel = { kind: 'sprinkler' | 'zone' | 'pipe' | 'source' | 'valve' | 'drip' | 'note' | 'plant' | 'fixture' | 'dim'; id?: string } | null
+type Fav = { kind: 'tree' | 'bush'; form: PlantForm } | { kind: 'fixture'; form: FixtureKind }
 type LineOp = 'slice' | 'mirror'
 
 const ALIGN_SIDES: { id: AlignSide; label: string }[] = [
@@ -109,6 +111,7 @@ function targetsOf(doc: Doc): Point[] {
   for (const zone of doc.zones) points.push(...zone.points)
   for (const note of doc.notes ?? []) points.push(note)
   for (const plant of doc.plants ?? []) points.push(plant)
+  for (const fixture of doc.fixtures ?? []) points.push(fixture)
   for (const measure of doc.measures ?? []) {
     points.push(measure.a, measure.b)
   }
@@ -180,7 +183,10 @@ export function EditorPage({
   const [diameterM, setDiameterM] = useState('')
   const [treeForm, setTreeForm] = useState<PlantForm>('leaf')
   const [bushForm, setBushForm] = useState<PlantForm>('ball')
-  const [sheetOpen, setSheetOpen] = useState(false)
+  const [fixtureKind, setFixtureKind] = useState<FixtureKind>('boulder')
+  const [favorites, setFavorites] = useState<Fav[]>([])
+  const [mapOpen, setMapOpen] = useState(false)
+  const [favOpen, setFavOpen] = useState(false)
   const underlayRef = useRef<HTMLInputElement>(null)
   const [dimPts, setDimPts] = useState<Point[]>([])
   const [offsetM, setOffsetM] = useState('0.5')
@@ -464,6 +470,7 @@ export function EditorPage({
     if (selection.kind === 'drip') commit({ ...current, drips: current.drips.filter((item) => item.id !== selection.id) })
     if (selection.kind === 'note') commit({ ...current, notes: (current.notes ?? []).filter((item) => item.id !== selection.id) })
     if (selection.kind === 'plant') commit({ ...current, plants: (current.plants ?? []).filter((item) => item.id !== selection.id) })
+    if (selection.kind === 'fixture') commit({ ...current, fixtures: (current.fixtures ?? []).filter((item) => item.id !== selection.id) })
     if (selection.kind === 'dim') commit({ ...current, measures: (current.measures ?? []).filter((item) => item.id !== selection.id) })
     if (selection.kind === 'source') commit({ ...current, source: null })
     setSelection(null)
@@ -587,7 +594,7 @@ export function EditorPage({
     }
     const drafting = (tool === 'zone' || tool === 'pipe' || tool === 'drip') && draftRef.current.length > 0
     const placingDim = tool === 'dim' && hit.kind !== 'dim' && hit.kind !== 'dim-point'
-    const editHit = !placingDim && (hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc' || hit.kind === 'zone-point' || hit.kind === 'zone-mid' || hit.kind === 'pipe-point' || hit.kind === 'drip-point' || hit.kind === 'sprinkler' || hit.kind === 'source' || hit.kind === 'valve' || hit.kind === 'note' || hit.kind === 'plant' || hit.kind === 'dim' || hit.kind === 'dim-point')
+    const editHit = !placingDim && (hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc' || hit.kind === 'zone-point' || hit.kind === 'zone-mid' || hit.kind === 'pipe-point' || hit.kind === 'drip-point' || hit.kind === 'sprinkler' || hit.kind === 'source' || hit.kind === 'valve' || hit.kind === 'note' || hit.kind === 'plant' || hit.kind === 'fixture' || hit.kind === 'dim' || hit.kind === 'dim-point')
     if (!drafting && editHit) {
       remember()
       event.currentTarget.setPointerCapture(event.pointerId)
@@ -656,6 +663,10 @@ export function EditorPage({
     }
     if (tool === 'text' || tool === 'tree' || tool === 'bush') {
       placeMark(tool, point)
+      return
+    }
+    if (tool === 'fixture') {
+      placeFixture(point)
       return
     }
     if (tool === 'dim') {
@@ -1275,9 +1286,30 @@ export function EditorPage({
     setSelection({ kind: 'zone', id: copy.id })
   }
 
+  function rememberFav(item: Fav) {
+    const key = favKey(item)
+    setFavorites((current) => [item, ...current.filter((entry) => favKey(entry) !== key)].slice(0, 8))
+  }
+
+  function closePanels() {
+    setMapOpen(false)
+    setFavOpen(false)
+  }
+
+  function openSurface(kind: ZoneKind) {
+    setZoneKind(kind)
+    setDrawHatch(null)
+    closePanels()
+    if (!isShapeTool(tool)) {
+      setTool('zone')
+      setDraftPoints([])
+    }
+  }
+
   function pickForm(kind: PlantKind, form: PlantForm) {
     if (kind === 'tree') setTreeForm(form)
     else setBushForm(form)
+    rememberFav({ kind, form })
     const current = docRef.current
     const id = selection?.kind === 'plant' ? selection.id : ''
     const plant = (current.plants ?? []).find((item) => item.id === id)
@@ -1285,6 +1317,24 @@ export function EditorPage({
     commit({
       ...current,
       plants: (current.plants ?? []).map((item) => (item.id === plant.id ? { ...item, form } : item)),
+    })
+  }
+
+  function chooseFixture(kind: FixtureKind, restyle: boolean) {
+    setFixtureKind(kind)
+    setTool('fixture')
+    closePanels()
+    setLineOp(null)
+    setLine([])
+    rememberFav({ kind: 'fixture', form: kind })
+    if (!restyle) return
+    const current = docRef.current
+    const id = selection?.kind === 'fixture' ? selection.id : ''
+    const item = (current.fixtures ?? []).find((entry) => entry.id === id)
+    if (!item || item.kind === kind) return
+    commit({
+      ...current,
+      fixtures: (current.fixtures ?? []).map((entry) => (entry.id === item.id ? { ...entry, kind } : entry)),
     })
   }
 
@@ -1297,16 +1347,38 @@ export function EditorPage({
       return
     }
     const plantKind = kind === 'tree' ? 'tree' : 'bush'
+    const form = plantKind === 'tree' ? treeForm : bushForm
     const plant: Plant = {
       id: uid('plant'),
       kind: plantKind,
       x: point.x,
       y: point.y,
       radiusM: plantKind === 'tree' ? 1.6 : 0.7,
-      form: plantKind === 'tree' ? treeForm : bushForm,
+      form,
     }
     commit({ ...current, plants: [...(current.plants ?? []), plant] })
     setSelection({ kind: 'plant', id: plant.id })
+    rememberFav({ kind: plantKind, form })
+  }
+
+  function placeFixture(point: Point) {
+    const current = docRef.current
+    if ((current.fixtures ?? []).length >= 800) {
+      setPlanNote('На чертеже уже 800 объектов')
+      return
+    }
+    const spec = fixtureSpec(fixtureKind)
+    const item: Fixture = {
+      id: uid('obj'),
+      kind: fixtureKind,
+      x: point.x,
+      y: point.y,
+      radiusM: spec.radiusM,
+    }
+    commit({ ...current, fixtures: [...(current.fixtures ?? []), item] })
+    setSelection({ kind: 'fixture', id: item.id })
+    setPlanNote('')
+    rememberFav({ kind: 'fixture', form: fixtureKind })
   }
 
   function copySelected() {
@@ -1337,7 +1409,13 @@ export function EditorPage({
   const selectedSprinkler = selection?.kind === 'sprinkler' ? doc.sprinklers.find((item) => item.id === selection.id) : undefined
   const selectedNote = selection?.kind === 'note' ? (doc.notes ?? []).find((item) => item.id === selection.id) : undefined
   const selectedPlant = selection?.kind === 'plant' ? (doc.plants ?? []).find((item) => item.id === selection.id) : undefined
+  const selectedFixture = selection?.kind === 'fixture' ? (doc.fixtures ?? []).find((item) => item.id === selection.id) : undefined
   const selectedMeasure = selection?.kind === 'dim' ? (doc.measures ?? []).find((item) => item.id === selection.id) : undefined
+  const shapeOn = isShapeTool(tool)
+  const elementOn = tool === 'scale' || tool === 'dim' || anchorPick || (tool === 'fixture' && groupOf(fixtureKind) === 'mark')
+  const objectOn = tool === 'fixture' && groupOf(fixtureKind) !== 'mark'
+  const shapeLabel = tool === 'brush' ? 'Кисть' : tool === 'rect' ? 'Прямоуг.' : tool === 'circle' ? 'Круг' : 'Полигон'
+  const rotorOn = nozzleId.startsWith('rotor')
   const snapMark = hover && doc.snapVertex !== false ? nearestScreen(hover, collectVertices(doc), view.k, 1.5) : null
   const hoverLen = draft.length > 0 && hover ? dist(draft[draft.length - 1], hover) / ppm : 0
   const zoneArea = selectedZone ? zoneAreaPx(selectedZone.points, selectedZone.holes) / (ppm * ppm) : 0
@@ -1372,78 +1450,172 @@ export function EditorPage({
         {step === 'draw' && (
           <>
             <div className="tool-rail">
-              <RailButton active={tool === 'zone'} label="Полигон" onClick={() => { setSheetOpen(false); setTool('zone'); setDraftPoints([]) }}>
-                <Glyph><path d="M5 8 L12 4 L20 8 L17 19 L7 19 Z" {...pen} /></Glyph>
-              </RailButton>
-              <RailButton active={tool === 'rect'} label="Прямоуг." onClick={() => { setSheetOpen(false); setTool('rect'); setDraftPoints([]) }}>
-                <Glyph><rect x="4" y="6" width="16" height="12" {...pen} /></Glyph>
-              </RailButton>
-              <RailButton active={tool === 'circle'} label="Круг" onClick={() => { setSheetOpen(false); setTool('circle'); setDraftPoints([]) }}>
-                <Glyph><circle cx="12" cy="12" r="7" {...pen} /></Glyph>
-              </RailButton>
-              <RailButton active={tool === 'brush'} label="Кисть" onClick={() => { setSheetOpen(false); setTool('brush'); setDraftPoints([]) }}>
-                <Glyph><path d="M5 19 C8 12 10 11 14 6 C16 4 19 5 18 8 C16 12 14 13 8 18 Z" {...pen} /></Glyph>
-              </RailButton>
-              <i className="rail-split" />
               {SURFACES.map((surface) => (
                 <RailButton
                   key={surface.id}
-                  active={zoneKind === surface.id && (tool === 'zone' || tool === 'rect' || tool === 'circle' || tool === 'brush')}
+                  active={!mapOpen && !favOpen && shapeOn && zoneKind === surface.id}
                   label={surface.label}
-                  onClick={() => {
-                    setZoneKind(surface.id)
-                    setDrawHatch(null)
-                    setSheetOpen(false)
-                    if (tool !== 'rect' && tool !== 'circle' && tool !== 'brush') {
-                      setTool('zone')
-                      setDraftPoints([])
-                    }
-                  }}
+                  onClick={() => openSurface(surface.id)}
                 >
                   <i className={`chip ${surface.pattern}`} />
                 </RailButton>
               ))}
               <i className="rail-split" />
-              <RailButton active={tool === 'text'} label="Текст" onClick={() => { setSheetOpen(false); setTool('text'); setLineOp(null); setLine([]) }}>
+              <RailButton active={!mapOpen && !favOpen && tool === 'text'} label="Текст" onClick={() => { closePanels(); setTool('text'); setLineOp(null); setLine([]) }}>
                 <Glyph><path d="M6 6 H18 M12 6 V19" {...pen} /></Glyph>
               </RailButton>
-              <RailButton active={tool === 'tree'} label="Дерево" onClick={() => { setSheetOpen(false); setTool('tree'); setLineOp(null); setLine([]) }}>
+              <RailButton active={!mapOpen && !favOpen && tool === 'tree'} label="Дерево" onClick={() => { closePanels(); setTool('tree'); setLineOp(null); setLine([]) }}>
                 <PlantRailIcon form={treeForm} />
               </RailButton>
-              <RailButton active={tool === 'bush'} label="Куст" onClick={() => { setSheetOpen(false); setTool('bush'); setLineOp(null); setLine([]) }}>
+              <RailButton active={!mapOpen && !favOpen && tool === 'bush'} label="Куст" onClick={() => { closePanels(); setTool('bush'); setLineOp(null); setLine([]) }}>
                 <PlantRailIcon form={bushForm} />
               </RailButton>
-              <RailButton active={tool === 'scale'} label="Линейка" onClick={() => { setSheetOpen(false); setTool('scale'); setScalePoints([]); setLineOp(null) }}>
-                <Glyph><path d="M4 16 L16 4 M7 13 L9 15 M10 10 L12 12 M13 7 L15 9" {...pen} /></Glyph>
+              <RailButton
+                active={!mapOpen && !favOpen && objectOn}
+                label="Объекты"
+                onClick={() => {
+                  closePanels()
+                  setLineOp(null)
+                  setLine([])
+                  if (groupOf(fixtureKind) === 'mark') setFixtureKind('boulder')
+                  setTool('fixture')
+                }}
+              >
+                <Glyph><circle cx="8" cy="15" r="3" {...pen} /><path d="M13 9 H20 V13 H13 Z M14 13 V17 M19 13 V17" {...pen} /></Glyph>
               </RailButton>
-              <RailButton active={tool === 'dim'} label="Размер" onClick={() => { setSheetOpen(false); setTool('dim'); setLineOp(null); setLine([]); setDim([]); setAnchorPick(false) }}>
-                <Glyph><path d="M4 17 H20 M4 14 V20 M20 14 V20" {...pen} /></Glyph>
+              <RailButton active={mapOpen} label="Карта" onClick={() => { setFavOpen(false); setMapOpen((open) => !open) }}>
+                <Glyph><path d="M4 7 L9 5 L15 8 L20 6 V17 L15 19 L9 16 L4 18 Z" {...pen} /></Glyph>
               </RailButton>
-              <RailButton active={anchorPick} label="Якорь" onClick={() => { setSheetOpen(false); armAnchor() }}>
-                <Glyph><path d="M12 4 V20 M8 8 H16 M7 16 H17" {...pen} /></Glyph>
+              <RailButton
+                active={!mapOpen && !favOpen && elementOn}
+                label="Элементы"
+                onClick={() => {
+                  closePanels()
+                  setLineOp(null)
+                  setLine([])
+                  setAnchorPick(false)
+                  if (groupOf(fixtureKind) !== 'mark') setFixtureKind('compass')
+                  setTool('fixture')
+                }}
+              >
+                <Glyph><circle cx="12" cy="12" r="7" {...pen} /><path d="M12 6 L14.2 12 L12 11 L9.8 12 Z" {...pen} /></Glyph>
               </RailButton>
-              <RailButton active={sheetOpen} label="Лист" onClick={() => setSheetOpen((open) => !open)}>
-                <Glyph><path d="M6 4 H14 L18 8 V20 H6 Z M14 4 V8 H18" {...pen} /></Glyph>
+              <i className="rail-split" />
+              <RailButton active={!mapOpen && !favOpen && shapeOn && isWetKind(zoneKind)} label="Поливать" onClick={() => openSurface(isWetKind(zoneKind) ? zoneKind : 'lawn')}>
+                <Glyph><path d="M12 4 C12 4 7 10 7 14 a5 5 0 0 0 10 0 C17 10 12 4 12 4 Z" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={!mapOpen && !favOpen && shapeOn && !isWetKind(zoneKind)} label="Без полива" onClick={() => openSurface(isWetKind(zoneKind) ? 'path' : zoneKind)}>
+                <Glyph><circle cx="12" cy="12" r="7" {...pen} /><path d="M7 17 L17 7" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={favOpen} label="Избранное" onClick={() => { setMapOpen(false); setFavOpen((open) => !open) }}>
+                <Glyph><path d="M12 4 L14.2 9.2 L20 9.6 L15.6 13.2 L17 19 L12 15.8 L7 19 L8.4 13.2 L4 9.6 L9.8 9.2 Z" {...pen} /></Glyph>
+              </RailButton>
+              <i className="rail-split" />
+              <RailButton active={tool === 'source'} label="Источник" onClick={() => { closePanels(); setTool('source') }}>
+                <Glyph><rect x="6" y="6" width="12" height="12" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'valve'} label="Клапан" onClick={() => { closePanels(); setTool('valve') }}>
+                <Glyph><path d="M12 4 L20 12 L12 20 L4 12 Z" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={!mapOpen && !favOpen && tool === 'fixture' && fixtureKind === 'controller'} label="Пульт" onClick={() => chooseFixture('controller', false)}>
+                <Glyph><rect x="7" y="4" width="10" height="16" rx="1.5" {...pen} /><path d="M9 7 H15 V11 H9 Z" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton
+                sink
+                active={!mapOpen && !favOpen && shapeOn}
+                label={shapeLabel}
+                onClick={() => {
+                  closePanels()
+                  if (!shapeOn) {
+                    setTool('zone')
+                    setDraftPoints([])
+                  }
+                }}
+              >
+                {tool === 'brush'
+                  ? <Glyph><path d="M5 19 C8 12 10 11 14 6 C16 4 19 5 18 8 C16 12 14 13 8 18 Z" {...pen} /></Glyph>
+                  : <Glyph><path d="M5 8 L12 4 L20 8 L17 19 L7 19 Z" {...pen} /></Glyph>}
               </RailButton>
             </div>
-            {sheetOpen && (
+            {mapOpen && (
               <div className="tool-fly">
-                <p className="tool-label">Подложка</p>
+                <p className="tool-label">Карта</p>
                 <button className="tool" onClick={() => underlayRef.current?.click()}>Загрузить план</button>
                 {backgroundUrl && <button className="tool" onClick={() => clearBackground().catch((err: Error) => setError(err.message))}>Убрать подложку</button>}
                 <button className="tool" onClick={loadExample}>Пример</button>
-                {doc.anchor && <button className="tool" onClick={clearAnchor}>Убрать якорь</button>}
               </div>
             )}
-            {!sheetOpen && (tool === 'tree' || tool === 'bush') && (
+            {!mapOpen && favOpen && (
+              <div className="tool-fly">
+                <p className="tool-label">Избранное</p>
+                {favorites.length === 0 && <p className="hint">Выберите дерево, куст или объект. Последние появятся здесь.</p>}
+                <div className="plant-grid">
+                  {favorites.map((fav) => (
+                    <button
+                      key={favKey(fav)}
+                      type="button"
+                      className="plant-pick"
+                      title={favLabel(fav)}
+                      aria-label={favLabel(fav)}
+                      onClick={() => {
+                        if (fav.kind === 'fixture') chooseFixture(fav.form, false)
+                        else {
+                          closePanels()
+                          if (fav.kind === 'tree') setTreeForm(fav.form)
+                          else setBushForm(fav.form)
+                          setTool(fav.kind)
+                          rememberFav(fav)
+                        }
+                      }}
+                    >
+                      {fav.kind === 'fixture' ? <FixtureThumb kind={fav.form} /> : <PlantThumb form={fav.form} />}
+                      <span className="plant-name">{favLabel(fav)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {!mapOpen && !favOpen && (tool === 'tree' || tool === 'bush') && (
               <div className="tool-fly">
                 <p className="tool-label">{tool === 'tree' ? 'Деревья' : 'Кусты'}</p>
                 <PlantPicker labeled kind={tool} active={tool === 'tree' ? treeForm : bushForm} onPick={pickForm} />
               </div>
             )}
-            {!sheetOpen && (tool === 'zone' || tool === 'rect' || tool === 'circle' || tool === 'brush') && (
+            {!mapOpen && !favOpen && objectOn && (
               <div className="tool-fly">
+                <p className="tool-label">Объекты</p>
+                {FIXTURE_GROUPS.filter((group) => group.id !== 'mark').map((group) => (
+                  <div key={group.id}>
+                    <p className="tool-label">{group.label}</p>
+                    <FixturePicker kinds={fixtureKinds(group.id)} active={fixtureKind} onPick={(kind) => chooseFixture(kind, true)} />
+                  </div>
+                ))}
+              </div>
+            )}
+            {!mapOpen && !favOpen && elementOn && (
+              <div className="tool-fly">
+                <p className="tool-label">Элементы</p>
+                <FixturePicker kinds={fixtureKinds('mark')} active={tool === 'fixture' ? fixtureKind : 'compass'} onPick={(kind) => chooseFixture(kind, true)} />
+                <button className={tool === 'scale' ? 'tool active' : 'tool'} onClick={() => { setTool('scale'); setScalePoints([]); setLineOp(null); setAnchorPick(false) }}>Линейка</button>
+                <button className={tool === 'dim' ? 'tool active' : 'tool'} onClick={() => { setTool('dim'); setLineOp(null); setLine([]); setDim([]); setAnchorPick(false) }}>Размер</button>
+                <button className={anchorPick ? 'tool active' : 'tool'} onClick={() => armAnchor()}>Якорь</button>
+                {doc.anchor && <button className="tool" onClick={clearAnchor}>Убрать якорь</button>}
+              </div>
+            )}
+            {!mapOpen && !favOpen && shapeOn && !elementOn && (
+              <div className="tool-fly">
+                <p className="tool-label">Полигон / кисть</p>
                 <p className="tool-label">{surfaceOf(zoneKind).label}</p>
+                <div className="brush-sizes">
+                  {([
+                    ['zone', 'Полигон'],
+                    ['rect', 'Прямоуг.'],
+                    ['circle', 'Круг'],
+                    ['brush', 'Кисть'],
+                  ] as const).map(([next, label]) => (
+                    <button key={next} className={tool === next ? 'tool active' : 'tool'} onClick={() => { setTool(next); setDraftPoints([]) }}>{label}</button>
+                  ))}
+                </div>
                 {hatchesFor(zoneKind).length > 1 && (
                   <div className="hatch-row">
                     {hatchesFor(zoneKind).map((item) => (
@@ -1504,28 +1676,31 @@ export function EditorPage({
         {step === 'irrig' && (
           <>
             <div className="tool-rail">
-              <RailButton active={tool === 'source'} label="Источник" onClick={() => setTool('source')}>
-                <Glyph><rect x="6" y="6" width="12" height="12" {...pen} /></Glyph>
-              </RailButton>
-              <RailButton active={tool === 'sprinkler'} label="Головка" onClick={() => setTool('sprinkler')}>
+              <RailButton active={tool === 'sprinkler' && !rotorOn} label="Форсунка" onClick={() => { setTool('sprinkler'); if (rotorOn) setNozzleId('fan180') }}>
                 <Glyph><circle cx="12" cy="12" r="3" {...pen} /><path d="M12 5 A7 7 0 0 1 19 12" {...pen} /></Glyph>
               </RailButton>
-              <RailButton active={tool === 'pipe'} label="Труба" onClick={() => { setTool('pipe'); setDraftPoints([]) }}>
-                <Glyph><path d="M4 16 H14 L20 8" {...pen} /></Glyph>
+              <RailButton active={tool === 'sprinkler' && rotorOn} label="Ротор" onClick={() => { setTool('sprinkler'); if (!rotorOn) setNozzleId('rotor') }}>
+                <Glyph><circle cx="12" cy="12" r="2.2" {...pen} /><path d="M12 4 A8 8 0 0 1 20 12" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'drip'} label="Капля" onClick={() => { setTool('drip'); setDraftPoints([]) }}>
+                <Glyph><path d="M4 12 H20" {...pen} strokeDasharray="3 2" /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'source'} label="Источник" onClick={() => setTool('source')}>
+                <Glyph><rect x="6" y="6" width="12" height="12" {...pen} /></Glyph>
               </RailButton>
               <RailButton active={tool === 'valve'} label="Клапан" onClick={() => setTool('valve')}>
                 <Glyph><path d="M12 4 L20 12 L12 20 L4 12 Z" {...pen} /></Glyph>
               </RailButton>
-              <RailButton active={tool === 'drip'} label="Капля" onClick={() => { setTool('drip'); setDraftPoints([]) }}>
-                <Glyph><path d="M4 12 H20" {...pen} strokeDasharray="3 2" /></Glyph>
+              <RailButton active={tool === 'pipe'} label="Труба" onClick={() => { setTool('pipe'); setDraftPoints([]) }}>
+                <Glyph><path d="M4 16 H14 L20 8" {...pen} /></Glyph>
               </RailButton>
               <button className="rail-go" onClick={runLayout}>Схема</button>
             </div>
             <div className="tool-fly">
               {tool === 'sprinkler' && (
                 <>
-                  <p className="tool-label">Форсунка</p>
-                  {NOZZLES.map((nozzle) => (
+                  <p className="tool-label">{rotorOn ? 'Ротор' : 'Форсунка'}</p>
+                  {NOZZLES.filter((nozzle) => rotorOn ? nozzle.id.startsWith('rotor') : nozzle.id.startsWith('fan')).map((nozzle) => (
                     <button key={nozzle.id} className={nozzleId === nozzle.id ? 'tool active' : 'tool'} onClick={() => setNozzleId(nozzle.id)}>
                       {nozzle.name}
                     </button>
@@ -1755,6 +1930,57 @@ export function EditorPage({
                 }}
               />
             </label>
+            <button className="tool" onClick={removeSelection}>Удалить</button>
+          </div>
+        )}
+        {selectedFixture && draft.length === 0 && (
+          <div className="ops">
+            <span>{fixtureSpec(selectedFixture.kind).label}</span>
+            <FixturePicker kinds={fixtureKinds(groupOf(selectedFixture.kind))} active={selectedFixture.kind} onPick={(kind) => chooseFixture(kind, true)} />
+            <label className="inline">
+              длина, м
+              <input
+                value={String(Math.round(selectedFixture.radiusM * 200) / 100)}
+                aria-label="Длина объекта, м"
+                onChange={(event) => {
+                  const lengthM = Number(event.target.value.replace(',', '.'))
+                  if (!(lengthM >= 0.2) || lengthM > 40) return
+                  const radiusM = lengthM / 2
+                  setDoc((current) => ({
+                    ...current,
+                    fixtures: (current.fixtures ?? []).map((item) => (item.id === selectedFixture.id ? { ...item, radiusM } : item)),
+                  }))
+                }}
+              />
+            </label>
+            <label className="inline">
+              °
+              <input
+                value={String(Math.round(selectedFixture.rotationDeg ?? 0))}
+                aria-label="Поворот объекта, градусы"
+                onChange={(event) => {
+                  const turn = Number(event.target.value.replace(',', '.'))
+                  if (!Number.isFinite(turn)) return
+                  setDoc((current) => ({
+                    ...current,
+                    fixtures: (current.fixtures ?? []).map((item) => (
+                      item.id === selectedFixture.id ? withSpin(item, turn) : item
+                    )),
+                  }))
+                }}
+              />
+            </label>
+            <button
+              className="tool"
+              onClick={() => commit({
+                ...docRef.current,
+                fixtures: (docRef.current.fixtures ?? []).map((item) => (
+                  item.id === selectedFixture.id ? withSpin(item, (item.rotationDeg ?? 0) + 90) : item
+                )),
+              })}
+            >
+              ↻ 90°
+            </button>
             <button className="tool" onClick={removeSelection}>Удалить</button>
           </div>
         )}
@@ -2013,6 +2239,7 @@ function selectionFromHit(hit: Hit): Sel {
   if (hit.kind === 'valve') return { kind: 'valve', id: hit.id }
   if (hit.kind === 'note') return { kind: 'note', id: hit.id }
   if (hit.kind === 'plant') return { kind: 'plant', id: hit.id }
+  if (hit.kind === 'fixture') return { kind: 'fixture', id: hit.id }
   if (hit.kind === 'dim' || hit.kind === 'dim-point') return { kind: 'dim', id: hit.id }
   return null
 }
@@ -2074,6 +2301,9 @@ function moveHit(doc: Doc, hit: Hit, point: Point): Doc {
   }
   if (hit.kind === 'plant') {
     return { ...doc, plants: (doc.plants ?? []).map((item) => (item.id === hit.id ? { ...item, x: point.x, y: point.y } : item)) }
+  }
+  if (hit.kind === 'fixture') {
+    return { ...doc, fixtures: (doc.fixtures ?? []).map((item) => (item.id === hit.id ? { ...item, x: point.x, y: point.y } : item)) }
   }
   if (hit.kind === 'dim-point') {
     return {
@@ -2166,9 +2396,30 @@ function withHatch(zone: Zone, hatch: HatchId): Zone {
 
 const pen = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
 
-function RailButton({ active, label, onClick, children }: { active: boolean; label: string; onClick: () => void; children: ReactNode }) {
+function isShapeTool(tool: Tool): boolean {
+  return tool === 'zone' || tool === 'rect' || tool === 'circle' || tool === 'brush'
+}
+
+function favKey(item: Fav): string {
+  return `${item.kind}:${item.form}`
+}
+
+function favLabel(item: Fav): string {
+  if (item.kind === 'fixture') return fixtureSpec(item.form).label
+  return formsFor(item.kind).find((form) => form.id === item.form)?.label ?? item.form
+}
+
+function withSpin(item: Fixture, turn: number): Fixture {
+  const norm = ((turn % 360) + 360) % 360
+  const next: Fixture = { ...item }
+  if (norm === 0) delete next.rotationDeg
+  else next.rotationDeg = norm
+  return next
+}
+
+function RailButton({ active, label, onClick, sink, children }: { active: boolean; label: string; onClick: () => void; sink?: boolean; children: ReactNode }) {
   return (
-    <button type="button" className={active ? 'rail-btn active' : 'rail-btn'} title={label} aria-label={label} onClick={onClick}>
+    <button type="button" className={`${active ? 'rail-btn active' : 'rail-btn'}${sink ? ' rail-shape' : ''}`} title={label} aria-label={label} onClick={onClick}>
       <span className="rail-ico">{children}</span>
       <span className="rail-cap">{label}</span>
     </button>
@@ -2212,6 +2463,40 @@ function PlantPicker({ kind, active, labeled, onPick }: { kind: PlantKind; activ
         </button>
       ))}
     </div>
+  )
+}
+
+function FixturePicker({ kinds, active, onPick }: { kinds: FixtureKind[]; active: FixtureKind; onPick: (kind: FixtureKind) => void }) {
+  return (
+    <div className="plant-grid">
+      {kinds.map((kind) => (
+        <button
+          key={kind}
+          type="button"
+          className={active === kind ? 'plant-pick active' : 'plant-pick'}
+          title={fixtureSpec(kind).label}
+          aria-label={fixtureSpec(kind).label}
+          onClick={() => onPick(kind)}
+        >
+          <FixtureThumb kind={kind} />
+          <span className="plant-name">{fixtureSpec(kind).label}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function FixtureThumb({ kind }: { kind: FixtureKind }) {
+  const glyph = fixtureGlyph(kind)
+  return (
+    <svg viewBox="-1.2 -1.2 2.4 2.4" aria-hidden="true">
+      {glyph.parts.map((part, index) => (
+        <path key={index} d={part.d} fill={part.fill} stroke={part.stroke} strokeWidth={0.04} />
+      ))}
+      {glyph.lines.map((line, index) => (
+        <path key={`l${index}`} d={line.d} fill="none" stroke={line.stroke} strokeWidth={0.035} strokeLinecap="round" />
+      ))}
+    </svg>
   )
 }
 

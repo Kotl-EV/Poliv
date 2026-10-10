@@ -1,10 +1,11 @@
 import { forwardRef, type MouseEvent, type PointerEvent } from 'react'
 import type { BrushTip } from '@shared/clip.ts'
 import { emitterPoints } from '@shared/drip.ts'
+import { fixtureGlyph } from '@shared/fixtures.ts'
 import { formOf, plantGlyph, plantPaint } from '@shared/plants.ts'
 import { centroid, dist, handleFromControl, midpoint, polar, sectorPath, zonePathD, zoneShapeD } from '@shared/geom.ts'
 import { DEFAULT_PPM, gridStepM, hatchOf, honeycomb, surfaceOf } from '@shared/landscape.ts'
-import type { Analysis, Doc, Measure, Note, Plant, Point, Sprinkler, Zone, ZoneKind } from '@shared/types.ts'
+import type { Analysis, Doc, Fixture, Measure, Note, Plant, Point, Sprinkler, Zone, ZoneKind } from '@shared/types.ts'
 
 export const CLOSE_SCREEN_PX = 14
 
@@ -27,6 +28,7 @@ export type Hit =
   | { kind: 'drip-point'; id: string; index: number }
   | { kind: 'note'; id: string }
   | { kind: 'plant'; id: string }
+  | { kind: 'fixture'; id: string }
   | { kind: 'dim'; id: string }
   | { kind: 'dim-point'; id: string; index: number }
   | { kind: 'draft-close' }
@@ -56,6 +58,7 @@ export function readHit(target: EventTarget | null): Hit {
   if (kind === 'drip-point' && Number.isInteger(index)) return { kind, id, index }
   if (kind === 'note') return { kind, id }
   if (kind === 'plant') return { kind, id }
+  if (kind === 'fixture') return { kind, id }
   if (kind === 'dim') return { kind, id }
   if (kind === 'dim-point' && Number.isInteger(index)) return { kind, id, index }
   return { kind: 'board' }
@@ -166,6 +169,25 @@ export const Board = forwardRef<SVGSVGElement, {
             </g>
           )
         })}
+        {(doc.fixtures ?? []).map((fixture) => (
+          fixture.kind === 'scalebar' ? (
+            <ScaleBar
+              key={fixture.id}
+              fixture={fixture}
+              ppm={ppm}
+              k={view.k}
+              selected={props.selectionKind === 'fixture' && props.selectionId === fixture.id}
+            />
+          ) : (
+            <FixtureMark
+              key={fixture.id}
+              fixture={fixture}
+              ppm={ppm}
+              k={view.k}
+              selected={props.selectionKind === 'fixture' && props.selectionId === fixture.id}
+            />
+          )
+        ))}
         {(doc.plants ?? []).map((plant) => (
           <PlantMark
             key={plant.id}
@@ -767,6 +789,46 @@ function SurfacePatterns({ ppm }: { ppm: number }) {
         <path d={`M 0 0 L ${u} ${u} M ${u} 0 L 0 ${u}`} stroke="#5a524c" strokeWidth="1" />
       </pattern>
     </>
+  )
+}
+
+function FixtureMark({ fixture, ppm, k, selected }: { fixture: Fixture; ppm: number; k: number; selected: boolean }) {
+  const radius = Math.max(fixture.radiusM * ppm, 8 / k)
+  const glyph = fixtureGlyph(fixture.kind)
+  return (
+    <g className={selected ? 'plant selected' : 'plant'} transform={`translate(${fixture.x} ${fixture.y}) rotate(${fixture.rotationDeg || 0})`}>
+      <g transform={`scale(${radius})`} pointerEvents="none">
+        {glyph.parts.map((part, index) => (
+          <path key={`p${index}`} d={part.d} fill={part.fill} stroke={part.stroke} strokeWidth={1.2} vectorEffect="non-scaling-stroke" />
+        ))}
+        {glyph.lines.map((line, index) => (
+          <path key={`l${index}`} d={line.d} fill="none" stroke={line.stroke} strokeWidth={1.1} strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+        ))}
+        {selected && <circle r={1.02} fill="none" stroke="#b86a09" strokeWidth={1.8} vectorEffect="non-scaling-stroke" />}
+      </g>
+      <circle data-hit="fixture" data-id={fixture.id} r={Math.max(radius, 10 / k)} fill="transparent" />
+    </g>
+  )
+}
+
+function ScaleBar({ fixture, ppm, k, selected }: { fixture: Fixture; ppm: number; k: number; selected: boolean }) {
+  const metres = Math.max(fixture.radiusM * 2, 0.2)
+  const len = Math.max(metres * ppm, 16 / k)
+  const half = len / 2
+  const stepM = metres <= 6 ? 1 : metres <= 16 ? 2 : 5
+  const ticks: number[] = []
+  for (let metre = 0; metre <= metres + 0.001; metre += stepM) ticks.push(-half + (metre / metres) * len)
+  const label = `${Math.round(metres * 100) / 100} м`
+  const ink = selected ? '#b86a09' : '#1c2822'
+  return (
+    <g className={selected ? 'plant selected' : 'plant'} transform={`translate(${fixture.x} ${fixture.y}) rotate(${fixture.rotationDeg || 0})`}>
+      <rect data-hit="fixture" data-id={fixture.id} x={-half} y={-14 / k} width={len} height={28 / k} fill="transparent" />
+      <line x1={-half} y1={0} x2={half} y2={0} stroke={ink} strokeWidth={1.6 / k} pointerEvents="none" />
+      {ticks.map((x) => (
+        <line key={x} x1={x} y1={-5 / k} x2={x} y2={5 / k} stroke={ink} strokeWidth={1.3 / k} pointerEvents="none" />
+      ))}
+      <text x={0} y={-7 / k} textAnchor="middle" fontSize={11 / k} fill={ink} pointerEvents="none">{label}</text>
+    </g>
   )
 }
 

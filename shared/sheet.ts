@@ -1,4 +1,5 @@
 import { emitterPoints } from './drip.ts'
+import { fixtureMarkup } from './fixtures.ts'
 import { plantMarkup } from './plants.ts'
 import { gridStepM, surfaceOf, SURFACES, DEFAULT_PPM, DEFAULT_SHEET_M, hatchOf, honeycomb } from './landscape.ts'
 import { sectorPath, zoneShapeD } from './geom.ts'
@@ -96,6 +97,12 @@ export function contentBounds(doc: Doc, underlay?: { w: number; h: number } | nu
     push({ x: plant.x - r, y: plant.y - r })
     push({ x: plant.x + r, y: plant.y + r })
   }
+  for (const fixture of doc.fixtures ?? []) {
+    const r = fixture.radiusM * ppm
+    push(fixture)
+    push({ x: fixture.x - r, y: fixture.y - r })
+    push({ x: fixture.x + r, y: fixture.y + r })
+  }
   for (const measure of doc.measures ?? []) {
     push(measure.a)
     push(measure.b)
@@ -164,6 +171,7 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
         `<path d="${xml(zoneShapeD(zone.points, zone.bends, zone.holes))}" fill="url(#sheet-${hatchOf(zone)})" fill-rule="evenodd" stroke="${xml(zone.stroke || surface.stroke)}" stroke-width="${fmt((zone.pen ?? 1.3) / k)}"${fade}/>`,
       )
     }
+    for (const fixture of doc.fixtures ?? []) parts.push(fixtureMarkup(fixture, ppm, k))
     for (const plant of doc.plants ?? []) parts.push(plantSvg(plant, ppm, k))
     for (const note of doc.notes ?? []) {
       parts.push(

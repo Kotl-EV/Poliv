@@ -57,6 +57,28 @@ test('notes and plants survive a reload and a blank text is rejected', () => {
   assert.equal(parseDoc(emptyDoc())?.plants?.length, 0)
 })
 
+test('a drawing object round-trips and a bad kind rejects the file', () => {
+  const saved = parseDoc({
+    ...emptyDoc(),
+    fixtures: [{ id: 'f', kind: 'sedan', x: 10, y: 12, radiusM: 2.2, rotationDeg: 90 }],
+  })
+  assert.equal(saved?.fixtures?.[0].kind, 'sedan')
+  assert.equal(saved?.fixtures?.[0].rotationDeg, 90)
+  const spun = parseDoc({
+    ...emptyDoc(),
+    fixtures: [{ id: 'f', kind: 'bench', x: 1, y: 1, radiusM: 0.9, rotationDeg: -90 }],
+  })
+  assert.equal(spun?.fixtures?.[0].rotationDeg, 270)
+  const zero = parseDoc({
+    ...emptyDoc(),
+    fixtures: [{ id: 'f', kind: 'bench', x: 1, y: 1, radiusM: 0.9, rotationDeg: 360 }],
+  })
+  assert.equal(zero?.fixtures?.[0].rotationDeg, undefined)
+  assert.equal(parseDoc(emptyDoc())?.fixtures?.length, 0)
+  assert.equal(parseDoc({ ...emptyDoc(), fixtures: [{ id: 'f', kind: 'boat', x: 1, y: 1, radiusM: 1 }] }), null)
+  assert.equal(parseDoc({ ...emptyDoc(), fixtures: [{ id: 'f', kind: 'boulder', x: 1, y: 1, radiusM: 0.05 }] }), null)
+})
+
 test('a hatch stays on its surface and a foreign one is dropped', () => {
   const points = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }]
   const path = parseDoc({

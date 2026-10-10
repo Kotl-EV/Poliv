@@ -18,4 +18,7 @@ test('every crown is a closed drawing and the fallback matches the kind', () => 
   assert.equal(formOf({ kind: 'tree' }), 'leaf')
   assert.equal(formOf({ kind: 'bush', form: 'palm' }), 'ball')
   assert.equal(formOf({ kind: 'tree', form: 'conifer' }), 'conifer')
+  assert.equal(new Set(forms.map((item) => plantGlyph(item.id).fills[0])).size, forms.length)
+  assert.equal(formOf({ kind: 'tree', form: 'oak' }), 'oak')
+  assert.equal(formOf({ kind: 'bush', form: 'hedge' }), 'hedge')
 })

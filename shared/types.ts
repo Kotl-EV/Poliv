@@ -90,7 +90,9 @@ export type PlantKind = 'tree' | 'bush'
 
 export type PlantForm =
   | 'leaf' | 'round' | 'spread' | 'conifer' | 'column' | 'weep' | 'palm' | 'clump'
+  | 'oak' | 'pine' | 'spruce' | 'birch' | 'fruit' | 'olive' | 'cypress' | 'bamboo'
   | 'ball' | 'wide' | 'needle' | 'bloom' | 'group' | 'cushion'
+  | 'hedge' | 'rose' | 'box' | 'fern' | 'grass' | 'spiral'
 
 export type Plant = {
   id: string
@@ -106,6 +108,26 @@ export type Measure = {
   id: string
   a: Point
   b: Point
+}
+
+/** Знак на плане. На полив не влияет. */
+export type FixtureKind =
+  | 'boulder' | 'rocks' | 'slab'
+  | 'bench' | 'chair' | 'table' | 'sofa'
+  | 'bollard' | 'lamp' | 'spot' | 'lantern'
+  | 'sedan' | 'suv' | 'wagon'
+  | 'lounger' | 'daybed' | 'parasol'
+  | 'compass' | 'scalebar' | 'controller'
+
+export type Fixture = {
+  id: string
+  kind: FixtureKind
+  x: number
+  y: number
+  /** Половина длинной стороны, м. */
+  radiusM: number
+  /** Поворот по часовой, градусы. Пусто — без поворота. */
+  rotationDeg?: number
 }
 
 export type Doc = {
@@ -126,6 +148,8 @@ export type Doc = {
   notes?: Note[]
   /** Деревья и кусты. Расчёт ставит капельницы к ним. */
   plants?: Plant[]
+  /** Камни, мебель, свет, машины, шезлонги и знаки листа. */
+  fixtures?: Fixture[]
   /** Размеры, которые остаются на чертеже. */
   measures?: Measure[]
   /** Привязка к вершинам. Пусто значит включена. */

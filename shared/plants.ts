@@ -11,6 +11,14 @@ export const TREE_FORMS: { id: PlantForm; label: string }[] = [
   { id: 'weep', label: 'Плакучее' },
   { id: 'palm', label: 'Пальма' },
   { id: 'clump', label: 'Многоствольное' },
+  { id: 'oak', label: 'Дуб' },
+  { id: 'pine', label: 'Сосна' },
+  { id: 'spruce', label: 'Ель' },
+  { id: 'birch', label: 'Берёза' },
+  { id: 'fruit', label: 'Плодовое' },
+  { id: 'olive', label: 'Олива' },
+  { id: 'cypress', label: 'Кипарис' },
+  { id: 'bamboo', label: 'Бамбук' },
 ]
 
 export const BUSH_FORMS: { id: PlantForm; label: string }[] = [
@@ -20,6 +28,12 @@ export const BUSH_FORMS: { id: PlantForm; label: string }[] = [
   { id: 'bloom', label: 'Цветущий' },
   { id: 'group', label: 'Группа' },
   { id: 'cushion', label: 'Подушка' },
+  { id: 'hedge', label: 'Изгородь' },
+  { id: 'rose', label: 'Роза' },
+  { id: 'box', label: 'Самшит' },
+  { id: 'fern', label: 'Папоротник' },
+  { id: 'grass', label: 'Злак' },
+  { id: 'spiral', label: 'Спираль' },
 ]
 
 export type PlantPaint = { leaf: string; ink: string; vein: string; trunk: string; accent: string }
@@ -43,6 +57,20 @@ const PAINT: Record<PlantForm, PlantPaint> = {
   bloom: { leaf: '#4a8648', ink: '#1c4e28', vein: '#356c3c', trunk: '#6b4423', accent: '#e7a0b8' },
   group: { leaf: '#3f7a42', ink: '#184422', vein: '#2e6236', trunk: '#6b4423', accent: '#f2d2a8' },
   cushion: { leaf: '#5a9460', ink: '#24562e', vein: '#467850', trunk: '#6b4423', accent: '#f0c3d0' },
+  oak: { leaf: '#2f6a32', ink: '#14381c', vein: '#245628', trunk: '#5c3a1e', accent: '#e7b7c6' },
+  pine: { leaf: '#3d7a48', ink: '#1a4a28', vein: '#2f6840', trunk: '#6b4423', accent: '#d7e2c8' },
+  spruce: { leaf: '#1a4030', ink: '#0e2c22', vein: '#163628', trunk: '#4a3420', accent: '#d7e2c8' },
+  birch: { leaf: '#c5d6a8', ink: '#4a6244', vein: '#7a9460', trunk: '#d2c2a6', accent: '#4a3b2a' },
+  fruit: { leaf: '#4e8a3c', ink: '#1e4e22', vein: '#3a7034', trunk: '#6b4423', accent: '#d24a3a' },
+  olive: { leaf: '#8d9a62', ink: '#3e4a28', vein: '#667244', trunk: '#6b4423', accent: '#e7e2c0' },
+  cypress: { leaf: '#1d4634', ink: '#10281c', vein: '#183828', trunk: '#4a3420', accent: '#d7e2c8' },
+  bamboo: { leaf: '#7aaa3a', ink: '#3a6218', vein: '#5c8a28', trunk: '#c4a05a', accent: '#d8ecb0' },
+  hedge: { leaf: '#3a7840', ink: '#184422', vein: '#2c6234', trunk: '#6b4423', accent: '#e7b7c6' },
+  rose: { leaf: '#3f7a34', ink: '#1a441c', vein: '#2e6230', trunk: '#6b4423', accent: '#c4365a' },
+  box: { leaf: '#2f6e3a', ink: '#14341c', vein: '#245c30', trunk: '#6b4423', accent: '#d7e2c8' },
+  fern: { leaf: '#4a9a48', ink: '#1e5a28', vein: '#3a8438', trunk: '#5c3a1e', accent: '#d8ecb0' },
+  grass: { leaf: '#6aaa4a', ink: '#2e6a28', vein: '#4e8a38', trunk: '#c4a05a', accent: '#e7e2c0' },
+  spiral: { leaf: '#3d7a44', ink: '#184422', vein: '#2a5c34', trunk: '#6b4423', accent: '#d7e2c8' },
 }
 
 export function formsFor(kind: PlantKind): { id: PlantForm; label: string }[] {
@@ -122,6 +150,63 @@ export function plantGlyph(form: PlantForm): PlantGlyph {
       dots: spots.map((spot) => trunk(spot.x, spot.y, 0.045)),
     }
   }
+  if (form === 'oak') {
+    return {
+      fills: [scallop({ count: 8, inner: 0.62, outer: 1, turn: 0.35, wobble: 0.14, sx: 1.18, sy: 1.05 })],
+      veins: ribs(6, 0.55, 0.2),
+      dots: [trunk(0, 0, 0.07)],
+    }
+  }
+  if (form === 'pine') {
+    return {
+      fills: [star(11, 0.42, 1, -Math.PI / 2)],
+      veins: [circle(0.18)],
+      dots: [trunk(0, 0, 0.06)],
+    }
+  }
+  if (form === 'spruce') {
+    return {
+      fills: [star(14, 0.55, 1, 0.1), star(10, 0.32, 0.58, 0.4)],
+      veins: [],
+      dots: [trunk(0, 0, 0.055)],
+    }
+  }
+  if (form === 'birch') {
+    return {
+      fills: [scallop({ count: 14, inner: 0.82, outer: 1, turn: 0.1, wobble: 0.03, sx: 0.78, sy: 1.08 })],
+      veins: ribs(5, 0.5, -0.4, 0.78, 1.08),
+      dots: [trunk(0, 0, 0.08), ...around(7, 0.42, 0.3).map((spot) => ({ x: spot.x, y: spot.y, r: 0.035, bloom: true }))],
+    }
+  }
+  if (form === 'fruit') {
+    return {
+      fills: [scallop({ count: 12, inner: 0.8, outer: 1, turn: 0.5, wobble: 0.05 })],
+      veins: ribs(5, 0.4, 0.2),
+      dots: around(8, 0.55, -0.4).map((spot) => ({ x: spot.x, y: spot.y, r: 0.09, bloom: true })),
+    }
+  }
+  if (form === 'olive') {
+    return {
+      fills: [scallop({ count: 10, inner: 0.7, outer: 1, turn: 1.1, wobble: 0.09, sx: 1.28, sy: 0.78 })],
+      veins: ribs(5, 0.5, 0.4, 1.28, 0.78),
+      dots: [trunk(0, 0, 0.06)],
+    }
+  }
+  if (form === 'cypress') {
+    return {
+      fills: [scallop({ count: 12, inner: 0.86, outer: 1, turn: -0.2, wobble: 0.02, sx: 0.32, sy: 1.12 })],
+      veins: ribs(4, 0.72, -Math.PI / 2, 0.32, 1.12),
+      dots: [trunk(0, 0, 0.05)],
+    }
+  }
+  if (form === 'bamboo') {
+    const stems = [-0.55, -0.18, 0.18, 0.55]
+    return {
+      fills: stems.map((x, index) => scallop({ count: 8, inner: 0.55, outer: 0.9, turn: index * 0.4, wobble: 0.02, sx: 0.16, sy: 1.05, cx: x, cy: (index % 2) * 0.06 })),
+      veins: [],
+      dots: stems.map((x) => trunk(x, 0.15, 0.035)),
+    }
+  }
   if (form === 'ball') {
     return { fills: [scallop({ count: 9, inner: 0.7, outer: 1, turn: 0.4, wobble: 0.08 })], veins: ribs(5, 0.45, 0.2), dots: [] }
   }
@@ -148,6 +233,43 @@ export function plantGlyph(form: PlantForm): PlantGlyph {
     return {
       fills: spots.map((spot, i) => scallop({ count: 7, inner: spot.r * 0.7, outer: spot.r, turn: i, wobble: 0.07, cx: spot.x, cy: spot.y })),
       veins: [],
+      dots: [],
+    }
+  }
+  if (form === 'hedge') {
+    return {
+      fills: [scallop({ count: 16, inner: 0.84, outer: 1, turn: 0.05, wobble: 0.025, sx: 1.55, sy: 0.42 })],
+      veins: [],
+      dots: [],
+    }
+  }
+  if (form === 'rose') {
+    return {
+      fills: [scallop({ count: 7, inner: 0.55, outer: 0.82, turn: 0.6, wobble: 0.06 })],
+      veins: ribs(5, 0.35, 0.3),
+      dots: around(5, 0.28, 0.2).map((spot) => ({ x: spot.x, y: spot.y, r: 0.14, bloom: true })),
+    }
+  }
+  if (form === 'box') {
+    return { fills: [roundedBox(0.86, 0.16)], veins: [], dots: [] }
+  }
+  if (form === 'fern') {
+    const fills: string[] = []
+    for (let i = 0; i < 8; i++) fills.push(frond(-Math.PI / 2 + (i / 8) * TAU, 0.72 + (i % 3) * 0.1, 0.08))
+    return { fills, veins: [], dots: [] }
+  }
+  if (form === 'grass') {
+    const stems = [-0.55, -0.28, 0, 0.28, 0.55]
+    return {
+      fills: stems.map((x, index) => scallop({ count: 6, inner: 0.5, outer: 0.92, turn: -1.2 + index * 0.05, wobble: 0.04, sx: 0.13, sy: 1.08, cx: x, cy: 0.02 })),
+      veins: [],
+      dots: [],
+    }
+  }
+  if (form === 'spiral') {
+    return {
+      fills: [scallop({ count: 20, inner: 0.94, outer: 1, turn: 0.15, wobble: 0.015 })],
+      veins: [circle(0.7), circle(0.42), circle(0.18)],
       dots: [],
     }
   }
@@ -250,6 +372,15 @@ function frond(angle: number, len: number, width: number): string {
 
 function circle(r: number): string {
   return `M ${num(r)} 0 A ${num(r)} ${num(r)} 0 1 1 ${num(-r)} 0 A ${num(r)} ${num(r)} 0 1 1 ${num(r)} 0 Z`
+}
+
+function roundedBox(size: number, radius: number): string {
+  const x = -size
+  const y = -size
+  const x2 = size
+  const y2 = size
+  const r = Math.min(radius, size)
+  return `M ${num(x + r)} ${num(y)} H ${num(x2 - r)} Q ${num(x2)} ${num(y)} ${num(x2)} ${num(y + r)} V ${num(y2 - r)} Q ${num(x2)} ${num(y2)} ${num(x2 - r)} ${num(y2)} H ${num(x + r)} Q ${num(x)} ${num(y2)} ${num(x)} ${num(y2 - r)} V ${num(y + r)} Q ${num(x)} ${num(y)} ${num(x + r)} ${num(y)} Z`
 }
 
 function at(radius: number, angle: number, sx: number, sy: number, cx: number, cy: number): { x: number; y: number } {
