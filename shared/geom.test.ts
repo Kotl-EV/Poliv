@@ -17,6 +17,8 @@ import {
   scaleAround,
   snapDeg,
   snapToGrid,
+  alignShift,
+  flattenRing,
   strokeToPolygon,
   withinScreen,
   zonePathD,
@@ -29,6 +31,30 @@ test('zone close uses screen pixels, so a fitted large sheet still hits the star
   assert.equal(dist(start, onDot) <= SNAP_PX, false)
   assert.equal(withinScreen(start, onDot, k, 32), true)
   assert.equal(withinScreen(start, { x: 500, y: 100 }, k, 32), false)
+})
+
+test('a bent edge flattens into a polyline that keeps the bulge', () => {
+  const square = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }]
+  const bends = [{ x: 50, y: 40 }, null, null, null]
+  const ring = flattenRing(square, bends)
+  if (!ring) throw new Error('дуга не разобралась')
+  assert.ok(ring.length > 4)
+  assert.ok(ring.some((point) => point.x > 20 && point.x < 80 && point.y > 10 && point.y < 35))
+  assert.equal(flattenRing(square, [null, null, null, null])?.length, 4)
+  assert.equal(flattenRing(square, bends, 3), null)
+})
+
+test('align shift matches an edge or the centre of the target box', () => {
+  const moving = { minX: 0, minY: 0, maxX: 10, maxY: 10 }
+  const target = { minX: 100, minY: 40, maxX: 130, maxY: 80 }
+  assert.deepEqual(alignShift(moving, target, 'left'), { dx: 100, dy: 0 })
+  assert.deepEqual(alignShift(moving, target, 'right'), { dx: 120, dy: 0 })
+  assert.deepEqual(alignShift(moving, target, 'top'), { dx: 0, dy: 40 })
+  assert.deepEqual(alignShift(moving, target, 'bottom'), { dx: 0, dy: 70 })
+  assert.deepEqual(alignShift(moving, target, 'center'), { dx: 110, dy: 55 })
+  const pin = { minX: 8, minY: 3, maxX: 8, maxY: 3 }
+  assert.deepEqual(alignShift(moving, pin, 'left'), { dx: 8, dy: 0 })
+  assert.deepEqual(alignShift(moving, pin, 'center'), { dx: 3, dy: -2 })
 })
 
 test('grid snap lands on metre steps', () => {

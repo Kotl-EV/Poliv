@@ -1,6 +1,6 @@
 import { SNAP_PX, defaultDose, emptyDoc } from './doc.ts'
 import { placeDripOnPolygon } from './drip.ts'
-import { dist, outlineOf, pointInPolygon, polygonAreaPx } from './geom.ts'
+import { dist, outlineOf, pointInPolygon, pointInZone, polygonAreaPx, zoneAreaPx } from './geom.ts'
 import { isDripKind, isObstacleKind, isSprayKind, isWetKind } from './landscape.ts'
 import { nozzleById } from './nozzles.ts'
 import { placeSprayOnPolygon, ringsOverlap } from './spray.ts'
@@ -345,24 +345,24 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
   ]
   const zoneRuntime = new Map<string, number>()
   for (const zone of zones) {
-    const area = polygonAreaPx(zone.points) / (ppm * ppm)
+    const area = zoneAreaPx(zone.points, zone.holes) / (ppm * ppm)
     if (zone.doseMm <= 0 || area <= 0) {
       zoneRuntime.set(zone.id, 0)
       continue
     }
     let flow = 0
     for (const head of keptHeads) {
-      if (pointInPolygon(head.point, zone.points)) flow += nozzleById(head.nozzleId).flowLph
+      if (pointInZone(head.point, zone.points, zone.holes)) flow += nozzleById(head.nozzleId).flowLph
     }
     for (const drip of keptDrips) {
-      if (pointInPolygon(centroid(drip.points), zone.points)) flow += dripFlow(drip, ppm)
+      if (pointInZone(centroid(drip.points), zone.points, zone.holes)) flow += dripFlow(drip, ppm)
     }
     zoneRuntime.set(zone.id, flow > 0 ? (zone.doseMm / (flow / area)) * 60 : 0)
   }
   const runtimeAt = (point: Point) => {
     let best = 0
     for (const zone of zones) {
-      if (!pointInPolygon(point, zone.points)) continue
+      if (!pointInZone(point, zone.points, zone.holes)) continue
       best = Math.max(best, zoneRuntime.get(zone.id) ?? 0)
     }
     return best
@@ -567,11 +567,14 @@ export function layoutIrrigation(doc: Doc): Doc | null {
   const heads: HeadSpot[] = []
   for (const zone of doc.zones) {
     if (!isSprayKind(zone.kind) || zone.points.length < 3) continue
-    if (polygonAreaPx(zone.points) / (ppm * ppm) < MIN_LAWN_M2) continue
-    const holes = doc.zones
-      .filter((other) => other.id !== zone.id && (isDripKind(other.kind) || isObstacleKind(other.kind)))
-      .filter((other) => ringsOverlap(zone.points, other.points))
-      .map((other) => other.points)
+    if (zoneAreaPx(zone.points, zone.holes) / (ppm * ppm) < MIN_LAWN_M2) continue
+    const holes = [
+      ...(zone.holes ?? []),
+      ...doc.zones
+        .filter((other) => other.id !== zone.id && (isDripKind(other.kind) || isObstacleKind(other.kind)))
+        .filter((other) => ringsOverlap(zone.points, other.points))
+        .map((other) => other.points),
+    ]
     for (const spot of placeSprayOnPolygon(zone.points, holes, ppm)) {
       if (heads.length >= MAX_HEADS) break
       const key = snapHeadKey(spot.point, lawnSet, center) ?? snapHeadKey(spot.point, allowed, center)
@@ -584,12 +587,15 @@ export function layoutIrrigation(doc: Doc): Doc | null {
   const drips: DripSpot[] = []
   for (const zone of doc.zones) {
     if (!isDripKind(zone.kind) || zone.points.length < 3) continue
-    if (polygonAreaPx(zone.points) / (ppm * ppm) < MIN_BED_M2) continue
+    if (zoneAreaPx(zone.points, zone.holes) / (ppm * ppm) < MIN_BED_M2) continue
     const ring = outlineOf(zone.points, zone.bends)
-    const holes = doc.zones
-      .filter((other) => other.id !== zone.id && (isObstacleKind(other.kind) || isSprayKind(other.kind)))
-      .filter((other) => ringsOverlap(zone.points, other.points))
-      .map((other) => outlineOf(other.points, other.bends))
+    const holes = [
+      ...(zone.holes ?? []),
+      ...doc.zones
+        .filter((other) => other.id !== zone.id && (isObstacleKind(other.kind) || isSprayKind(other.kind)))
+        .filter((other) => ringsOverlap(zone.points, other.points))
+        .map((other) => outlineOf(other.points, other.bends)),
+    ]
     const runs = placeDripOnPolygon(ring, holes, ppm, { kind: zone.kind, soil: zone.soil })
     for (const run of runs) {
       if (drips.length >= MAX_DRIPS || run.points.length < 2) continue
@@ -641,24 +647,24 @@ export function layoutIrrigation(doc: Doc): Doc | null {
   ]
   const zoneRuntime = new Map<string, number>()
   for (const zone of doc.zones) {
-    const area = polygonAreaPx(zone.points) / (ppm * ppm)
+    const area = zoneAreaPx(zone.points, zone.holes) / (ppm * ppm)
     if (zone.doseMm <= 0 || area <= 0) {
       zoneRuntime.set(zone.id, 0)
       continue
     }
     let flow = 0
     for (const head of keptHeads) {
-      if (pointInPolygon(head.point, zone.points)) flow += nozzleById(head.nozzleId).flowLph
+      if (pointInZone(head.point, zone.points, zone.holes)) flow += nozzleById(head.nozzleId).flowLph
     }
     for (const drip of keptDrips) {
-      if (pointInPolygon(centroid(drip.points), zone.points)) flow += dripFlow(drip, ppm)
+      if (pointInZone(centroid(drip.points), zone.points, zone.holes)) flow += dripFlow(drip, ppm)
     }
     zoneRuntime.set(zone.id, flow > 0 ? (zone.doseMm / (flow / area)) * 60 : 0)
   }
   const runtimeAt = (point: Point) => {
     let best = 0
     for (const zone of doc.zones) {
-      if (!pointInPolygon(point, zone.points)) continue
+      if (!pointInZone(point, zone.points, zone.holes)) continue
       best = Math.max(best, zoneRuntime.get(zone.id) ?? 0)
     }
     return best
@@ -1231,13 +1237,13 @@ function scaleRing(points: Point[], cellPx: number): Point[] {
   return points.map((point) => ({ x: point.x * cellPx, y: point.y * cellPx }))
 }
 
-function wetMask(point: Point, zones: { kind: ZoneKind; points: Point[] }[]): 'spray' | 'drip' | 'soft' | 'hard' | null {
+function wetMask(point: Point, zones: { kind: ZoneKind; points: Point[]; holes?: Point[][] }[]): 'spray' | 'drip' | 'soft' | 'hard' | null {
   let spray = false
   let drip = false
   let soft = false
   let hard = false
   for (const zone of zones) {
-    if (zone.points.length < 3 || !pointInPolygon(point, zone.points)) continue
+    if (zone.points.length < 3 || !pointInZone(point, zone.points, zone.holes)) continue
     if (zone.kind === 'building' || zone.kind === 'water') hard = true
     else if (isObstacleKind(zone.kind)) soft = true
     else if (isDripKind(zone.kind)) drip = true

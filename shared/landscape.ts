@@ -43,6 +43,64 @@ export function isWetKind(kind: ZoneKind): boolean {
   return surfaceOf(kind).wet !== 'none'
 }
 
+export type HatchId =
+  | 'lawn' | 'lawn-stripe'
+  | 'bed' | 'bed-mulch'
+  | 'shrub'
+  | 'path' | 'path-diagonal' | 'path-brick' | 'path-honey'
+  | 'concrete' | 'water' | 'building'
+
+export const HATCHES: { id: HatchId; kind: ZoneKind; label: string }[] = [
+  { id: 'lawn', kind: 'lawn', label: 'Трава' },
+  { id: 'lawn-stripe', kind: 'lawn', label: 'Полосы' },
+  { id: 'bed', kind: 'bed', label: 'Цветы' },
+  { id: 'bed-mulch', kind: 'bed', label: 'Мульча' },
+  { id: 'shrub', kind: 'shrub', label: 'Кусты' },
+  { id: 'path', kind: 'path', label: 'Ромб' },
+  { id: 'path-diagonal', kind: 'path', label: 'Диагональ' },
+  { id: 'path-brick', kind: 'path', label: 'Кирпич' },
+  { id: 'path-honey', kind: 'path', label: 'Соты' },
+  { id: 'concrete', kind: 'concrete', label: 'Бетон' },
+  { id: 'water', kind: 'water', label: 'Вода' },
+  { id: 'building', kind: 'building', label: 'Здание' },
+]
+
+/** Цвета обводки и подписей. */
+export const INKS = ['#2a6b32', '#8a5a16', '#5c564e', '#2a6288', '#8d2b1f', '#1c2822'] as const
+
+export function hatchesFor(kind: ZoneKind): { id: HatchId; kind: ZoneKind; label: string }[] {
+  return HATCHES.filter((item) => item.kind === kind)
+}
+
+/** Штриховка контура. Чужая для этой поверхности сбрасывается на обычную. */
+export function hatchOf(zone: { kind: ZoneKind; hatch?: string | null }): HatchId {
+  const hit = HATCHES.find((item) => item.id === zone.hatch && item.kind === zone.kind)
+  if (hit) return hit.id
+  const fallback = surfaceOf(zone.kind).pattern
+  const known = HATCHES.find((item) => item.id === fallback)
+  return known ? known.id : 'lawn'
+}
+
+/** Соты: два ряда шестиугольников в одной плитке. */
+export function honeycomb(u: number): { w: number; h: number; d: string } {
+  const r = u * 0.62
+  const w = Math.sqrt(3) * r
+  const row = r * 1.5
+  const hex = (cx: number, cy: number) => {
+    const pts: string[] = []
+    for (let i = 0; i < 6; i++) {
+      const a = -Math.PI / 2 + (i * Math.PI) / 3
+      pts.push(`${(cx + r * Math.cos(a)).toFixed(2)} ${(cy + r * Math.sin(a)).toFixed(2)}`)
+    }
+    return `M ${pts.join(' L ')} Z`
+  }
+  return {
+    w,
+    h: row * 2,
+    d: [hex(w / 2, r), hex(0, r + row), hex(w, r + row)].join(' '),
+  }
+}
+
 export const DEFAULT_PPM = 20
 export const DEFAULT_SHEET_M = { w: 80, h: 60 }
 

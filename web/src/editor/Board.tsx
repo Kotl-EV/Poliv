@@ -1,7 +1,8 @@
 import { forwardRef, type MouseEvent, type PointerEvent } from 'react'
-import { centroid, dist, handleFromControl, midpoint, polar, sectorPath, zonePathD } from '@shared/geom.ts'
-import { DEFAULT_PPM, gridStepM, surfaceOf } from '@shared/landscape.ts'
-import type { Analysis, Doc, Point, Sprinkler, Zone, ZoneKind } from '@shared/types.ts'
+import type { BrushTip } from '@shared/clip.ts'
+import { centroid, dist, handleFromControl, midpoint, polar, sectorPath, zonePathD, zoneShapeD } from '@shared/geom.ts'
+import { DEFAULT_PPM, gridStepM, hatchOf, honeycomb, surfaceOf } from '@shared/landscape.ts'
+import type { Analysis, Doc, Measure, Note, Plant, Point, Sprinkler, Zone, ZoneKind } from '@shared/types.ts'
 
 export const CLOSE_SCREEN_PX = 14
 
@@ -22,6 +23,10 @@ export type Hit =
   | { kind: 'valve'; id: string }
   | { kind: 'drip'; id: string }
   | { kind: 'drip-point'; id: string; index: number }
+  | { kind: 'note'; id: string }
+  | { kind: 'plant'; id: string }
+  | { kind: 'dim'; id: string }
+  | { kind: 'dim-point'; id: string; index: number }
   | { kind: 'draft-close' }
   | { kind: 'draft-ok' }
 
@@ -47,6 +52,10 @@ export function readHit(target: EventTarget | null): Hit {
   if (kind === 'zone-edge' && Number.isInteger(index)) return { kind, id, index }
   if (kind === 'pipe-point' && Number.isInteger(index)) return { kind, id, index }
   if (kind === 'drip-point' && Number.isInteger(index)) return { kind, id, index }
+  if (kind === 'note') return { kind, id }
+  if (kind === 'plant') return { kind, id }
+  if (kind === 'dim') return { kind, id }
+  if (kind === 'dim-point' && Number.isInteger(index)) return { kind, id, index }
   return { kind: 'board' }
 }
 
@@ -80,6 +89,9 @@ export const Board = forwardRef<SVGSVGElement, {
   draftKind: ZoneKind
   sketch: 'poly' | 'rect' | 'circle' | 'brush'
   brushWidth: number
+  brushTip: BrushTip
+  guide: Point[]
+  snapMark: Point | null
   showOk: boolean
   hover: Point | null
   scalePoints: Point[]
@@ -125,10 +137,12 @@ export const Board = forwardRef<SVGSVGElement, {
               <path
                 data-hit="zone"
                 data-id={zone.id}
-                d={zonePathD(zone.points, zone.bends, true)}
-                fill={`url(#fill-${surface.pattern})`}
-                stroke={surface.stroke}
-                strokeWidth={(selected ? 2.4 : 1.4) / view.k}
+                d={zoneShapeD(zone.points, zone.bends, zone.holes)}
+                fillRule="evenodd"
+                fill={`url(#fill-${hatchOf(zone)})`}
+                stroke={zone.stroke || surface.stroke}
+                strokeWidth={(zone.pen ?? (selected ? 2.4 : 1.4)) / view.k}
+                opacity={zone.opacity}
               />
               {zone.points.map((point, index) => {
                 const next = zone.points[(index + 1) % zone.points.length]
@@ -150,6 +164,23 @@ export const Board = forwardRef<SVGSVGElement, {
             </g>
           )
         })}
+        {(doc.plants ?? []).map((plant) => (
+          <PlantMark
+            key={plant.id}
+            plant={plant}
+            ppm={ppm}
+            k={view.k}
+            selected={props.selectionKind === 'plant' && props.selectionId === plant.id}
+          />
+        ))}
+        {(doc.notes ?? []).map((note) => (
+          <NoteMark
+            key={note.id}
+            note={note}
+            ppm={ppm}
+            selected={props.selectionKind === 'note' && props.selectionId === note.id}
+          />
+        ))}
         {doc.sprinklers.map((sprinkler) => {
           const radius = ppm * sprinkler.radiusM
           const selected = selectedSprinkler?.id === sprinkler.id
@@ -198,6 +229,7 @@ export const Board = forwardRef<SVGSVGElement, {
           ppm={ppm}
           sketch={props.sketch}
           brushWidth={props.brushWidth}
+          brushTip={props.brushTip}
           showOk={props.showOk}
           onFinish={props.onFinishDraft}
         />
@@ -305,6 +337,39 @@ export const Board = forwardRef<SVGSVGElement, {
         {props.scalePoints.length === 2 && (
           <DimLabel a={props.scalePoints[0]} b={props.scalePoints[1]} ppm={ppm} k={view.k} />
         )}
+        <MeasureMarks
+          measures={doc.measures ?? []}
+          ppm={ppm}
+          k={view.k}
+          selectedId={props.selectionKind === 'dim' ? props.selectionId : null}
+        />
+        {props.guide[0] && props.hover && (
+          <line
+            x1={props.guide[0].x}
+            y1={props.guide[0].y}
+            x2={props.guide[1]?.x ?? props.hover.x}
+            y2={props.guide[1]?.y ?? props.hover.y}
+            className="guide"
+            pointerEvents="none"
+          />
+        )}
+        {doc.anchor && (
+          <g className="anchor" pointerEvents="none">
+            <circle cx={doc.anchor.x} cy={doc.anchor.y} r={8 / view.k} />
+            <line x1={doc.anchor.x - 14 / view.k} y1={doc.anchor.y} x2={doc.anchor.x + 14 / view.k} y2={doc.anchor.y} />
+            <line x1={doc.anchor.x} y1={doc.anchor.y - 14 / view.k} x2={doc.anchor.x} y2={doc.anchor.y + 14 / view.k} />
+          </g>
+        )}
+        {props.snapMark && (
+          <rect
+            x={props.snapMark.x - 5 / view.k}
+            y={props.snapMark.y - 5 / view.k}
+            width={10 / view.k}
+            height={10 / view.k}
+            className="snap-cursor"
+            pointerEvents="none"
+          />
+        )}
         {selectedSprinkler && (
           <SprinklerHandles sprinkler={selectedSprinkler} ppm={ppm} k={view.k} />
         )}
@@ -321,6 +386,7 @@ function DraftLayer({
   ppm,
   sketch,
   brushWidth,
+  brushTip,
   showOk,
   onFinish,
 }: {
@@ -331,6 +397,7 @@ function DraftLayer({
   ppm: number
   sketch: 'poly' | 'rect' | 'circle' | 'brush'
   brushWidth: number
+  brushTip: BrushTip
   showOk: boolean
   onFinish?: () => void
 }) {
@@ -369,8 +436,8 @@ function DraftLayer({
           stroke={surface.stroke}
           strokeWidth={brushWidth}
           fill="none"
-          strokeLinecap="round"
-          strokeLinejoin="round"
+          strokeLinecap={brushTip === 'square' ? 'square' : 'round'}
+          strokeLinejoin={brushTip === 'square' ? 'miter' : 'round'}
           pointerEvents="none"
         />
       )}
@@ -592,18 +659,65 @@ function MillimetreGrid({ width, height, ppm, k }: { width: number; height: numb
   )
 }
 
+function MeasureMarks({ measures, ppm, k, selectedId }: { measures: Measure[]; ppm: number; k: number; selectedId: string | null }) {
+  return (
+    <>
+      {measures.map((measure) => {
+        const selected = measure.id === selectedId
+        const dx = measure.b.x - measure.a.x
+        const dy = measure.b.y - measure.a.y
+        const span = Math.hypot(dx, dy) || 1
+        const tick = 7 / k
+        const ox = (-dy / span) * tick
+        const oy = (dx / span) * tick
+        const s = 5.5 / k
+        const ink = selected ? 'measure selected' : 'measure'
+        return (
+          <g key={measure.id}>
+            <line data-hit="dim" data-id={measure.id} x1={measure.a.x} y1={measure.a.y} x2={measure.b.x} y2={measure.b.y} stroke="transparent" strokeWidth={14 / k} />
+            <line x1={measure.a.x} y1={measure.a.y} x2={measure.b.x} y2={measure.b.y} className={ink} pointerEvents="none" />
+            <line x1={measure.a.x - ox} y1={measure.a.y - oy} x2={measure.a.x + ox} y2={measure.a.y + oy} className={ink} pointerEvents="none" />
+            <line x1={measure.b.x - ox} y1={measure.b.y - oy} x2={measure.b.x + ox} y2={measure.b.y + oy} className={ink} pointerEvents="none" />
+            <DimLabel a={measure.a} b={measure.b} ppm={ppm} k={k} />
+            {selected && (
+              <>
+                <rect data-hit="dim-point" data-id={measure.id} data-index={0} x={measure.a.x - s} y={measure.a.y - s} width={s * 2} height={s * 2} className="handle" />
+                <rect data-hit="dim-point" data-id={measure.id} data-index={1} x={measure.b.x - s} y={measure.b.y - s} width={s * 2} height={s * 2} className="handle" />
+              </>
+            )}
+          </g>
+        )
+      })}
+    </>
+  )
+}
+
 function SurfacePatterns({ ppm }: { ppm: number }) {
   const u = Math.max(8, ppm * 0.7)
+  const honey = honeycomb(u)
+  const grass = `M 0 ${u * 0.7} L ${u * 0.35} ${u * 0.15} M ${u * 0.45} ${u} L ${u} ${u * 0.35}`
   return (
     <>
       <pattern id="fill-lawn" width={u} height={u} patternUnits="userSpaceOnUse">
         <rect width={u} height={u} fill="rgba(88, 150, 78, 0.34)" />
-        <path d={`M 0 ${u * 0.7} L ${u * 0.35} ${u * 0.15} M ${u * 0.45} ${u} L ${u} ${u * 0.35}`} stroke="#3d7a38" strokeWidth="1.2" />
+        <path d={grass} stroke="#3d7a38" strokeWidth="1.2" />
+      </pattern>
+      <pattern id="fill-lawn-stripe" width={u} height={u} patternUnits="userSpaceOnUse">
+        <rect width={u} height={u} fill="rgba(88, 150, 78, 0.34)" />
+        <path d={grass} stroke="#3d7a38" strokeWidth="1.2" />
+        <path d={`M 0 ${u * 0.33} L ${u} ${u * 0.33} M 0 ${u * 0.66} L ${u} ${u * 0.66}`} stroke="#2a6b32" strokeWidth="1.1" />
       </pattern>
       <pattern id="fill-bed" width={u} height={u} patternUnits="userSpaceOnUse">
         <rect width={u} height={u} fill="rgba(196, 132, 52, 0.34)" />
         <circle cx={u * 0.3} cy={u * 0.35} r={1.6} fill="#c45b5b" />
         <circle cx={u * 0.7} cy={u * 0.7} r={1.4} fill="#d4a03a" />
+      </pattern>
+      <pattern id="fill-bed-mulch" width={u} height={u} patternUnits="userSpaceOnUse">
+        <rect width={u} height={u} fill="rgba(150, 104, 52, 0.45)" />
+        <circle cx={u * 0.22} cy={u * 0.28} r={1.5} fill="#6a4324" />
+        <circle cx={u * 0.58} cy={u * 0.22} r={1.2} fill="#7a5230" />
+        <circle cx={u * 0.78} cy={u * 0.62} r={1.6} fill="#5c3a1e" />
+        <circle cx={u * 0.36} cy={u * 0.72} r={1.1} fill="#6a4324" />
       </pattern>
       <pattern id="fill-shrub" width={u} height={u} patternUnits="userSpaceOnUse">
         <rect width={u} height={u} fill="rgba(48, 96, 54, 0.4)" />
@@ -612,6 +726,18 @@ function SurfacePatterns({ ppm }: { ppm: number }) {
       <pattern id="fill-path" width={u} height={u} patternUnits="userSpaceOnUse">
         <rect width={u} height={u} fill="rgba(168, 160, 148, 0.42)" />
         <path d={`M 0 ${u / 2} L ${u / 2} 0 L ${u} ${u / 2} L ${u / 2} ${u} Z`} fill="none" stroke="#7a7368" strokeWidth="1" />
+      </pattern>
+      <pattern id="fill-path-diagonal" width={u} height={u} patternUnits="userSpaceOnUse">
+        <rect width={u} height={u} fill="rgba(168, 160, 148, 0.42)" />
+        <path d={`M 0 ${u} L ${u} 0 M 0 ${u / 2} L ${u / 2} 0 M ${u / 2} ${u} L ${u} ${u / 2}`} fill="none" stroke="#7a7368" strokeWidth="1" />
+      </pattern>
+      <pattern id="fill-path-brick" width={u * 2} height={u} patternUnits="userSpaceOnUse">
+        <rect width={u * 2} height={u} fill="rgba(168, 160, 148, 0.42)" />
+        <path d={`M 0 ${u / 2} L ${u * 2} ${u / 2} M ${u} 0 L ${u} ${u / 2} M ${u / 2} ${u / 2} L ${u / 2} ${u} M ${u * 1.5} ${u / 2} L ${u * 1.5} ${u}`} fill="none" stroke="#7a7368" strokeWidth="1" />
+      </pattern>
+      <pattern id="fill-path-honey" width={honey.w} height={honey.h} patternUnits="userSpaceOnUse">
+        <rect width={honey.w} height={honey.h} fill="rgba(168, 160, 148, 0.42)" />
+        <path d={honey.d} fill="none" stroke="#7a7368" strokeWidth="1" />
       </pattern>
       <pattern id="fill-concrete" width={u} height={u} patternUnits="userSpaceOnUse">
         <rect width={u} height={u} fill="rgba(176, 176, 172, 0.5)" />
@@ -626,6 +752,48 @@ function SurfacePatterns({ ppm }: { ppm: number }) {
         <path d={`M 0 0 L ${u} ${u} M ${u} 0 L 0 ${u}`} stroke="#5a524c" strokeWidth="1" />
       </pattern>
     </>
+  )
+}
+
+function PlantMark({ plant, ppm, k, selected }: { plant: Plant; ppm: number; k: number; selected: boolean }) {
+  const r = Math.max(plant.radiusM * ppm, 8 / k)
+  const canopy = plant.kind === 'tree' ? r * 0.55 : r * 0.72
+  return (
+    <g className={selected ? 'plant selected' : 'plant'}>
+      {plant.kind === 'tree' && (
+        <line
+          x1={plant.x}
+          y1={plant.y + r * 0.05}
+          x2={plant.x}
+          y2={plant.y + r * 0.55}
+          stroke="#5a3a22"
+          strokeWidth={Math.max(2 / k, r * 0.08)}
+          pointerEvents="none"
+        />
+      )}
+      <circle cx={plant.x} cy={plant.kind === 'tree' ? plant.y - canopy * 0.2 : plant.y} r={canopy} className="canopy" pointerEvents="none" />
+      <circle data-hit="plant" data-id={plant.id} cx={plant.x} cy={plant.y} r={Math.max(canopy, 10 / k)} fill="transparent" />
+    </g>
+  )
+}
+
+function NoteMark({ note, ppm, selected }: { note: Note; ppm: number; selected: boolean }) {
+  const size = Math.max(note.sizeM * ppm, 8)
+  const width = Math.max(size * note.text.length * 0.62, size * 2)
+  return (
+    <g className={selected ? 'note selected' : 'note'}>
+      <rect data-hit="note" data-id={note.id} x={note.x} y={note.y - size} width={width} height={size * 1.25} fill="transparent" />
+      <text
+        x={note.x}
+        y={note.y}
+        fontSize={size}
+        fontWeight={note.bold ? 700 : undefined}
+        style={note.color ? { fill: note.color } : undefined}
+        pointerEvents="none"
+      >
+        {note.text}
+      </text>
+    </g>
   )
 }
 

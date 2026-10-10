@@ -1,6 +1,6 @@
-import { gridStepM, surfaceOf, SURFACES, DEFAULT_PPM, DEFAULT_SHEET_M } from './landscape.ts'
-import { sectorPath, zonePathD } from './geom.ts'
-import type { Analysis, Doc, Point } from './types.ts'
+import { gridStepM, surfaceOf, SURFACES, DEFAULT_PPM, DEFAULT_SHEET_M, hatchOf, honeycomb } from './landscape.ts'
+import { sectorPath, zoneShapeD } from './geom.ts'
+import type { Analysis, Doc, Plant, Point } from './types.ts'
 
 export const SHEET_DPI = 150
 
@@ -87,7 +87,19 @@ export function contentBounds(doc: Doc, underlay?: { w: number; h: number } | nu
     push({ x: head.x + r, y: head.y + r })
   }
   for (const valve of doc.valves) push(valve)
+  for (const note of doc.notes ?? []) push(note)
+  for (const plant of doc.plants ?? []) {
+    const r = plant.radiusM * ppm
+    push(plant)
+    push({ x: plant.x - r, y: plant.y - r })
+    push({ x: plant.x + r, y: plant.y + r })
+  }
+  for (const measure of doc.measures ?? []) {
+    push(measure.a)
+    push(measure.b)
+  }
   if (doc.source) push(doc.source)
+  if (doc.anchor) push(doc.anchor)
   if (!Number.isFinite(minX)) {
     const sheet = doc.sheetM ?? DEFAULT_SHEET_M
     return { minX: 0, minY: 0, maxX: sheet.w * ppm, maxY: sheet.h * ppm }
@@ -145,10 +157,18 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
   if (layers.landscape) {
     for (const zone of doc.zones) {
       const surface = surfaceOf(zone.kind)
+      const fade = zone.opacity !== undefined ? ` opacity="${fmt(zone.opacity)}"` : ''
       parts.push(
-        `<path d="${xml(zonePathD(zone.points, zone.bends, true))}" fill="url(#sheet-${surface.pattern})" stroke="${surface.stroke}" stroke-width="${fmt(1.3 / k)}"/>`,
+        `<path d="${xml(zoneShapeD(zone.points, zone.bends, zone.holes))}" fill="url(#sheet-${hatchOf(zone)})" fill-rule="evenodd" stroke="${xml(zone.stroke || surface.stroke)}" stroke-width="${fmt((zone.pen ?? 1.3) / k)}"${fade}/>`,
       )
     }
+    for (const plant of doc.plants ?? []) parts.push(plantSvg(plant, ppm, k))
+    for (const note of doc.notes ?? []) {
+      parts.push(
+        `<text x="${fmt(note.x)}" y="${fmt(note.y)}" fill="${xml(note.color || '#1c2822')}" font-size="${fmt(note.sizeM * ppm)}" font-family="sans-serif"${note.bold ? ' font-weight="700"' : ''}>${xml(note.text)}</text>`,
+      )
+    }
+    for (const measure of doc.measures ?? []) parts.push(measureSvg(measure, ppm, k))
   }
   if (layers.spray) {
     for (const head of doc.sprinklers) {
@@ -385,11 +405,18 @@ function gridSvg(bounds: { minX: number; minY: number; maxX: number; maxY: numbe
 
 function patterns(ppm: number): string {
   const u = Math.max(8, ppm * 0.7)
+  const honey = honeycomb(u)
+  const grass = `M 0 ${u * 0.7} L ${u * 0.35} ${u * 0.15} M ${u * 0.45} ${u} L ${u} ${u * 0.35}`
   return `<defs>
-    <pattern id="sheet-lawn" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(88,150,78,0.34)"/><path d="M 0 ${u * 0.7} L ${u * 0.35} ${u * 0.15} M ${u * 0.45} ${u} L ${u} ${u * 0.35}" stroke="#3d7a38" stroke-width="1.2"/></pattern>
+    <pattern id="sheet-lawn" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(88,150,78,0.34)"/><path d="${grass}" stroke="#3d7a38" stroke-width="1.2"/></pattern>
+    <pattern id="sheet-lawn-stripe" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(88,150,78,0.34)"/><path d="${grass}" stroke="#3d7a38" stroke-width="1.2"/><path d="M 0 ${u * 0.33} L ${u} ${u * 0.33} M 0 ${u * 0.66} L ${u} ${u * 0.66}" stroke="#2a6b32" stroke-width="1.1"/></pattern>
     <pattern id="sheet-bed" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(196,132,52,0.34)"/><circle cx="${u * 0.3}" cy="${u * 0.35}" r="1.6" fill="#c45b5b"/><circle cx="${u * 0.7}" cy="${u * 0.7}" r="1.4" fill="#d4a03a"/></pattern>
+    <pattern id="sheet-bed-mulch" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(150,104,52,0.45)"/><circle cx="${u * 0.22}" cy="${u * 0.28}" r="1.5" fill="#6a4324"/><circle cx="${u * 0.58}" cy="${u * 0.22}" r="1.2" fill="#7a5230"/><circle cx="${u * 0.78}" cy="${u * 0.62}" r="1.6" fill="#5c3a1e"/><circle cx="${u * 0.36}" cy="${u * 0.72}" r="1.1" fill="#6a4324"/></pattern>
     <pattern id="sheet-shrub" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(48,96,54,0.4)"/><circle cx="${u * 0.5}" cy="${u * 0.5}" r="${u * 0.22}" fill="none" stroke="#24522c" stroke-width="1.2"/></pattern>
-    <pattern id="sheet-path" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(168,160,148,0.42)"/></pattern>
+    <pattern id="sheet-path" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(168,160,148,0.42)"/><path d="M 0 ${u / 2} L ${u / 2} 0 L ${u} ${u / 2} L ${u / 2} ${u} Z" fill="none" stroke="#7a7368"/></pattern>
+    <pattern id="sheet-path-diagonal" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(168,160,148,0.42)"/><path d="M 0 ${u} L ${u} 0 M 0 ${u / 2} L ${u / 2} 0 M ${u / 2} ${u} L ${u} ${u / 2}" fill="none" stroke="#7a7368"/></pattern>
+    <pattern id="sheet-path-brick" width="${u * 2}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u * 2}" height="${u}" fill="rgba(168,160,148,0.42)"/><path d="M 0 ${u / 2} L ${u * 2} ${u / 2} M ${u} 0 L ${u} ${u / 2} M ${u / 2} ${u / 2} L ${u / 2} ${u} M ${u * 1.5} ${u / 2} L ${u * 1.5} ${u}" fill="none" stroke="#7a7368"/></pattern>
+    <pattern id="sheet-path-honey" width="${fmt(honey.w)}" height="${fmt(honey.h)}" patternUnits="userSpaceOnUse"><rect width="${fmt(honey.w)}" height="${fmt(honey.h)}" fill="rgba(168,160,148,0.42)"/><path d="${honey.d}" fill="none" stroke="#7a7368"/></pattern>
     <pattern id="sheet-concrete" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(176,176,172,0.5)"/><path d="M 0 ${u} L ${u} 0" stroke="#9a9a96"/></pattern>
     <pattern id="sheet-water" width="${u * 1.4}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u * 1.4}" height="${u}" fill="rgba(72,140,188,0.32)"/></pattern>
     <pattern id="sheet-building" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(110,100,92,0.5)"/><path d="M 0 0 L ${u} ${u} M ${u} 0 L 0 ${u}" stroke="#5a524c"/></pattern>
@@ -405,6 +432,36 @@ function pipeColor(od: number | null, status: string): string {
   if (od === 40) return '#7a3150'
   if (od === 50) return '#4d457f'
   return '#243028'
+}
+
+function measureSvg(measure: { a: Point; b: Point }, ppm: number, k: number): string {
+  const dx = measure.b.x - measure.a.x
+  const dy = measure.b.y - measure.a.y
+  const span = Math.hypot(dx, dy) || 1
+  const length = span / ppm
+  const label = length >= 10 ? length.toFixed(1) : length.toFixed(2)
+  const tick = 7 / k
+  const ox = (-dy / span) * tick
+  const oy = (dx / span) * tick
+  const midX = (measure.a.x + measure.b.x) / 2 + ox * (12 / 7)
+  const midY = (measure.a.y + measure.b.y) / 2 + oy * (12 / 7)
+  const stroke = `stroke="#8d2b1f" stroke-width="${fmt(1.3 / k)}"`
+  return [
+    `<line x1="${fmt(measure.a.x)}" y1="${fmt(measure.a.y)}" x2="${fmt(measure.b.x)}" y2="${fmt(measure.b.y)}" ${stroke}/>`,
+    `<line x1="${fmt(measure.a.x - ox)}" y1="${fmt(measure.a.y - oy)}" x2="${fmt(measure.a.x + ox)}" y2="${fmt(measure.a.y + oy)}" ${stroke}/>`,
+    `<line x1="${fmt(measure.b.x - ox)}" y1="${fmt(measure.b.y - oy)}" x2="${fmt(measure.b.x + ox)}" y2="${fmt(measure.b.y + oy)}" ${stroke}/>`,
+    `<text x="${fmt(midX)}" y="${fmt(midY)}" fill="#8d2b1f" font-size="${fmt(11 / k)}" text-anchor="middle" font-family="sans-serif">${label} м</text>`,
+  ].join('')
+}
+
+function plantSvg(plant: Plant, ppm: number, k: number): string {
+  const r = Math.max(plant.radiusM * ppm, 4)
+  const canopy = plant.kind === 'tree' ? r * 0.55 : r * 0.72
+  const cy = plant.kind === 'tree' ? plant.y - canopy * 0.2 : plant.y
+  const trunk = plant.kind === 'tree'
+    ? `<line x1="${fmt(plant.x)}" y1="${fmt(plant.y)}" x2="${fmt(plant.x)}" y2="${fmt(plant.y + r * 0.55)}" stroke="#5a3a22" stroke-width="${fmt(Math.max(1.4 / k, r * 0.08))}"/>`
+    : ''
+  return `${trunk}<circle cx="${fmt(plant.x)}" cy="${fmt(cy)}" r="${fmt(canopy)}" fill="#2f6a34" stroke="#1d4a24" stroke-width="${fmt(1.2 / k)}"/>`
 }
 
 function xml(value: string): string {

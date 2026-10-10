@@ -1,7 +1,7 @@
-import { DEFAULT_PPM, DEFAULT_SHEET_M, surfaceOf } from './landscape.ts'
+import { DEFAULT_PPM, DEFAULT_SHEET_M, HATCHES, surfaceOf } from './landscape.ts'
 import { nozzleById } from './nozzles.ts'
 import { DEFAULT_SERIES, seriesById } from './pipes.ts'
-import type { Climate, Doc, Drip, Pipe, Point, Slope, Soil, Source, Sprinkler, Trench, Valve, Zone, ZoneKind } from './types.ts'
+import type { Climate, Doc, Drip, HatchId, Measure, Note, Pipe, Plant, PlantKind, Point, Slope, Soil, Source, Sprinkler, Trench, Valve, Zone, ZoneKind } from './types.ts'
 
 export const SNAP_PX = 14
 
@@ -20,6 +20,11 @@ export function emptyDoc(): Doc {
     drips: [],
     source: null,
     trench: { widthM: 0.3, depthM: 0.4 },
+    notes: [],
+    plants: [],
+    measures: [],
+    snapVertex: true,
+    ortho: false,
   }
 }
 
@@ -139,16 +144,29 @@ export function parseDoc(value: unknown): Doc | null {
     if (doseMm < 0 || doseMm > 40) return null
     const bends = parseBends(item.bends, pts.length)
     if (item.bends !== undefined && !bends) return null
+    const holes = item.holes === undefined ? undefined : parseHoles(item.holes)
+    if (item.holes !== undefined && !holes) return null
+    const hatch = parseHatch(item.hatch, item.kind)
+    if (hatch === null) return null
+    const stroke = parseHex(item.stroke)
+    const opacity = parseOpacity(item.opacity)
+    const pen = parsePen(item.pen)
+    if (stroke === null || opacity === null || pen === null) return null
     zones.push({
       id,
       name,
       kind: item.kind,
       points: pts,
       ...(bends ? { bends } : {}),
+      ...(holes && holes.length ? { holes } : {}),
       doseMm,
       soil: asSoil(item.soil),
       slope: asSlope(item.slope),
       climate: asClimate(item.climate),
+      ...(hatch ? { hatch } : {}),
+      ...(stroke ? { stroke } : {}),
+      ...(opacity !== undefined ? { opacity } : {}),
+      ...(pen !== undefined ? { pen } : {}),
     })
   }
 
@@ -196,7 +214,10 @@ export function parseDoc(value: unknown): Doc | null {
 
   const valves = parseValves(raw.valves)
   const drips = parseDrips(raw.drips)
-  if (!valves || !drips) return null
+  const notes = parseNotes(raw.notes)
+  const plants = parsePlants(raw.plants)
+  const measures = parseMeasures(raw.measures)
+  if (!valves || !drips || !notes || !plants || !measures) return null
 
   const pipeSeries = seriesById(typeof raw.pipeSeries === 'string' ? raw.pipeSeries : DEFAULT_SERIES).id
   const trench = parseTrench(raw.trench)
@@ -208,6 +229,16 @@ export function parseDoc(value: unknown): Doc | null {
   const snapGrid = raw.snapGrid === true
   if (raw.gridOn !== undefined && typeof raw.gridOn !== 'boolean') return null
   if (raw.snapGrid !== undefined && typeof raw.snapGrid !== 'boolean') return null
+  if (raw.snapVertex !== undefined && typeof raw.snapVertex !== 'boolean') return null
+  const snapVertex = raw.snapVertex !== false
+  if (raw.ortho !== undefined && typeof raw.ortho !== 'boolean') return null
+  const ortho = raw.ortho === true
+  let anchor: Point | undefined
+  if (raw.anchor !== undefined && raw.anchor !== null) {
+    const place = point(raw.anchor)
+    if (!place) return null
+    anchor = place
+  }
 
   return {
     version: 1,
@@ -223,7 +254,105 @@ export function parseDoc(value: unknown): Doc | null {
     drips,
     source,
     trench,
+    notes,
+    plants,
+    measures,
+    snapVertex,
+    ortho,
+    ...(anchor ? { anchor } : {}),
   }
+}
+
+function parseHex(value: unknown): string | undefined | null {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') return null
+  const hex = value.trim().toLowerCase()
+  return /^#[0-9a-f]{6}$/.test(hex) ? hex : undefined
+}
+
+function parseOpacity(value: unknown): number | undefined | null {
+  if (value === undefined) return undefined
+  const opacity = num(value)
+  if (opacity === null) return null
+  if (opacity < 0.15 || opacity > 1) return null
+  return opacity
+}
+
+function parsePen(value: unknown): number | undefined | null {
+  if (value === undefined) return undefined
+  const pen = num(value)
+  if (pen === null) return null
+  if (pen < 0.6 || pen > 8) return null
+  return pen
+}
+
+/** Пусто — без штриховки. Чужая строка отбрасывается. Не строка портит весь файл. */
+function parseHatch(value: unknown, kind: ZoneKind): HatchId | undefined | null {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') return null
+  return HATCHES.find((item) => item.id === value && item.kind === kind)?.id
+}
+
+function parseMeasures(value: unknown): Measure[] | null {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > 400) return null
+  const measures: Measure[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') return null
+    const id = text(item.id, 80)
+    const a = point(item.a)
+    const b = point(item.b)
+    if (!id || !a || !b) return null
+    measures.push({ id, a, b })
+  }
+  return measures
+}
+
+function parseNotes(value: unknown): Note[] | null {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > 400) return null
+  const notes: Note[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') return null
+    const id = text(item.id, 80)
+    const body = text(item.text, 80)
+    const x = num(item.x)
+    const y = num(item.y)
+    const sizeM = num(item.sizeM)
+    if (!id || !body || x === null || y === null || sizeM === null) return null
+    if (sizeM < 0.15 || sizeM > 5) return null
+    const color = parseHex(item.color)
+    if (color === null) return null
+    if (item.bold !== undefined && typeof item.bold !== 'boolean') return null
+    notes.push({
+      id,
+      x,
+      y,
+      text: body,
+      sizeM,
+      ...(color ? { color } : {}),
+      ...(item.bold === true ? { bold: true } : {}),
+    })
+  }
+  return notes
+}
+
+function parsePlants(value: unknown): Plant[] | null {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > 800) return null
+  const plants: Plant[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') return null
+    const id = text(item.id, 80)
+    const x = num(item.x)
+    const y = num(item.y)
+    const radiusM = num(item.radiusM)
+    const kind = item.kind === 'tree' || item.kind === 'bush' ? item.kind as PlantKind : null
+    if (!id || !kind || x === null || y === null || radiusM === null) return null
+    if (radiusM < 0.2 || radiusM > 8) return null
+    plants.push({ id, kind, x, y, radiusM })
+  }
+  return plants
 }
 
 function parseSheet(value: unknown): { w: number; h: number } | null {
@@ -233,6 +362,17 @@ function parseSheet(value: unknown): { w: number; h: number } | null {
   const h = num((value as { h: number }).h)
   if (w === null || h === null || w < 10 || w > 2000 || h < 10 || h > 2000) return null
   return { w, h }
+}
+
+function parseHoles(value: unknown): Point[][] | null {
+  if (!Array.isArray(value) || value.length > 40) return null
+  const holes: Point[][] = []
+  for (const ring of value) {
+    const pts = points(ring, 3, 500)
+    if (!pts) return null
+    holes.push(pts)
+  }
+  return holes
 }
 
 function parseBends(value: unknown, count: number): (Point | null)[] | null {

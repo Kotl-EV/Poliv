@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { analyze } from './analyze.ts'
+import { emptyDoc } from './doc.ts'
 import { exampleDoc } from './example.ts'
 import { pdfFromJpegPages } from './pdf.ts'
 import { buildSheetPages, contentBounds, DEFAULT_SHEET_LAYERS, mmToPx, paperOf } from './sheet.ts'
@@ -55,6 +56,57 @@ test('turning a layer off drops that geometry from the sheet', () => {
   assert.equal(/rgba\(47,122,72/.test(off[0].svg), false)
   const on = buildSheetPages(doc, analysis, { title: 'Тест', date: '01.01.2026', includeSpec: false })
   assert.match(on[0].svg, /Дождеватель/)
+})
+
+test('a hatch and a measure reach the printed sheet', () => {
+  const doc = {
+    ...emptyDoc(),
+    zones: [{
+      id: 'z',
+      name: 'Дорожка',
+      kind: 'path' as const,
+      points: [{ x: 0, y: 0 }, { x: 80, y: 0 }, { x: 80, y: 40 }],
+      doseMm: 0,
+      soil: 'loam' as const,
+      slope: 'flat' as const,
+      climate: 'open' as const,
+      hatch: 'path-brick' as const,
+    }],
+    measures: [{ id: 'm', a: { x: 0, y: 0 }, b: { x: 200, y: 0 } }],
+  }
+  const box = contentBounds(doc)
+  assert.ok(box.maxX >= 200)
+  const pages = buildSheetPages(doc, analyze(doc), { title: 'Т', date: '01.01.2026', includeSpec: false })
+  assert.match(pages[0].svg, /sheet-path-brick/)
+  assert.match(pages[0].svg, /10\.0 м/)
+})
+
+test('stroke, opacity, anchor and a coloured note reach the sheet', () => {
+  const doc = {
+    ...emptyDoc(),
+    anchor: { x: -50, y: 5 },
+    zones: [{
+      id: 'z',
+      name: 'Газон',
+      kind: 'lawn' as const,
+      points: [{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 40 }],
+      doseMm: 6,
+      soil: 'loam' as const,
+      slope: 'flat' as const,
+      climate: 'open' as const,
+      stroke: '#8d2b1f',
+      opacity: 0.4,
+      pen: 3,
+    }],
+    notes: [{ id: 'n', x: 5, y: 5, text: 'Кран', sizeM: 0.4, color: '#2a6288', bold: true }],
+  }
+  const box = contentBounds(doc)
+  assert.ok(box.minX < -40)
+  const svg = buildSheetPages(doc, analyze(doc), { title: 'Т', date: '01.01.2026', includeSpec: false })[0].svg
+  assert.match(svg, /stroke="#8d2b1f"/)
+  assert.match(svg, /opacity="0\.4"/)
+  assert.match(svg, /fill="#2a6288"/)
+  assert.match(svg, /font-weight="700"/)
 })
 
 test('jpeg pages become a pdf with one image per page', () => {

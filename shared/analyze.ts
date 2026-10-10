@@ -1,5 +1,5 @@
 import { climateFactor, cyclePlan, defaultDose, intakeMmH, SNAP_PX } from './doc.ts'
-import { dist, pointInPolygon, polygonAreaPx } from './geom.ts'
+import { dist, pointInZone, zoneAreaPx } from './geom.ts'
 import { nozzleById } from './nozzles.ts'
 import { barToHeadM, headLossM, MIN_SPRINKLER_BAR, pickPipe, seriesById } from './pipes.ts'
 import type { Analysis, Doc, Drip, Point, SegmentResult } from './types.ts'
@@ -75,13 +75,13 @@ function nearest(p: Point, nodes: Node[]): { node: Node; distance: number } | nu
 
 function zoneRows(doc: Doc): Analysis['zones'] {
   return doc.zones.map((zone) => {
-    const areaM2 = doc.pxPerMeter ? polygonAreaPx(zone.points) / (doc.pxPerMeter * doc.pxPerMeter) : null
+    const areaM2 = doc.pxPerMeter ? zoneAreaPx(zone.points, zone.holes) / (doc.pxPerMeter * doc.pxPerMeter) : null
     let flow = 0
     for (const sprinkler of doc.sprinklers) {
-      if (pointInPolygon(sprinkler, zone.points)) flow += sprinkler.flowLph
+      if (pointInZone(sprinkler, zone.points, zone.holes)) flow += sprinkler.flowLph
     }
     for (const drip of doc.drips) {
-      if (pointInPolygon(centroid(drip.points), zone.points)) flow += dripMeasure(drip, doc.pxPerMeter).flowLph
+      if (pointInZone(centroid(drip.points), zone.points, zone.holes)) flow += dripMeasure(drip, doc.pxPerMeter).flowLph
     }
     const precipMmH = areaM2 && areaM2 > 0 ? flow / areaM2 : null
     const doseMm = zone.doseMm >= 0 && zone.doseMm <= 40 ? zone.doseMm : defaultDose(zone.kind)
@@ -492,7 +492,7 @@ function withStationRuntime(
     if (!station) return
     hits.push({
       station,
-      zoneIds: doc.zones.filter((zone) => pointInPolygon(point, zone.points)).map((zone) => zone.id),
+      zoneIds: doc.zones.filter((zone) => pointInZone(point, zone.points, zone.holes)).map((zone) => zone.id),
     })
   }
   for (const sprinkler of doc.sprinklers) {

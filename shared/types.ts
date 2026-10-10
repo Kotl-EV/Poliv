@@ -1,4 +1,7 @@
 import type { PipeSeriesId } from './pipes.ts'
+import type { HatchId } from './landscape.ts'
+
+export type { HatchId }
 
 export type Point = { x: number; y: number }
 
@@ -14,10 +17,20 @@ export type Zone = {
   points: Point[]
   /** Quadratic control for edge i → i+1. Null = straight. */
   bends?: (Point | null)[]
+  /** Вырезы внутри контура, против часовой или по часовой — без разницы. */
+  holes?: Point[][]
   doseMm: number
   soil: Soil
   slope: Slope
   climate: Climate
+  /** Штриховка. Пусто — рисунок по умолчанию для kind. */
+  hatch?: HatchId
+  /** Прозрачность контура, 0.15–1. Пусто — без дополнительного приглушения. */
+  opacity?: number
+  /** Обводка #rrggbb. Пусто — цвет поверхности. */
+  stroke?: string
+  /** Толщина обводки в пикселях листа. Пусто — обычная. */
+  pen?: number
 }
 
 export type Sprinkler = {
@@ -62,6 +75,33 @@ export type Trench = {
   depthM: number
 }
 
+export type Note = {
+  id: string
+  x: number
+  y: number
+  text: string
+  sizeM: number
+  /** Цвет #rrggbb. Пусто — чернила чертежа. */
+  color?: string
+  bold?: boolean
+}
+
+export type PlantKind = 'tree' | 'bush'
+
+export type Plant = {
+  id: string
+  kind: PlantKind
+  x: number
+  y: number
+  radiusM: number
+}
+
+export type Measure = {
+  id: string
+  a: Point
+  b: Point
+}
+
 export type Doc = {
   version: 1
   pxPerMeter: number | null
@@ -76,6 +116,18 @@ export type Doc = {
   drips: Drip[]
   source: Source | null
   trench: Trench
+  /** Подписи на чертеже. Пусто у старых файлов. */
+  notes?: Note[]
+  /** Деревья и кусты, только рисунок. */
+  plants?: Plant[]
+  /** Размеры, которые остаются на чертеже. */
+  measures?: Measure[]
+  /** Привязка к вершинам. Пусто значит включена. */
+  snapVertex?: boolean
+  /** Точка, вокруг которой крутят и масштабируют контур. */
+  anchor?: Point
+  /** Ортогональ без Shift. Пусто значит выключена. */
+  ortho?: boolean
 }
 
 export type SegmentStatus = 'ok' | 'unfed' | 'cycle'

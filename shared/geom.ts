@@ -32,6 +32,68 @@ export function pointInPolygon(p: Point, points: Point[]): boolean {
   return inside
 }
 
+/** Площадь контура за вычетом отверстий. */
+export function zoneAreaPx(points: Point[], holes?: Point[][] | null): number {
+  const holeArea = (holes ?? []).reduce((sum, hole) => sum + polygonAreaPx(hole), 0)
+  return Math.max(0, polygonAreaPx(points) - holeArea)
+}
+
+/** Точка внутри контура и снаружи его отверстий. */
+export function pointInZone(point: Point, points: Point[], holes?: Point[][] | null): boolean {
+  if (!pointInPolygon(point, points)) return false
+  return !(holes ?? []).some((hole) => hole.length >= 3 && pointInPolygon(point, hole))
+}
+
+export function zoneShapeD(points: Point[], bends?: (Point | null)[] | null, holes?: Point[][] | null): string {
+  let d = zonePathD(points, bends, true)
+  for (const hole of holes ?? []) d += zonePathD(hole, null, true)
+  return d
+}
+
+export function boundsOf(points: Point[]): { minX: number; minY: number; maxX: number; maxY: number; w: number; h: number } {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const point of points) {
+    minX = Math.min(minX, point.x)
+    minY = Math.min(minY, point.y)
+    maxX = Math.max(maxX, point.x)
+    maxY = Math.max(maxY, point.y)
+  }
+  return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY }
+}
+
+export type AlignSide = 'left' | 'right' | 'top' | 'bottom' | 'center'
+
+/** Сдвиг, после которого сторона moving совпадает со стороной target. Верх — меньший y. */
+export function alignShift(
+  moving: { minX: number; minY: number; maxX: number; maxY: number },
+  target: { minX: number; minY: number; maxX: number; maxY: number },
+  side: AlignSide,
+): { dx: number; dy: number } {
+  if (side === 'left') return { dx: target.minX - moving.minX, dy: 0 }
+  if (side === 'right') return { dx: target.maxX - moving.maxX, dy: 0 }
+  if (side === 'top') return { dx: 0, dy: target.minY - moving.minY }
+  if (side === 'bottom') return { dx: 0, dy: target.maxY - moving.maxY }
+  return {
+    dx: (target.minX + target.maxX) / 2 - (moving.minX + moving.maxX) / 2,
+    dy: (target.minY + target.maxY) / 2 - (moving.minY + moving.maxY) / 2,
+  }
+}
+
+/** Растягивает точку так, чтобы габарит контура стал width × height. */
+export function mapToSize(
+  point: Point,
+  box: { minX: number; minY: number; w: number; h: number },
+  width: number,
+  height: number,
+): Point {
+  const sx = box.w > 1e-9 ? width / box.w : 1
+  const sy = box.h > 1e-9 ? height / box.h : 1
+  return { x: box.minX + (point.x - box.minX) * sx, y: box.minY + (point.y - box.minY) * sy }
+}
+
 /** 0° смотрит вверх, угол растёт по часовой. */
 export function polar(origin: Point, radius: number, bearingDeg: number): Point {
   const rad = (bearingDeg * Math.PI) / 180
@@ -193,14 +255,14 @@ export function sampleQuad(a: Point, control: Point, b: Point, steps = 8): Point
   return out
 }
 
-export function outlineOf(points: Point[], bends?: (Point | null)[] | null): Point[] {
+export function outlineOf(points: Point[], bends?: (Point | null)[] | null, steps = 8): Point[] {
   if (points.length === 0) return []
   const out: Point[] = [points[0]]
   for (let i = 0; i < points.length; i++) {
     const a = points[i]
     const b = points[(i + 1) % points.length]
     const bend = bends?.[i]
-    if (bend) out.push(...sampleQuad(a, bend, b, 8))
+    if (bend) out.push(...sampleQuad(a, bend, b, steps))
     else if (i < points.length - 1 || points.length >= 3) out.push(b)
   }
   if (points.length >= 3) {
@@ -208,6 +270,16 @@ export function outlineOf(points: Point[], bends?: (Point | null)[] | null): Poi
     if (last && dist(last, points[0]) < 1e-6) out.pop()
   }
   return out
+}
+
+/** Дуги становятся ломаной. null — даже грубый шаг не влезает в max точек. */
+export function flattenRing(points: Point[], bends?: (Point | null)[] | null, max = 480): Point[] | null {
+  if (!bends?.some(Boolean)) return points.slice()
+  for (const steps of [8, 4, 2, 1]) {
+    const ring = outlineOf(points, bends, steps)
+    if (ring.length >= 3 && ring.length <= max) return ring
+  }
+  return null
 }
 
 export function polylineLength(points: Point[]): number {
@@ -360,6 +432,124 @@ export function strokeToPolygon(points: Point[], radius: number): Point[] {
     ...right.slice().reverse(),
     ...cap(start, subPoints(start, line[1])),
   ]
+}
+
+function signedRingArea(points: Point[]): number {
+  let sum = 0
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i]
+    const b = points[(i + 1) % points.length]
+    sum += a.x * b.y - b.x * a.y
+  }
+  return sum / 2
+}
+
+function lineHit(a: Point, b: Point, c: Point, d: Point): Point | null {
+  const rx = b.x - a.x
+  const ry = b.y - a.y
+  const sx = d.x - c.x
+  const sy = d.y - c.y
+  const den = rx * sy - ry * sx
+  if (Math.abs(den) < 1e-9) return null
+  const t = ((c.x - a.x) * sy - (c.y - a.y) * sx) / den
+  return { x: a.x + t * rx, y: a.y + t * ry }
+}
+
+function properCross(a: Point, b: Point, c: Point, d: Point): boolean {
+  const rx = b.x - a.x
+  const ry = b.y - a.y
+  const sx = d.x - c.x
+  const sy = d.y - c.y
+  const den = rx * sy - ry * sx
+  if (Math.abs(den) < 1e-9) return false
+  const t = ((c.x - a.x) * sy - (c.y - a.y) * sx) / den
+  const u = ((c.x - a.x) * ry - (c.y - a.y) * rx) / den
+  return t > 1e-4 && t < 1 - 1e-4 && u > 1e-4 && u < 1 - 1e-4
+}
+
+function ringCrosses(points: Point[]): boolean {
+  const n = points.length
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const gap = Math.min(Math.abs(i - j), n - Math.abs(i - j))
+      if (gap <= 1) continue
+      if (properCross(points[i], points[(i + 1) % n], points[j], points[(j + 1) % n])) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Смещение замкнутого контура. Положительный delta раздувает фигуру наружу.
+ * null — смещение сломало контур или съело его целиком.
+ */
+export function offsetRing(points: Point[], delta: number): Point[] | null {
+  if (points.length < 3 || !Number.isFinite(delta)) return null
+  if (Math.abs(delta) < 1e-9) return points.map((point) => ({ ...point }))
+  const ring = signedRingArea(points) < 0 ? [...points].reverse() : [...points]
+  const lines: { a: Point; b: Point }[] = []
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i]
+    const b = ring[(i + 1) % ring.length]
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const len = Math.hypot(dx, dy)
+    if (len < 1e-6) continue
+    const nx = (dy / len) * delta
+    const ny = (-dx / len) * delta
+    lines.push({ a: { x: a.x + nx, y: a.y + ny }, b: { x: b.x + nx, y: b.y + ny } })
+  }
+  if (lines.length < 3) return null
+  const out: Point[] = []
+  const limit = Math.max(4 * Math.abs(delta), 1e-6)
+  for (let i = 0; i < lines.length; i++) {
+    const prev = lines[(i - 1 + lines.length) % lines.length]
+    const cur = lines[i]
+    const hit = lineHit(prev.a, prev.b, cur.a, cur.b)
+    const origin = ring[i % ring.length]
+    if (!hit || dist(hit, origin) > limit) {
+      out.push(prev.b, cur.a)
+      continue
+    }
+    out.push(hit)
+  }
+  const cleaned: Point[] = []
+  for (const point of out) {
+    const last = cleaned[cleaned.length - 1]
+    if (!last || dist(last, point) > 0.05) cleaned.push(point)
+  }
+  if (cleaned.length >= 2 && dist(cleaned[0], cleaned[cleaned.length - 1]) <= 0.05) cleaned.pop()
+  if (cleaned.length < 3) return null
+  if (signedRingArea(cleaned) <= 1) return null
+  if (ringCrosses(cleaned)) return null
+  if (offsetCollapsed(ring, cleaned, delta)) return null
+  return cleaned
+}
+
+/** Смещение, которое вывернуло или съело фигуру, не оставляя внутренней полосы. */
+function offsetCollapsed(original: Point[], result: Point[], delta: number): boolean {
+  const gap = Math.abs(delta)
+  let checks = 0
+  let hits = 0
+  for (let i = 0; i < original.length; i++) {
+    const a = original[i]
+    const b = original[(i + 1) % original.length]
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const len = Math.hypot(dx, dy)
+    if (len < 1e-6) continue
+    const inward = delta < 0 ? gap * 1.25 : gap * 0.45
+    const side = delta < 0 ? 1 : -1
+    const point = {
+      x: (a.x + b.x) / 2 + (-dy / len) * inward * side,
+      y: (a.y + b.y) / 2 + (dx / len) * inward * side,
+    }
+    if (delta < 0 && !pointInPolygon(point, original)) continue
+    checks += 1
+    if (pointInPolygon(point, result)) hits += 1
+  }
+  if (checks === 0) return true
+  return hits === 0
 }
 
 export function sectorPath(origin: Point, radius: number, rotationDeg: number, arcDeg: number): string {

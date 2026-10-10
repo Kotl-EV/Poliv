@@ -205,7 +205,7 @@ input, select {
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
-  max-width: min(720px, calc(100% - 24px));
+  max-width: min(980px, calc(100% - 24px));
   background: #f7f3ea;
   border: 1px solid #c9bfae;
   padding: 8px 10px;
@@ -213,6 +213,7 @@ input, select {
 }
 .ops .inline { display: flex; align-items: center; gap: 6px; }
 .ops .inline input { width: 64px; }
+.ops .inline input.wide { width: 160px; }
 .ws-status {
   grid-column: 1 / -1;
   display: flex;
@@ -303,6 +304,25 @@ input, select {
 .drip-hit { stroke: transparent; }
 .handle, .scale-point { fill: #fffdf8; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .scale-point { stroke: #8d2b1f; }
+.guide { stroke: #8d2b1f; stroke-width: 1.6; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; }
+.measure { fill: none; stroke: #8d2b1f; stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+.measure.selected { stroke: #b86a09; }
+.hatch-row, .ink-row { display: flex; flex-wrap: wrap; gap: 4px; flex: 1 1 100%; align-items: center; }
+.ink {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.28);
+}
+.ink.active { outline: 2px solid #1c2822; outline-offset: 1px; }
+.anchor { fill: none; stroke: #8d2b1f; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.hatch-row .tool { flex: 1 1 auto; padding: 4px 6px; font-size: 12px; }
+.side-field { font-size: 12px; color: #3c3834; }
+.side-field input { width: 100%; box-sizing: border-box; }
+.plant .canopy { fill: #2f6a34; stroke: #1d4a24; stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+.plant.selected .canopy { stroke: #b86a09; stroke-width: 2.4; }
+.note text { fill: #1c2822; font-family: "Segoe UI", sans-serif; }
+.note.selected text { fill: #8d2b1f; }
 .side {
   overflow: auto;
   background: #f7f3ea;
