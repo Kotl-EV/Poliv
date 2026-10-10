@@ -40,7 +40,8 @@ export type PlantPaint = { leaf: string; ink: string; vein: string; trunk: strin
 
 export type PlantDot = { x: number; y: number; r: number; bloom?: boolean }
 
-export type PlantGlyph = { fills: string[]; shade?: number[]; veins: string[]; dots: PlantDot[] }
+/** inked — сколько первых заливок получают обводку на плане. Дальше только цвет, иначе мелкая листва слипается. */
+export type PlantGlyph = { fills: string[]; shade?: number[]; veins: string[]; dots: PlantDot[]; inked?: number }
 
 const PAINT: Record<PlantForm, PlantPaint> = {
   leaf: { leaf: '#3e7c3a', ink: '#1b4a22', vein: '#2c6430', trunk: '#6b4423', accent: '#e7b7c6' },
@@ -51,12 +52,12 @@ const PAINT: Record<PlantForm, PlantPaint> = {
   weep: { leaf: '#4c8648', ink: '#1e4c28', vein: '#3a7040', trunk: '#6b4423', accent: '#e7b7c6' },
   palm: { leaf: '#2f8a4a', ink: '#145c2c', vein: '#1f6e38', trunk: '#8a5a2a', accent: '#d8ecb0' },
   clump: { leaf: '#3d7840', ink: '#1a4624', vein: '#2d6234', trunk: '#6b4423', accent: '#e7b7c6' },
-  ball: { leaf: '#4e8c46', ink: '#1e5228', vein: '#3a7440', trunk: '#6b4423', accent: '#f0c3d0' },
-  wide: { leaf: '#468044', ink: '#1a4a26', vein: '#326838', trunk: '#6b4423', accent: '#f0c3d0' },
-  needle: { leaf: '#2a5840', ink: '#123226', vein: '#1e4634', trunk: '#4a3420', accent: '#d7e2c8' },
-  bloom: { leaf: '#4a8648', ink: '#1c4e28', vein: '#356c3c', trunk: '#6b4423', accent: '#e7a0b8' },
-  group: { leaf: '#3f7a42', ink: '#184422', vein: '#2e6236', trunk: '#6b4423', accent: '#f2d2a8' },
-  cushion: { leaf: '#5a9460', ink: '#24562e', vein: '#467850', trunk: '#6b4423', accent: '#f0c3d0' },
+  ball: { leaf: '#3f8f48', ink: '#1a4e24', vein: '#2f6e38', trunk: '#6a4424', accent: '#f0c3d0' },
+  wide: { leaf: '#3c7c3e', ink: '#173f20', vein: '#2c6234', trunk: '#5c3a1e', accent: '#d24a3a' },
+  needle: { leaf: '#1f6a4e', ink: '#0e3428', vein: '#184838', trunk: '#4a3420', accent: '#c5d4bc' },
+  bloom: { leaf: '#3e8244', ink: '#1a4c24', vein: '#2f6a36', trunk: '#6b4423', accent: '#e25d86' },
+  group: { leaf: '#3a7640', ink: '#163e20', vein: '#2a5e32', trunk: '#6b4423', accent: '#e7c27a' },
+  cushion: { leaf: '#6aaa62', ink: '#2a5e32', vein: '#4e8a50', trunk: '#6b4423', accent: '#d9a0c4' },
   oak: { leaf: '#2f6a32', ink: '#14381c', vein: '#245628', trunk: '#5c3a1e', accent: '#e7b7c6' },
   pine: { leaf: '#3d7a48', ink: '#1a4a28', vein: '#2f6840', trunk: '#6b4423', accent: '#d7e2c8' },
   spruce: { leaf: '#1a4030', ink: '#0e2c22', vein: '#163628', trunk: '#4a3420', accent: '#d7e2c8' },
@@ -65,12 +66,12 @@ const PAINT: Record<PlantForm, PlantPaint> = {
   olive: { leaf: '#8d9a62', ink: '#3e4a28', vein: '#667244', trunk: '#6b4423', accent: '#e7e2c0' },
   cypress: { leaf: '#1d4634', ink: '#10281c', vein: '#183828', trunk: '#4a3420', accent: '#d7e2c8' },
   bamboo: { leaf: '#7aaa3a', ink: '#3a6218', vein: '#5c8a28', trunk: '#c4a05a', accent: '#d8ecb0' },
-  hedge: { leaf: '#3a7840', ink: '#184422', vein: '#2c6234', trunk: '#6b4423', accent: '#e7b7c6' },
-  rose: { leaf: '#3f7a34', ink: '#1a441c', vein: '#2e6230', trunk: '#6b4423', accent: '#c4365a' },
-  box: { leaf: '#2f6e3a', ink: '#14341c', vein: '#245c30', trunk: '#6b4423', accent: '#d7e2c8' },
-  fern: { leaf: '#4a9a48', ink: '#1e5a28', vein: '#3a8438', trunk: '#5c3a1e', accent: '#d8ecb0' },
-  grass: { leaf: '#6aaa4a', ink: '#2e6a28', vein: '#4e8a38', trunk: '#c4a05a', accent: '#e7e2c0' },
-  spiral: { leaf: '#3d7a44', ink: '#184422', vein: '#2a5c34', trunk: '#6b4423', accent: '#d7e2c8' },
+  hedge: { leaf: '#2f743c', ink: '#14381c', vein: '#245c30', trunk: '#5c3a1e', accent: '#e7b7c6' },
+  rose: { leaf: '#2e6c34', ink: '#143418', vein: '#245828', trunk: '#5a3418', accent: '#d21848' },
+  box: { leaf: '#1e6834', ink: '#0e3018', vein: '#184e28', trunk: '#5c3a1e', accent: '#d5e6c4' },
+  fern: { leaf: '#3ea84a', ink: '#1a5824', vein: '#2e8a38', trunk: '#5c3a1e', accent: '#d8f0a8' },
+  grass: { leaf: '#8eb84a', ink: '#3e6e22', vein: '#6a9834', trunk: '#b89048', accent: '#f3e7c2' },
+  spiral: { leaf: '#2f7840', ink: '#14381e', vein: '#245c30', trunk: '#6b4423', accent: '#d7e2c8' },
 }
 
 export function formsFor(kind: PlantKind): { id: PlantForm; label: string }[] {
@@ -275,120 +276,194 @@ export function plantGlyph(form: PlantForm): PlantGlyph {
     )
   }
   if (form === 'ball') {
+    const ring = around(6, 0.48, 0.35)
     return drawn(
       [
-        scallop({ count: 9, inner: 0.72, outer: 1, turn: 0.4, wobble: 0.08 }),
-        circle(0.58),
-        disk(-0.14, -0.18, 0.24),
+        scallop({ count: 16, inner: 0.8, outer: 1, turn: 0.25, wobble: 0.055 }),
+        scallop({ count: 10, inner: 0.42, outer: 0.62, turn: 1.1, wobble: 0.07 }),
+        disk(-0.14, -0.18, 0.2),
+        ...ring.map((spot, i) => clump(spot.x, spot.y, 0.28, i * 0.8, 5)),
       ],
-      [-1, 0, 1],
-      ribs(6, 0.55, 0.2),
-      [],
+      [-1, 0, 1, 0, -1, 1, -1, 0, 1],
+      [...fork(0.4, 0.62, 0.32), ...fork(2.3, 0.55, 0.38), ...fork(4.2, 0.5, 0.3)],
+      [trunk(0, 0.02, 0.04)],
+      1,
     )
   }
   if (form === 'wide') {
-    const spots = [{ x: -0.42, y: 0.06 }, { x: 0, y: -0.1 }, { x: 0.42, y: 0.08 }]
+    const arms = [
+      { x: -0.5, y: 0.1, r: 0.4, turn: 0.3 },
+      { x: 0.08, y: -0.32, r: 0.38, turn: 1.2 },
+      { x: 0.48, y: 0.06, r: 0.4, turn: 2.1 },
+      { x: -0.08, y: 0.36, r: 0.3, turn: 0.7 },
+    ]
     return drawn(
       [
-        ...spots.map((spot, i) => scallop({ count: 7, inner: 0.34, outer: 0.5, turn: i * 0.8, wobble: 0.1, cx: spot.x, cy: spot.y })),
-        ...spots.map((spot) => disk(spot.x - 0.08, spot.y - 0.1, 0.16)),
+        ...arms.map((arm) => clump(arm.x, arm.y, arm.r, arm.turn, 6)),
+        ...arms.slice(0, 3).map((arm) => disk(arm.x - 0.06, arm.y - 0.08, arm.r * 0.38)),
       ],
-      [-1, 0, -1, 1, 1, 1],
-      [],
-      [],
+      [-1, 0, -1, 1, 1, 1, 0],
+      arms.flatMap((arm) => {
+        const angle = Math.atan2(arm.y, arm.x)
+        return fork(angle, Math.hypot(arm.x, arm.y) + arm.r * 0.35, 0.28).slice(0, 2)
+      }),
+      [trunk(0, 0.04, 0.045), { x: 0.5, y: -0.08, r: 0.05, bloom: true }, { x: -0.42, y: -0.08, r: 0.04, bloom: true }],
+      4,
     )
   }
   if (form === 'needle') {
+    const tips = around(8, 0.78, 0.15)
     return drawn(
-      [star(12, 0.58, 1, -Math.PI / 2), star(8, 0.22, 0.5, 0.2), disk(-0.06, -0.08, 0.14)],
-      [0, -1, 1],
-      ribs(8, 0.7, -Math.PI / 2),
-      [],
+      [
+        star(18, 0.46, 1.02, -Math.PI / 2, 1, 0.92),
+        star(12, 0.18, 0.52, 0.4, 0.88, 0.8),
+        disk(-0.06, -0.08, 0.12),
+        ...tips.map((spot) => clump(spot.x, spot.y, 0.16, spot.x * 3, 4)),
+      ],
+      [0, -1, 1, 1, 0, 1, -1, 1, 0, 1, -1],
+      ribs(10, 0.84, -Math.PI / 2, 1, 0.92),
+      [trunk(0, 0, 0.04)],
+      1,
     )
   }
   if (form === 'bloom') {
+    const heads = around(8, 0.58, -0.4)
     return drawn(
       [
-        scallop({ count: 8, inner: 0.7, outer: 1, turn: 0.2, wobble: 0.06 }),
-        circle(0.48),
-        disk(-0.12, -0.14, 0.18),
+        scallop({ count: 14, inner: 0.74, outer: 1, turn: 0.15, wobble: 0.07 }),
+        scallop({ count: 8, inner: 0.36, outer: 0.52, turn: 0.8, wobble: 0.06 }),
+        disk(-0.12, -0.16, 0.18),
+        ...heads.map((spot, i) => disk(spot.x, spot.y, i % 2 ? 0.13 : 0.1)),
       ],
-      [-1, 0, 1],
-      ribs(5, 0.45, 0.5),
-      around(7, 0.62, -Math.PI / 2).map((spot, i) => ({ x: spot.x, y: spot.y, r: i % 2 ? 0.12 : 0.08, bloom: true })),
+      [-1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      [...fork(-0.2, 0.5, 0.4), ...fork(2.2, 0.48, 0.35)],
+      heads.map((spot, i) => ({ x: spot.x, y: spot.y, r: i % 2 ? 0.09 : 0.065, bloom: true })),
+      1,
     )
   }
   if (form === 'group') {
-    const spots = [{ x: -0.3, y: 0.16, r: 0.5 }, { x: 0.32, y: 0.12, r: 0.46 }, { x: 0.02, y: -0.3, r: 0.42 }]
+    const spots = [
+      { x: -0.38, y: 0.18, r: 0.48, turn: 0.45 },
+      { x: 0.4, y: 0.12, r: 0.44, turn: 1.35 },
+      { x: 0.02, y: -0.34, r: 0.4, turn: 2.2 },
+    ]
     return drawn(
       [
-        ...spots.map((spot, i) => scallop({ count: 7, inner: spot.r * 0.68, outer: spot.r, turn: i, wobble: 0.08, cx: spot.x, cy: spot.y })),
-        ...spots.map((spot) => disk(spot.x - 0.06, spot.y - 0.08, spot.r * 0.35)),
+        ...spots.map((spot) => clump(spot.x, spot.y, spot.r, spot.turn, 7)),
+        ...spots.map((spot) => disk(spot.x - 0.06, spot.y - 0.08, spot.r * 0.32)),
       ],
-      [-1, 0, -1, 1, 1, 1],
-      [],
-      spots.map((spot) => trunk(spot.x, spot.y + 0.04, 0.035)),
+      [-1, 0, -1, 1, 1, 0],
+      spots.flatMap((spot) => fork(Math.atan2(spot.y, spot.x), spot.r * 0.85, 0.4)),
+      spots.map((spot) => trunk(spot.x, spot.y + 0.02, 0.035)),
+      3,
+    )
+  }
+  if (form === 'cushion') {
+    const bumps = around(7, 0.46, 0.55).map((spot) => ({ x: spot.x * 1.12, y: spot.y * 0.62 }))
+    return drawn(
+      [
+        scallop({ count: 15, inner: 0.72, outer: 1, turn: 1.15, wobble: 0.06, sx: 1.16, sy: 0.64 }),
+        scallop({ count: 9, inner: 0.4, outer: 0.56, turn: 0.45, wobble: 0.05, sx: 0.86, sy: 0.38 }),
+        disk(-0.08, -0.04, 0.12),
+        ...bumps.map((spot, i) => clump(spot.x, spot.y, 0.22, i * 0.6, 5)),
+      ],
+      [-1, 0, 1, 0, -1, 1, 0, -1, 1, 0],
+      bumps.map((spot) => `M 0 0 Q ${num(spot.x * 0.4)} ${num(spot.y * 0.3)} ${num(spot.x)} ${num(spot.y)}`),
+      around(8, 0.34, 0.2).map((spot, i) => ({ x: spot.x * 1.05, y: spot.y * 0.55, r: i % 2 ? 0.055 : 0.04, bloom: true })),
+      1,
     )
   }
   if (form === 'hedge') {
+    const xs = [-0.74, -0.25, 0.25, 0.74]
     return drawn(
       [
-        scallop({ count: 18, inner: 0.86, outer: 1, turn: 0.04, wobble: 0.02, sx: 1.18, sy: 0.46 }),
-        scallop({ count: 12, inner: 0.8, outer: 0.92, turn: 0.2, wobble: 0.015, sx: 1.02, sy: 0.24 }),
+        scallop({ count: 22, inner: 0.9, outer: 1, turn: 0.03, wobble: 0.016, sx: 1.16, sy: 0.46 }),
+        scallop({ count: 16, inner: 0.84, outer: 0.96, turn: 0.2, wobble: 0.01, sx: 1, sy: 0.16, cy: -0.1 }),
+        ...xs.map((x, i) => scallop({ count: 8, inner: 0.64, outer: 0.92, turn: 0.5 + i, wobble: 0.04, sx: 0.2, sy: 0.32, cx: x, cy: 0.03 })),
       ],
-      [-1, 1],
-      [-0.7, -0.35, 0, 0.35, 0.7].map((x) => `M ${num(x)} -0.28 L ${num(x)} 0.28`),
+      [-1, 1, 0, -1, 0, 1],
+      xs.map((x) => `M ${num(x)} ${num(-0.2)} L ${num(x)} ${num(0.24)}`),
       [],
+      1,
     )
   }
   if (form === 'rose') {
+    const flowers = around(5, 0.36, -0.15)
     return drawn(
       [
-        scallop({ count: 7, inner: 0.5, outer: 0.86, turn: 0.6, wobble: 0.07 }),
-        circle(0.36),
-        disk(-0.08, -0.1, 0.14),
+        scallop({ count: 9, inner: 0.48, outer: 0.8, turn: 0.65, wobble: 0.09 }),
+        disk(-0.04, -0.06, 0.12),
+        ...[0, 1, 2, 3, 4, 5].map((i) => spray(-Math.PI / 2 + (i / 6) * TAU, 0.66, 0.085, i % 2 ? 0.28 : -0.22)),
       ],
-      [-1, 0, 1],
-      ribs(5, 0.4, 0.4),
-      around(5, 0.22, 0.3).map((spot) => ({ x: spot.x, y: spot.y, r: 0.13, bloom: true })),
+      [-1, 1, 0, -1, 0, -1, 1, 0],
+      flowers.flatMap((spot) => fork(Math.atan2(spot.y, spot.x), 0.5, 0.18).slice(0, 1)),
+      flowers.map((spot) => ({ x: spot.x, y: spot.y, r: 0.15, bloom: true })),
+      1,
     )
   }
   if (form === 'box') {
     return drawn(
-      [roundedBox(0.82, 0.14), roundedBox(0.48, 0.08)],
-      [-1, 1],
-      ['M -0.7 0 H 0.7', 'M 0 -0.7 V 0.7'],
-      [],
+      [
+        roundedBox(0.9, 0.12),
+        roundedBox(0.6, 0.08),
+        roundedBox(0.32, 0.05),
+        scallop({ count: 14, inner: 0.7, outer: 0.8, turn: 0.25, wobble: 0.015 }),
+      ],
+      [-1, 0, 1, 0],
+      ['M -0.78 0 H 0.78', 'M 0 -0.78 V 0.78', 'M -0.52 -0.52 H 0.52', 'M -0.52 0.52 H 0.52'],
+      around(8, 0.46, Math.PI / 8).map((spot) => ({ x: spot.x, y: spot.y, r: 0.04, bloom: true })),
+      2,
     )
   }
   if (form === 'fern') {
     const fills: string[] = []
     const shade: number[] = []
-    for (let i = 0; i < 8; i++) {
-      fills.push(frond(-Math.PI / 2 + (i / 8) * TAU, 0.78 + (i % 3) * 0.08, 0.09))
-      shade.push(i % 2 ? 0 : -1)
+    const veins: string[] = []
+    for (let i = 0; i < 7; i++) {
+      const angle = -Math.PI / 2 + (i / 7) * TAU
+      const len = 0.74 + (i % 3) * 0.1
+      fills.push(fernFrond(angle, len, 5))
+      shade.push(i % 2 ? -1 : 0)
+      const tip = at(len * 0.92, angle, 1, 1, 0, 0)
+      veins.push(`M 0 0 L ${num(tip.x)} ${num(tip.y)}`)
     }
-    for (let i = 0; i < 8; i++) {
-      fills.push(frond(-Math.PI / 2 + ((i + 0.5) / 8) * TAU, 0.4, 0.05))
+    for (let i = 0; i < 4; i++) {
+      const angle = -Math.PI / 3 + (i / 4) * TAU
+      fills.push(fernFrond(angle, 0.4, 3))
       shade.push(1)
     }
-    return drawn(fills, shade, [], [trunk(0, 0, 0.04)])
+    return drawn(fills, shade, veins, [trunk(0, 0, 0.04)])
   }
   if (form === 'grass') {
-    const stems = [-0.55, -0.28, 0, 0.28, 0.55]
-    return drawn(
-      stems.map((x, index) => scallop({ count: 6, inner: 0.48, outer: 0.96, turn: -1.15 + index * 0.04, wobble: 0.05, sx: 0.12, sy: 1.05, cx: x, cy: 0 })),
-      [-1, 0, 1, 0, -1],
-      [],
-      stems.map((x, index) => ({ x, y: -0.72 - (index % 2) * 0.08, r: 0.045, bloom: true })),
-    )
+    const fills = [scallop({ count: 10, inner: 0.18, outer: 0.34, turn: 0.2, wobble: 0.1 })]
+    const shade = [0]
+    const plumes: PlantDot[] = []
+    const blades = 16
+    for (let i = 0; i < blades; i++) {
+      const angle = -Math.PI / 2 + (i / blades) * TAU
+      const len = 0.58 + (i % 5) * 0.08
+      const bend = (i % 2 ? 1 : -1) * (0.5 + (i % 3) * 0.16)
+      fills.push(spray(angle, len, 0.07 + (i % 4) * 0.014, bend))
+      shade.push(i % 3 === 0 ? 1 : i % 3 === 1 ? -1 : 0)
+      if (i % 3 === 0) {
+        const tip = at(len * 0.94, angle + bend, 1, 1, 0, 0)
+        plumes.push({ x: tip.x, y: tip.y, r: 0.04, bloom: true })
+      }
+    }
+    return drawn(fills, shade, [], [trunk(0, 0.02, 0.04), ...plumes])
   }
   if (form === 'spiral') {
     return drawn(
-      [scallop({ count: 20, inner: 0.94, outer: 1, turn: 0.15, wobble: 0.012 }), circle(0.62), circle(0.28)],
-      [-1, 0, 1],
-      [circle(0.78), circle(0.46)],
-      [trunk(0, 0, 0.05)],
+      [
+        scallop({ count: 18, inner: 0.9, outer: 1, turn: 0.55, wobble: 0.018 }),
+        spiralBand(1.35, 0.18, 0.84, 0.12),
+        disk(0.05, -0.06, 0.3),
+        disk(-0.08, 0.05, 0.14),
+      ],
+      [-1, -1, 0, 1],
+      [spiralVein(1.35, 0.2, 0.78)],
+      [trunk(0, 0, 0.04), { x: 0.22, y: -0.16, r: 0.035, bloom: true }, { x: -0.16, y: 0.14, r: 0.03, bloom: true }],
+      1,
     )
   }
   return drawn(
@@ -410,7 +485,12 @@ export function plantMarkup(plant: Plant, ppm: number, k: number): string {
   const paint = plantPaint(form)
   const pen = num(1.25 / k)
   const vein = num(0.9 / k)
-  const fills = glyph.fills.map((d, index) => `<path d="${d}" fill="${crownFill(paint, glyph.shade?.[index] ?? 0)}" stroke="${paint.ink}" stroke-width="${pen}" vector-effect="non-scaling-stroke"/>`).join('')
+  const inked = glyph.inked ?? glyph.fills.length
+  const fills = glyph.fills.map((d, index) => {
+    const stroke = index < inked ? paint.ink : 'none'
+    const width = index < inked ? pen : '0'
+    return `<path d="${d}" fill="${crownFill(paint, glyph.shade?.[index] ?? 0)}" stroke="${stroke}" stroke-width="${width}" vector-effect="non-scaling-stroke"/>`
+  }).join('')
   const veins = glyph.veins.map((d) => `<path d="${d}" fill="none" stroke="${paint.vein}" stroke-width="${vein}" vector-effect="non-scaling-stroke"/>`).join('')
   const dots = glyph.dots.map((dot) => {
     const fill = dot.bloom ? paint.accent : paint.trunk
@@ -420,8 +500,8 @@ export function plantMarkup(plant: Plant, ppm: number, k: number): string {
   return `<g transform="translate(${num(plant.x)} ${num(plant.y)}) scale(${num(radius)})">${fills}${veins}${dots}</g>`
 }
 
-function drawn(fills: string[], shade: number[], veins: string[], dots: PlantDot[]): PlantGlyph {
-  return { fills, shade, veins, dots }
+function drawn(fills: string[], shade: number[], veins: string[], dots: PlantDot[], inked?: number): PlantGlyph {
+  return { fills, shade, veins, dots, ...(inked ? { inked } : {}) }
 }
 
 function trunk(x: number, y: number, r: number): PlantDot {
@@ -486,6 +566,91 @@ function ribs(count: number, len: number, turn: number, sx = 1, sy = 1): string[
     out.push(`M 0 0 Q ${num(c.x)} ${num(c.y)} ${num(e.x)} ${num(e.y)}`)
   }
   return out
+}
+
+function clump(cx: number, cy: number, r: number, turn: number, lobes: number): string {
+  return scallop({ count: lobes, inner: r * 0.55, outer: r, turn, wobble: 0.16, cx, cy })
+}
+
+function spray(angle: number, len: number, width: number, bend: number): string {
+  const tipA = angle + bend
+  const tip = at(len, tipA, 1, 1, 0, 0)
+  const belly = at(len * 0.55, angle + bend * 0.45, 1, 1, 0, 0)
+  const px = -Math.sin(tipA) * width
+  const py = Math.cos(tipA) * width
+  return `M 0 0 Q ${num(belly.x + px)} ${num(belly.y + py)} ${num(tip.x)} ${num(tip.y)} Q ${num(belly.x - px * 0.65)} ${num(belly.y - py * 0.65)} 0 0 Z`
+}
+
+function fernFrond(angle: number, len: number, pairs: number): string {
+  const pts: { x: number; y: number }[] = []
+  const push = (along: number, side: number) => {
+    const c = Math.cos(angle)
+    const s = Math.sin(angle)
+    pts.push({ x: c * along - s * side, y: s * along + c * side })
+  }
+  push(0, 0)
+  for (let i = 1; i <= pairs; i++) {
+    const t = i / pairs
+    const along = len * (0.16 + 0.72 * t)
+    const w = len * (0.07 + 0.2 * Math.sin(t * Math.PI))
+    push(along - len * 0.05, w * 0.28)
+    push(along, w)
+    push(along + len * 0.04, w * 0.22)
+  }
+  push(len * 0.98, 0)
+  for (let i = pairs; i >= 1; i--) {
+    const t = i / pairs
+    const along = len * (0.16 + 0.72 * t)
+    const w = len * (0.07 + 0.2 * Math.sin(t * Math.PI)) * 0.92
+    push(along + len * 0.04, -w * 0.22)
+    push(along, -w)
+    push(along - len * 0.05, -w * 0.28)
+  }
+  let d = `M ${num(pts[0].x)} ${num(pts[0].y)}`
+  for (let i = 1; i < pts.length; i++) d += ` L ${num(pts[i].x)} ${num(pts[i].y)}`
+  return `${d} Z`
+}
+
+function fork(angle: number, len: number, spread: number): string[] {
+  const mid = at(len * 0.48, angle, 1, 1, 0, 0)
+  const tip = at(len, angle, 1, 1, 0, 0)
+  const left = at(len * 0.92, angle - spread, 1, 1, 0, 0)
+  const right = at(len * 0.92, angle + spread, 1, 1, 0, 0)
+  return [
+    `M 0 0 Q ${num(mid.x)} ${num(mid.y)} ${num(tip.x)} ${num(tip.y)}`,
+    `M ${num(mid.x)} ${num(mid.y)} Q ${num((mid.x + left.x) / 2)} ${num((mid.y + left.y) / 2)} ${num(left.x)} ${num(left.y)}`,
+    `M ${num(mid.x)} ${num(mid.y)} Q ${num((mid.x + right.x) / 2)} ${num((mid.y + right.y) / 2)} ${num(right.x)} ${num(right.y)}`,
+  ]
+}
+
+function spiralBand(turns: number, start: number, end: number, width: number): string {
+  const steps = 42
+  const outer: { x: number; y: number }[] = []
+  const inner: { x: number; y: number }[] = []
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps
+    const angle = -Math.PI / 2 + t * turns * TAU
+    const radius = start + (end - start) * t
+    outer.push({ x: Math.cos(angle) * radius, y: Math.sin(angle) * radius })
+    const innerR = Math.max(0.04, radius - width)
+    inner.push({ x: Math.cos(angle) * innerR, y: Math.sin(angle) * innerR })
+  }
+  let d = `M ${num(outer[0].x)} ${num(outer[0].y)}`
+  for (let i = 1; i < outer.length; i++) d += ` L ${num(outer[i].x)} ${num(outer[i].y)}`
+  for (let i = inner.length - 1; i >= 0; i--) d += ` L ${num(inner[i].x)} ${num(inner[i].y)}`
+  return `${d} Z`
+}
+
+function spiralVein(turns: number, start: number, end: number): string {
+  const steps = 36
+  let d = ''
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps
+    const angle = t * turns * TAU
+    const radius = start + (end - start) * t
+    d += `${i === 0 ? 'M' : ' L'} ${num(Math.cos(angle) * radius)} ${num(Math.sin(angle) * radius)}`
+  }
+  return d
 }
 
 function frond(angle: number, len: number, width: number): string {

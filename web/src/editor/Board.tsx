@@ -1007,11 +1007,19 @@ function PlantMark({ plant, ppm, k, selected }: { plant: Plant; ppm: number; k: 
   const glyph = plantGlyph(form)
   const paint = plantPaint(form)
   const ink = selected ? '#b86a09' : paint.ink
+  const inked = glyph.inked ?? glyph.fills.length
   return (
     <g className={selected ? 'plant selected' : 'plant'} transform={`translate(${plant.x} ${plant.y})`}>
       <g transform={`scale(${radius})`} pointerEvents="none">
         {glyph.fills.map((d, index) => (
-          <path key={`f${index}`} d={d} fill={crownFill(paint, glyph.shade?.[index] ?? 0)} stroke={ink} strokeWidth={1.35} vectorEffect="non-scaling-stroke" />
+          <path
+            key={`f${index}`}
+            d={d}
+            fill={crownFill(paint, glyph.shade?.[index] ?? 0)}
+            stroke={index < inked ? ink : 'none'}
+            strokeWidth={index < inked ? 1.35 : 0}
+            vectorEffect="non-scaling-stroke"
+          />
         ))}
         {glyph.veins.map((d, index) => (
           <path key={`v${index}`} d={d} fill="none" stroke={paint.vein} strokeWidth={1} vectorEffect="non-scaling-stroke" />

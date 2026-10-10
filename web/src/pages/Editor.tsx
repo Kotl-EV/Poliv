@@ -3086,8 +3086,11 @@ function PlantRailIcon({ form }: { form: PlantForm }) {
   const paint = plantPaint(form)
   return (
     <svg className="rail-svg" viewBox="-1.25 -1.25 2.5 2.5" aria-hidden="true">
-      {glyph.fills.slice(0, 4).map((d, index) => (
-        <path key={index} d={d} fill={crownFill(paint, glyph.shade?.[index] ?? 0)} stroke={paint.ink} strokeWidth={0.08} />
+      {glyph.fills.slice(0, 8).map((d, index) => (
+        <path key={index} d={d} fill={crownFill(paint, glyph.shade?.[index] ?? 0)} stroke={paint.ink} strokeWidth={0.05} />
+      ))}
+      {glyph.veins.slice(0, 6).map((d, index) => (
+        <path key={`v${index}`} d={d} fill="none" stroke={paint.vein} strokeWidth={0.035} />
       ))}
     </svg>
   )
