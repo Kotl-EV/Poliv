@@ -44,34 +44,34 @@ export type PlantDot = { x: number; y: number; r: number; bloom?: boolean }
 export type PlantGlyph = { fills: string[]; shade?: number[]; veins: string[]; dots: PlantDot[]; inked?: number }
 
 const PAINT: Record<PlantForm, PlantPaint> = {
-  leaf: { leaf: '#3e7c3a', ink: '#1b4a22', vein: '#2c6430', trunk: '#6b4423', accent: '#e7b7c6' },
-  round: { leaf: '#4a8a40', ink: '#1d4e24', vein: '#326c38', trunk: '#6b4423', accent: '#e7b7c6' },
-  spread: { leaf: '#3a7438', ink: '#173f20', vein: '#2a5c30', trunk: '#5c3a1e', accent: '#e7b7c6' },
-  conifer: { leaf: '#1e4a34', ink: '#12382a', vein: '#163828', trunk: '#4a3420', accent: '#d7e2c8' },
-  column: { leaf: '#24563a', ink: '#123224', vein: '#1c4630', trunk: '#4a3420', accent: '#d7e2c8' },
-  weep: { leaf: '#4c8648', ink: '#1e4c28', vein: '#3a7040', trunk: '#6b4423', accent: '#e7b7c6' },
-  palm: { leaf: '#2f8a4a', ink: '#145c2c', vein: '#1f6e38', trunk: '#8a5a2a', accent: '#d8ecb0' },
-  clump: { leaf: '#3d7840', ink: '#1a4624', vein: '#2d6234', trunk: '#6b4423', accent: '#e7b7c6' },
-  ball: { leaf: '#3f8f48', ink: '#1a4e24', vein: '#2f6e38', trunk: '#6a4424', accent: '#f0c3d0' },
-  wide: { leaf: '#3c7c3e', ink: '#173f20', vein: '#2c6234', trunk: '#5c3a1e', accent: '#d24a3a' },
-  needle: { leaf: '#1f6a4e', ink: '#0e3428', vein: '#184838', trunk: '#4a3420', accent: '#c5d4bc' },
-  bloom: { leaf: '#3e8244', ink: '#1a4c24', vein: '#2f6a36', trunk: '#6b4423', accent: '#e25d86' },
-  group: { leaf: '#3a7640', ink: '#163e20', vein: '#2a5e32', trunk: '#6b4423', accent: '#e7c27a' },
-  cushion: { leaf: '#6aaa62', ink: '#2a5e32', vein: '#4e8a50', trunk: '#6b4423', accent: '#d9a0c4' },
-  oak: { leaf: '#2f6a32', ink: '#14381c', vein: '#245628', trunk: '#5c3a1e', accent: '#e7b7c6' },
-  pine: { leaf: '#3d7a48', ink: '#1a4a28', vein: '#2f6840', trunk: '#6b4423', accent: '#d7e2c8' },
-  spruce: { leaf: '#1a4030', ink: '#0e2c22', vein: '#163628', trunk: '#4a3420', accent: '#d7e2c8' },
-  birch: { leaf: '#c5d6a8', ink: '#4a6244', vein: '#7a9460', trunk: '#d2c2a6', accent: '#4a3b2a' },
-  fruit: { leaf: '#4e8a3c', ink: '#1e4e22', vein: '#3a7034', trunk: '#6b4423', accent: '#d24a3a' },
-  olive: { leaf: '#8d9a62', ink: '#3e4a28', vein: '#667244', trunk: '#6b4423', accent: '#e7e2c0' },
-  cypress: { leaf: '#1d4634', ink: '#10281c', vein: '#183828', trunk: '#4a3420', accent: '#d7e2c8' },
-  bamboo: { leaf: '#7aaa3a', ink: '#3a6218', vein: '#5c8a28', trunk: '#c4a05a', accent: '#d8ecb0' },
-  hedge: { leaf: '#2f743c', ink: '#14381c', vein: '#245c30', trunk: '#5c3a1e', accent: '#e7b7c6' },
-  rose: { leaf: '#2e6c34', ink: '#143418', vein: '#245828', trunk: '#5a3418', accent: '#d21848' },
-  box: { leaf: '#1e6834', ink: '#0e3018', vein: '#184e28', trunk: '#5c3a1e', accent: '#d5e6c4' },
-  fern: { leaf: '#3ea84a', ink: '#1a5824', vein: '#2e8a38', trunk: '#5c3a1e', accent: '#d8f0a8' },
-  grass: { leaf: '#8eb84a', ink: '#3e6e22', vein: '#6a9834', trunk: '#b89048', accent: '#f3e7c2' },
-  spiral: { leaf: '#2f7840', ink: '#14381e', vein: '#245c30', trunk: '#6b4423', accent: '#d7e2c8' },
+  leaf: { leaf: '#6fbe45', ink: '#3c7a28', vein: '#c4844a', trunk: '#a86b32', accent: '#e7b7c6' },
+  round: { leaf: '#7ec84e', ink: '#4a8a32', vein: '#5c9a38', trunk: '#a86b32', accent: '#e7b7c6' },
+  spread: { leaf: '#62b43e', ink: '#3a7828', vein: '#b56a3a', trunk: '#9a6230', accent: '#e7b7c6' },
+  conifer: { leaf: '#1e4a34', ink: '#12382a', vein: '#6a4a30', trunk: '#4a3420', accent: '#d7e2c8' },
+  column: { leaf: '#3f8f4a', ink: '#246034', vein: '#b56a3a', trunk: '#8a5a30', accent: '#d7e2c8' },
+  weep: { leaf: '#78c255', ink: '#468a34', vein: '#c4844a', trunk: '#a86b32', accent: '#e7b7c6' },
+  palm: { leaf: '#4cb85a', ink: '#2a7a38', vein: '#2f8a44', trunk: '#c4844a', accent: '#d8ecb0' },
+  clump: { leaf: '#6ab844', ink: '#3e842c', vein: '#c4844a', trunk: '#a86b32', accent: '#e7b7c6' },
+  ball: { leaf: '#5cb84a', ink: '#2f7a30', vein: '#b56a3a', trunk: '#8a5a30', accent: '#f0c3d0' },
+  wide: { leaf: '#62b44a', ink: '#347a2c', vein: '#b56a3a', trunk: '#8a5a30', accent: '#e23d32' },
+  needle: { leaf: '#2a6e52', ink: '#143828', vein: '#3a4030', trunk: '#4a3420', accent: '#c5d4bc' },
+  bloom: { leaf: '#58b44c', ink: '#2f7a32', vein: '#b56a3a', trunk: '#8a5a30', accent: '#e25d86' },
+  group: { leaf: '#54a848', ink: '#2c742c', vein: '#b56a3a', trunk: '#8a5a30', accent: '#e7c27a' },
+  cushion: { leaf: '#7ec06e', ink: '#4a8a46', vein: '#b56a3a', trunk: '#8a5a30', accent: '#d9a0c4' },
+  oak: { leaf: '#5aaa3c', ink: '#347828', vein: '#a86b32', trunk: '#8a5428', accent: '#e7b7c6' },
+  pine: { leaf: '#6aaa48', ink: '#3c7a30', vein: '#b56a3a', trunk: '#8a5a30', accent: '#d7e2c8' },
+  spruce: { leaf: '#2d6a40', ink: '#1a4630', vein: '#6a4a30', trunk: '#4a3420', accent: '#d7e2c8' },
+  birch: { leaf: '#d2e4a4', ink: '#6a8a48', vein: '#d2c4a4', trunk: '#efe6d4', accent: '#4a3b2a' },
+  fruit: { leaf: '#6fbe45', ink: '#3c7a28', vein: '#c4844a', trunk: '#a86b32', accent: '#e23d32' },
+  olive: { leaf: '#a8b56e', ink: '#5c6a38', vein: '#b56a3a', trunk: '#8a5a30', accent: '#e7e2c0' },
+  cypress: { leaf: '#2a6840', ink: '#184830', vein: '#6a4a30', trunk: '#4a3420', accent: '#d7e2c8' },
+  bamboo: { leaf: '#8ec83e', ink: '#5a8a22', vein: '#c4a05a', trunk: '#d4b06a', accent: '#d8ecb0' },
+  hedge: { leaf: '#4aaa48', ink: '#2a742c', vein: '#2f6e34', trunk: '#5c3a1e', accent: '#e7b7c6' },
+  rose: { leaf: '#4a9a40', ink: '#246828', vein: '#a86b32', trunk: '#7a4a28', accent: '#d21848' },
+  box: { leaf: '#2f8a44', ink: '#186030', vein: '#2a6434', trunk: '#5c3a1e', accent: '#d5e6c4' },
+  fern: { leaf: '#52c056', ink: '#2a8430', vein: '#3a9a40', trunk: '#6a4428', accent: '#d8f0a8' },
+  grass: { leaf: '#a4cc55', ink: '#5a8a2c', vein: '#7aaa40', trunk: '#c4a05a', accent: '#f3e7c2' },
+  spiral: { leaf: '#4a9a48', ink: '#2a742c', vein: '#3a7840', trunk: '#6b4423', accent: '#d7e2c8' },
 }
 
 export function formsFor(kind: PlantKind): { id: PlantForm; label: string }[] {
@@ -104,63 +104,74 @@ export function crownFill(paint: PlantPaint, shade = 0): string {
 export function plantGlyph(form: PlantForm): PlantGlyph {
   if (form === 'round') {
     return drawn(
-      [circle(1), circle(0.62), disk(-0.16, -0.22, 0.28)],
-      [-1, 0, 1],
-      ribs(8, 0.72, -Math.PI / 2),
-      [trunk(0, 0, 0.08)],
+      [circle(1), circle(0.72), circle(0.46), disk(-0.06, -0.08, 0.18)],
+      [-1, 0, 1, 0],
+      ticks(18, 0.5, 0.96, 0.1),
+      [trunk(0, 0, 0.05)],
+      1,
     )
   }
   if (form === 'leaf') {
-    return drawn(
-      [
-        scallop({ count: 11, inner: 0.74, outer: 1, turn: -Math.PI / 2, wobble: 0.07 }),
-        scallop({ count: 7, inner: 0.42, outer: 0.66, turn: 0.5, wobble: 0.1 }),
-        disk(-0.2, -0.24, 0.26),
-      ],
-      [-1, 0, 1],
-      ribs(7, 0.7, -Math.PI / 2),
-      [trunk(0, 0, 0.07)],
-    )
+    const puffs = around(8, 0.46, 0.3)
+    const fills = [scallop({ count: 15, inner: 0.76, outer: 1, turn: 0.42, wobble: 0.09 })]
+    const shade = [-1]
+    puffs.forEach((spot, i) => {
+      fills.push(clump(spot.x, spot.y, i % 2 ? 0.32 : 0.26, i * 0.65, 6))
+      shade.push(i % 3 === 0 ? 1 : i % 3 === 1 ? -1 : 0)
+    })
+    fills.push(disk(-0.1, -0.12, 0.2), disk(0.16, 0.08, 0.14))
+    shade.push(1, 0)
+    return drawn(fills, shade, [...fork(0.4, 0.7, 0.4), ...fork(2.5, 0.64, 0.36), ...fork(4.4, 0.56, 0.32)], [trunk(0, 0, 0.07)], 1)
   }
   if (form === 'spread') {
-    const crowns = [{ x: 0, y: 0, r: 0.58, turn: 0.2 }, ...around(5, 0.42, -Math.PI / 2).map((spot, i) => ({ ...spot, r: 0.48, turn: i * 0.7 }))]
+    const arms = around(6, 0.5, -0.5)
+    const fills = arms.map((spot, i) => clump(spot.x, spot.y, i % 2 ? 0.34 : 0.28, i * 0.8, 6))
+    const shade = arms.map((_, i) => (i % 3 === 0 ? -1 : i % 3 === 1 ? 0 : 1))
+    fills.push(disk(0.02, -0.02, 0.14))
+    shade.push(1)
     return drawn(
-      crowns.map((spot) => scallop({ count: 8, inner: spot.r * 0.7, outer: spot.r, turn: spot.turn, wobble: 0.09, cx: spot.x, cy: spot.y })),
-      [-1, 0, 1, 0, 1, 0],
-      ribs(5, 0.35, 0.4),
-      [trunk(0, 0, 0.065)],
+      fills,
+      shade,
+      arms.map((spot) => fork(Math.atan2(spot.y, spot.x), 0.58, 0.2)[0]),
+      [trunk(0, 0, 0.08)],
+      arms.length,
     )
   }
   if (form === 'conifer') {
     return drawn(
-      [star(18, 0.55, 1, -Math.PI / 2), star(12, 0.28, 0.62, 0.15), disk(-0.08, -0.12, 0.16)],
+      [star(18, 0.55, 1, -Math.PI / 2), star(12, 0.28, 0.62, 0.15), disk(-0.08, -0.1, 0.14)],
       [0, -1, 1],
-      [circle(0.28), ...ribs(8, 0.78, -Math.PI / 2)],
-      [trunk(0, 0, 0.07)],
+      ribs(8, 0.72, -Math.PI / 2),
+      [trunk(0, 0, 0.06)],
+      1,
     )
   }
   if (form === 'column') {
-    return drawn(
-      [
-        scallop({ count: 10, inner: 0.78, outer: 1, turn: -Math.PI / 2, wobble: 0.03, sx: 0.46, sy: 1 }),
-        scallop({ count: 8, inner: 0.7, outer: 0.86, turn: 0.2, wobble: 0.02, sx: 0.32, sy: 0.82 }),
-        disk(0, -0.15, 0.12),
-      ],
-      [-1, 0, 1],
-      ribs(5, 0.72, -Math.PI / 2, 0.46, 1),
-      [trunk(0, 0.2, 0.05)],
-    )
+    const puffs = around(6, 0.22, 0.4)
+    const fills = [scallop({ count: 12, inner: 0.82, outer: 1, turn: 0.25, wobble: 0.035, sx: 0.42, sy: 1 })]
+    const shade = [-1]
+    puffs.forEach((spot, i) => {
+      fills.push(clump(spot.x * 0.7, spot.y * 0.72, 0.16, i, 5))
+      shade.push(i % 2 ? 1 : 0)
+    })
+    return drawn(fills, shade, ribs(4, 0.7, -Math.PI / 2, 0.36, 0.9), [trunk(0, 0.15, 0.045)], 1)
   }
   if (form === 'weep') {
+    const drops = around(9, 0.58, 0.35)
+    const fills = [scallop({ count: 18, inner: 0.78, outer: 0.96, turn: 0.08, wobble: 0.045 })]
+    const shade = [-1]
+    drops.forEach((spot, i) => {
+      fills.push(clump(spot.x, spot.y, 0.24, i * 0.5, 5))
+      shade.push(i % 2 ? 0 : 1)
+    })
+    fills.push(disk(0, 0, 0.16))
+    shade.push(0)
     return drawn(
-      [
-        scallop({ count: 16, inner: 0.86, outer: 1, turn: -Math.PI / 2, wobble: 0.04 }),
-        circle(0.58),
-        disk(-0.12, -0.16, 0.22),
-      ],
-      [-1, 0, 1],
-      [circle(0.34), ...ribs(12, 0.9, -Math.PI / 2)],
+      fills,
+      shade,
+      drops.map((spot) => fork(Math.atan2(spot.y, spot.x), 0.5, 0.16)[0]),
       [trunk(0, 0, 0.06)],
+      1,
     )
   }
   if (form === 'palm') {
@@ -168,111 +179,129 @@ export function plantGlyph(form: PlantForm): PlantGlyph {
     const shade: number[] = []
     for (let i = 0; i < 9; i++) {
       const angle = -Math.PI / 2 + (i / 9) * TAU
-      fills.push(frond(angle, 0.78 + (i % 3) * 0.1, 0.11 + (i % 2) * 0.03))
+      fills.push(frond(angle, 0.82 + (i % 3) * 0.08, 0.14 + (i % 2) * 0.03))
       shade.push(i % 2 === 0 ? -1 : 0)
     }
     for (let i = 0; i < 6; i++) {
-      fills.push(frond(-Math.PI / 2 + (i / 6) * TAU + 0.3, 0.42, 0.07))
+      fills.push(frond(-Math.PI / 2 + (i / 6) * TAU + 0.28, 0.4, 0.08))
       shade.push(1)
     }
-    return drawn(fills, shade, [], [trunk(0, 0, 0.1), trunk(0, 0, 0.045)])
+    fills.push(disk(0, 0, 0.12))
+    shade.push(1)
+    return drawn(fills, shade, [], [trunk(0, 0, 0.09)], 9)
   }
   if (form === 'clump') {
-    const spots = around(3, 0.36, -Math.PI / 2)
+    const bubbles = [
+      { x: 0, y: -0.02, r: 0.4 },
+      { x: -0.4, y: -0.18, r: 0.34 },
+      { x: 0.38, y: -0.14, r: 0.32 },
+      { x: -0.26, y: 0.36, r: 0.3 },
+      { x: 0.32, y: 0.34, r: 0.28 },
+      { x: 0.02, y: -0.5, r: 0.22 },
+      { x: -0.02, y: 0.06, r: 0.14 },
+    ]
     return drawn(
-      [
-        ...spots.map((spot, i) => scallop({ count: 8, inner: 0.4, outer: 0.58, turn: i, wobble: 0.07, cx: spot.x, cy: spot.y })),
-        ...spots.map((spot) => disk(spot.x - 0.08, spot.y - 0.1, 0.16)),
-      ],
-      [-1, 0, -1, 1, 1, 1],
+      bubbles.map((spot) => disk(spot.x, spot.y, spot.r)),
+      [-1, 0, 0, -1, 1, 0, 1],
       [],
-      spots.map((spot) => trunk(spot.x, spot.y, 0.045)),
+      bubbles.slice(0, 5).map((spot) => trunk(spot.x, spot.y, 0.028)),
+      5,
     )
   }
   if (form === 'oak') {
-    return drawn(
-      [
-        scallop({ count: 8, inner: 0.58, outer: 1, turn: 0.35, wobble: 0.16, sx: 1.12, sy: 1.02 }),
-        scallop({ count: 6, inner: 0.4, outer: 0.62, turn: 1.2, wobble: 0.12, sx: 0.85, sy: 0.75 }),
-        disk(-0.18, -0.16, 0.22),
-      ],
-      [-1, 0, 1],
-      ribs(6, 0.62, 0.2, 1.05, 0.95),
-      [trunk(0, 0.05, 0.09)],
-    )
+    const lobes = around(6, 0.42, 0.5)
+    const fills = [scallop({ count: 8, inner: 0.62, outer: 1, turn: 0.55, wobble: 0.14, sx: 1.05, sy: 0.98 })]
+    const shade = [-1]
+    lobes.forEach((spot, i) => {
+      fills.push(clump(spot.x, spot.y, i % 2 ? 0.36 : 0.3, i * 0.9, 5))
+      shade.push(i % 2 ? 0 : 1)
+    })
+    fills.push(disk(-0.08, -0.06, 0.16))
+    shade.push(1)
+    return drawn(fills, shade, [...fork(0.9, 0.62, 0.34), ...fork(3.1, 0.58, 0.3)], [trunk(0, 0.02, 0.09)], 1)
   }
   if (form === 'pine') {
-    return drawn(
-      [star(11, 0.34, 1, -Math.PI / 2), star(8, 0.16, 0.48, 0.3), disk(-0.06, -0.08, 0.12)],
-      [0, -1, 1],
-      ribs(11, 0.86, -Math.PI / 2),
-      [trunk(0, 0, 0.055)],
-    )
+    const tips = around(8, 0.72, 0.2)
+    const fills = [star(9, 0.2, 1, 0.25)]
+    const shade = [0]
+    tips.forEach((spot, i) => {
+      fills.push(clump(spot.x, spot.y, 0.18, i, 4))
+      shade.push(i % 2 ? 1 : -1)
+    })
+    return drawn(fills, shade, ribs(8, 0.78, 0.25), [trunk(0, 0, 0.05)], 1)
   }
   if (form === 'spruce') {
     return drawn(
-      [star(14, 0.52, 1, 0.1), star(10, 0.28, 0.62, 0.4), star(7, 0.12, 0.32, 0.7)],
+      [star(16, 0.62, 1, 0.35), star(11, 0.32, 0.68, 0.7), star(8, 0.14, 0.36, 0.15)],
       [0, -1, 1],
       ribs(6, 0.4, 0.2),
-      [trunk(0, 0, 0.05)],
+      [trunk(0, 0, 0.045)],
+      1,
     )
   }
   if (form === 'birch') {
-    return drawn(
-      [
-        scallop({ count: 14, inner: 0.82, outer: 1, turn: 0.1, wobble: 0.03, sx: 0.72, sy: 1.05 }),
-        scallop({ count: 8, inner: 0.62, outer: 0.78, turn: 0.4, wobble: 0.04, sx: 0.48, sy: 0.72 }),
-      ],
-      [0, 1],
-      ribs(6, 0.55, -0.5, 0.7, 1),
-      [trunk(0, 0.08, 0.055), ...around(8, 0.38, 0.2).map((spot) => ({ x: spot.x * 0.85, y: spot.y, r: 0.03, bloom: true }))],
-    )
+    const leaves = around(14, 0.52, 0.15)
+    const fills = [scallop({ count: 16, inner: 0.84, outer: 1, turn: 0.12, wobble: 0.04, sx: 0.92, sy: 1.02 })]
+    const shade = [0]
+    leaves.forEach((spot, i) => {
+      fills.push(disk(spot.x, spot.y, i % 3 === 0 ? 0.14 : 0.1))
+      shade.push(i % 2 ? 1 : -1)
+    })
+    fills.push(disk(-0.06, -0.1, 0.16))
+    shade.push(1)
+    return drawn(fills, shade, [...fork(-0.4, 0.62, 0.28), ...fork(1.7, 0.58, 0.32), ...fork(3.8, 0.5, 0.26)], [trunk(0, 0, 0.06)], 1)
   }
   if (form === 'fruit') {
+    const fruit = around(8, 0.48, -0.2)
     return drawn(
       [
-        scallop({ count: 12, inner: 0.8, outer: 1, turn: 0.5, wobble: 0.05 }),
-        circle(0.55),
-        disk(-0.14, -0.18, 0.2),
+        scallop({ count: 13, inner: 0.78, outer: 1, turn: 0.62, wobble: 0.07 }),
+        circle(0.52),
+        disk(-0.1, -0.14, 0.18),
       ],
       [-1, 0, 1],
-      ribs(6, 0.5, 0.3),
-      [trunk(0, 0, 0.05), ...around(9, 0.52, -0.2).map((spot, i) => ({ x: spot.x, y: spot.y, r: i % 3 === 0 ? 0.1 : 0.07, bloom: true }))],
+      [...fork(0.7, 0.55, 0.3), ...fork(2.8, 0.5, 0.28)],
+      [trunk(0, 0, 0.05), ...fruit.map((spot, i) => ({ x: spot.x, y: spot.y, r: i % 2 ? 0.09 : 0.065, bloom: true }))],
+      1,
     )
   }
   if (form === 'olive') {
-    return drawn(
-      [
-        scallop({ count: 10, inner: 0.68, outer: 1, turn: 1.1, wobble: 0.1, sx: 1.16, sy: 0.74 }),
-        scallop({ count: 7, inner: 0.4, outer: 0.58, turn: 0.4, wobble: 0.08, sx: 0.9, sy: 0.5 }),
-        disk(-0.22, -0.08, 0.16),
-      ],
-      [-1, 0, 1],
-      ribs(6, 0.55, 0.5, 1.1, 0.7),
-      [trunk(0, 0.04, 0.06)],
-    )
+    const puffs = around(7, 0.4, 0.6).map((spot) => ({ x: spot.x * 1.15, y: spot.y * 0.62 }))
+    const fills = [scallop({ count: 11, inner: 0.7, outer: 1, turn: 1.05, wobble: 0.09, sx: 1.12, sy: 0.7 })]
+    const shade = [-1]
+    puffs.forEach((spot, i) => {
+      fills.push(clump(spot.x, spot.y, 0.24, i * 0.7, 5))
+      shade.push(i % 2 ? 1 : 0)
+    })
+    return drawn(fills, shade, [...fork(0.3, 0.55, 0.25), ...fork(2.6, 0.48, 0.3)], [trunk(0, 0.02, 0.05)], 1)
   }
   if (form === 'cypress') {
     return drawn(
       [
-        scallop({ count: 12, inner: 0.86, outer: 1, turn: -0.2, wobble: 0.02, sx: 0.3, sy: 1.08 }),
-        scallop({ count: 8, inner: 0.75, outer: 0.9, turn: 0.3, wobble: 0.02, sx: 0.18, sy: 0.72 }),
-        disk(0, -0.2, 0.07),
+        scallop({ count: 14, inner: 0.88, outer: 1, turn: -0.35, wobble: 0.02, sx: 0.32, sy: 1.04 }),
+        scallop({ count: 10, inner: 0.78, outer: 0.9, turn: 0.4, wobble: 0.015, sx: 0.2, sy: 0.7 }),
+        disk(0, -0.18, 0.07),
       ],
       [-1, 0, 1],
-      ribs(4, 0.8, -Math.PI / 2, 0.28, 1.05),
-      [trunk(0, 0.35, 0.04)],
+      ribs(4, 0.78, -Math.PI / 2, 0.26, 1),
+      [trunk(0, 0.28, 0.035)],
+      1,
     )
   }
   if (form === 'bamboo') {
-    const stems = [-0.48, -0.16, 0.16, 0.48]
-    const fills = stems.map((x, index) => scallop({ count: 8, inner: 0.55, outer: 0.95, turn: index * 0.5, wobble: 0.03, sx: 0.14, sy: 1.02, cx: x, cy: (index % 2) * 0.04 }))
-    for (const x of stems) fills.push(frond(-Math.PI / 2 + x, 0.42, 0.08))
+    const culms = [
+      { x: -0.34, y: 0.12, r: 0.3 },
+      { x: 0.08, y: -0.22, r: 0.34 },
+      { x: 0.4, y: 0.16, r: 0.26 },
+      { x: -0.06, y: 0.36, r: 0.22 },
+      { x: 0.18, y: -0.5, r: 0.18 },
+    ]
     return drawn(
-      fills,
-      [-1, 0, -1, 0, 1, 1, 1, 1],
+      culms.map((spot) => disk(spot.x, spot.y, spot.r)),
+      [-1, 0, 1, 0, -1],
       [],
-      stems.flatMap((x) => [trunk(x, 0.2, 0.03), trunk(x, -0.15, 0.025)]),
+      culms.map((spot) => trunk(spot.x, spot.y, 0.035)),
+      culms.length,
     )
   }
   if (form === 'ball') {
@@ -555,6 +584,17 @@ function star(spikes: number, inner: number, outer: number, turn: number, sx = 1
     d += `${i === 0 ? 'M' : ' L'} ${num(spot.x)} ${num(spot.y)}`
   }
   return `${d} Z`
+}
+
+function ticks(count: number, inner: number, outer: number, turn: number): string[] {
+  const out: string[] = []
+  for (let i = 0; i < count; i++) {
+    const angle = turn + (i / count) * TAU
+    const a = at(inner, angle, 1, 1, 0, 0)
+    const b = at(outer, angle, 1, 1, 0, 0)
+    out.push(`M ${num(a.x)} ${num(a.y)} L ${num(b.x)} ${num(b.y)}`)
+  }
+  return out
 }
 
 function ribs(count: number, len: number, turn: number, sx = 1, sy = 1): string[] {

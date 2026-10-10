@@ -3086,9 +3086,10 @@ function PlantRailIcon({ form }: { form: PlantForm }) {
   const paint = plantPaint(form)
   return (
     <svg className="rail-svg" viewBox="-1.25 -1.25 2.5 2.5" aria-hidden="true">
-      {glyph.fills.slice(0, 8).map((d, index) => (
-        <path key={index} d={d} fill={crownFill(paint, glyph.shade?.[index] ?? 0)} stroke={paint.ink} strokeWidth={0.05} />
-      ))}
+      {glyph.fills.slice(0, 8).map((d, index) => {
+        const edged = index < (glyph.inked ?? glyph.fills.length)
+        return <path key={index} d={d} fill={crownFill(paint, glyph.shade?.[index] ?? 0)} stroke={edged ? paint.ink : 'none'} strokeWidth={edged ? 0.04 : 0} />
+      })}
       {glyph.veins.slice(0, 6).map((d, index) => (
         <path key={`v${index}`} d={d} fill="none" stroke={paint.vein} strokeWidth={0.035} />
       ))}
@@ -3155,9 +3156,10 @@ function PlantThumb({ form }: { form: PlantForm }) {
   const paint = plantPaint(form)
   return (
     <svg viewBox="-1.25 -1.25 2.5 2.5" aria-hidden="true">
-      {glyph.fills.map((d, index) => (
-        <path key={index} d={d} fill={crownFill(paint, glyph.shade?.[index] ?? 0)} stroke={paint.ink} strokeWidth={0.06} />
-      ))}
+      {glyph.fills.map((d, index) => {
+        const edged = index < (glyph.inked ?? glyph.fills.length)
+        return <path key={index} d={d} fill={crownFill(paint, glyph.shade?.[index] ?? 0)} stroke={edged ? paint.ink : 'none'} strokeWidth={edged ? 0.04 : 0} />
+      })}
       {glyph.veins.map((d, index) => (
         <path key={`v${index}`} d={d} fill="none" stroke={paint.vein} strokeWidth={0.04} />
       ))}

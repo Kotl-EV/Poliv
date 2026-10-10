@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { BUSH_FORMS, TREE_FORMS, formOf, plantGlyph } from './plants.ts'
+import { BUSH_FORMS, TREE_FORMS, formOf, plantGlyph, plantPaint } from './plants.ts'
 
 test('every crown is a closed drawing and the fallback matches the kind', () => {
   const forms = [...TREE_FORMS, ...BUSH_FORMS]
@@ -35,7 +35,10 @@ test('every crown is a closed drawing and the fallback matches the kind', () => 
       }
     }
   }
-  assert.equal(plantGlyph('leaf').inked, undefined)
+  assert.equal(plantGlyph('leaf').inked, 1)
+  assert.equal(plantPaint('conifer').leaf, '#1e4a34')
+  assert.ok(plantGlyph('spread').fills.length >= 6)
+  assert.ok(plantGlyph('fruit').dots.some((dot) => dot.bloom))
   assert.ok(plantGlyph('fern').fills[0].includes(' L '))
   assert.ok(plantGlyph('rose').dots.some((dot) => dot.bloom && dot.r >= 0.12))
 })
