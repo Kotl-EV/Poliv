@@ -102,6 +102,10 @@ export function crownFill(paint: PlantPaint, shade = 0): string {
 }
 
 export function plantGlyph(form: PlantForm): PlantGlyph {
+  return speckle(form, crownOf(form))
+}
+
+function crownOf(form: PlantForm): PlantGlyph {
   if (form === 'round') {
     return drawn(
       [circle(1), circle(0.72), circle(0.46), disk(-0.06, -0.08, 0.18)],
@@ -505,6 +509,66 @@ export function plantGlyph(form: PlantForm): PlantGlyph {
     ribs(5, 0.4, 0.2, 1.05, 0.55),
     around(6, 0.55, 0.4).map((spot) => ({ x: spot.x * 0.85, y: spot.y * 0.5, r: 0.06, bloom: true })),
   )
+}
+
+const BARE: ReadonlySet<PlantForm> = new Set(['palm', 'fern', 'grass', 'bamboo'])
+
+/** Мелкие блики и тени внутри кроны. Первая заливка и обводка не меняются. */
+function speckle(form: PlantForm, glyph: PlantGlyph): PlantGlyph {
+  if (BARE.has(form) || glyph.inked == null) return glyph
+  const box = grainBox(form)
+  const salt = saltOf(form)
+  const fills = glyph.fills.slice()
+  const shade = (glyph.shade ?? glyph.fills.map(() => 0)).slice()
+  let placed = 0
+  for (let i = 0; placed < box.n && i < box.n * 5; i++) {
+    const angle = unit(salt + i * 17) * TAU
+    const reach = Math.sqrt(unit(salt + i * 29 + 3))
+    const x = Math.cos(angle) * reach * box.rx
+    const y = Math.sin(angle) * reach * box.ry
+    if (form !== 'hedge' && form !== 'box' && x * x + y * y < 0.012) continue
+    const room = 1.15 - Math.hypot(x, y)
+    const r = Math.min(box.r0 + unit(salt + i * 13 + 7) * (box.r1 - box.r0), room)
+    if (r < 0.02 || Math.abs(x) + r > 1.22 || Math.abs(y) + r > 1.22) continue
+    const needle = form === 'conifer' || form === 'spruce' || form === 'needle' || form === 'pine' || form === 'column' || form === 'cypress'
+    fills.push(needle ? disk(x, y, r) : leafFleck(x, y, r, angle + placed))
+    shade.push(placed % 3 === 0 ? 1 : placed % 3 === 1 ? -1 : 0)
+    placed++
+  }
+  return { ...glyph, fills, shade }
+}
+
+function grainBox(form: PlantForm): { rx: number; ry: number; n: number; r0: number; r1: number } {
+  if (form === 'column' || form === 'cypress') return { rx: 0.14, ry: 0.55, n: 9, r0: 0.028, r1: 0.05 }
+  if (form === 'hedge') return { rx: 0.78, ry: 0.15, n: 12, r0: 0.045, r1: 0.08 }
+  if (form === 'cushion' || form === 'olive') return { rx: 0.68, ry: 0.32, n: 11, r0: 0.05, r1: 0.1 }
+  if (form === 'box') return { rx: 0.46, ry: 0.46, n: 8, r0: 0.04, r1: 0.08 }
+  if (form === 'conifer' || form === 'spruce' || form === 'needle' || form === 'pine') return { rx: 0.38, ry: 0.38, n: 9, r0: 0.03, r1: 0.055 }
+  if (form === 'rose') return { rx: 0.4, ry: 0.4, n: 7, r0: 0.04, r1: 0.07 }
+  if (form === 'spread' || form === 'oak' || form === 'wide' || form === 'group') return { rx: 0.58, ry: 0.54, n: 12, r0: 0.06, r1: 0.12 }
+  return { rx: 0.52, ry: 0.52, n: 11, r0: 0.055, r1: 0.11 }
+}
+
+function leafFleck(x: number, y: number, r: number, turn: number): string {
+  const ca = Math.cos(turn)
+  const sa = Math.sin(turn)
+  const at = (dx: number, dy: number) => {
+    const px = x + dx * ca - dy * sa
+    const py = y + dx * sa + dy * ca
+    return `${num(px)} ${num(py)}`
+  }
+  return `M ${at(r, 0)} Q ${at(0, r * 0.62)} ${at(-r * 0.15, 0)} Q ${at(0, -r * 0.62)} ${at(r, 0)} Z`
+}
+
+function saltOf(form: string): number {
+  let salt = 17
+  for (let i = 0; i < form.length; i++) salt = (salt * 33 + form.charCodeAt(i)) >>> 0
+  return salt
+}
+
+function unit(n: number): number {
+  const x = (Math.imul(n, 1103515245) + 12345) >>> 0
+  return (x & 0xffffff) / 0x1000000
 }
 
 export function plantMarkup(plant: Plant, ppm: number, k: number): string {

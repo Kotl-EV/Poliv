@@ -5,7 +5,7 @@ import { fixtureGlyph } from '@shared/fixtures.ts'
 import { crownFill, formOf, plantGlyph, plantPaint } from '@shared/plants.ts'
 import { centroid, coverPath, dist, handleFromControl, midpoint, polar, sectorPath, stripHandlePoint, zonePathD, zoneShapeD } from '@shared/geom.ts'
 import { nozzleById } from '@shared/nozzles.ts'
-import { DEFAULT_PPM, gridStepM, hatchOf, honeycomb, surfaceOf } from '@shared/landscape.ts'
+import { DEFAULT_PPM, gridStepM, hatchOf, hatchTile, HATCHES, surfaceOf, type HatchNode } from '@shared/landscape.ts'
 import { pipeWeight } from '@shared/pipes.ts'
 import { funnyPoints, pipeTags } from '@shared/pipeview.ts'
 import type { Analysis, Doc, Fixture, Measure, Note, Plant, Point, Sprinkler, Zone, ZoneKind } from '@shared/types.ts'
@@ -899,65 +899,45 @@ function MeasureMarks({ measures, ppm, k, selectedId }: { measures: Measure[]; p
 }
 
 function SurfacePatterns({ ppm }: { ppm: number }) {
-  const u = Math.max(8, ppm * 0.7)
-  const honey = honeycomb(u)
-  const grass = `M 0 ${u * 0.7} L ${u * 0.35} ${u * 0.15} M ${u * 0.45} ${u} L ${u} ${u * 0.35}`
   return (
     <>
-      <pattern id="fill-lawn" width={u} height={u} patternUnits="userSpaceOnUse">
-        <rect width={u} height={u} fill="rgba(88, 150, 78, 0.34)" />
-        <path d={grass} stroke="#3d7a38" strokeWidth="1.2" />
-      </pattern>
-      <pattern id="fill-lawn-stripe" width={u} height={u} patternUnits="userSpaceOnUse">
-        <rect width={u} height={u} fill="rgba(88, 150, 78, 0.34)" />
-        <path d={grass} stroke="#3d7a38" strokeWidth="1.2" />
-        <path d={`M 0 ${u * 0.33} L ${u} ${u * 0.33} M 0 ${u * 0.66} L ${u} ${u * 0.66}`} stroke="#2a6b32" strokeWidth="1.1" />
-      </pattern>
-      <pattern id="fill-bed" width={u} height={u} patternUnits="userSpaceOnUse">
-        <rect width={u} height={u} fill="rgba(196, 132, 52, 0.34)" />
-        <circle cx={u * 0.3} cy={u * 0.35} r={1.6} fill="#c45b5b" />
-        <circle cx={u * 0.7} cy={u * 0.7} r={1.4} fill="#d4a03a" />
-      </pattern>
-      <pattern id="fill-bed-mulch" width={u} height={u} patternUnits="userSpaceOnUse">
-        <rect width={u} height={u} fill="rgba(150, 104, 52, 0.45)" />
-        <circle cx={u * 0.22} cy={u * 0.28} r={1.5} fill="#6a4324" />
-        <circle cx={u * 0.58} cy={u * 0.22} r={1.2} fill="#7a5230" />
-        <circle cx={u * 0.78} cy={u * 0.62} r={1.6} fill="#5c3a1e" />
-        <circle cx={u * 0.36} cy={u * 0.72} r={1.1} fill="#6a4324" />
-      </pattern>
-      <pattern id="fill-shrub" width={u} height={u} patternUnits="userSpaceOnUse">
-        <rect width={u} height={u} fill="rgba(48, 96, 54, 0.4)" />
-        <circle cx={u * 0.5} cy={u * 0.5} r={u * 0.22} fill="none" stroke="#24522c" strokeWidth="1.2" />
-      </pattern>
-      <pattern id="fill-path" width={u} height={u} patternUnits="userSpaceOnUse">
-        <rect width={u} height={u} fill="rgba(168, 160, 148, 0.42)" />
-        <path d={`M 0 ${u / 2} L ${u / 2} 0 L ${u} ${u / 2} L ${u / 2} ${u} Z`} fill="none" stroke="#7a7368" strokeWidth="1" />
-      </pattern>
-      <pattern id="fill-path-diagonal" width={u} height={u} patternUnits="userSpaceOnUse">
-        <rect width={u} height={u} fill="rgba(168, 160, 148, 0.42)" />
-        <path d={`M 0 ${u} L ${u} 0 M 0 ${u / 2} L ${u / 2} 0 M ${u / 2} ${u} L ${u} ${u / 2}`} fill="none" stroke="#7a7368" strokeWidth="1" />
-      </pattern>
-      <pattern id="fill-path-brick" width={u * 2} height={u} patternUnits="userSpaceOnUse">
-        <rect width={u * 2} height={u} fill="rgba(168, 160, 148, 0.42)" />
-        <path d={`M 0 ${u / 2} L ${u * 2} ${u / 2} M ${u} 0 L ${u} ${u / 2} M ${u / 2} ${u / 2} L ${u / 2} ${u} M ${u * 1.5} ${u / 2} L ${u * 1.5} ${u}`} fill="none" stroke="#7a7368" strokeWidth="1" />
-      </pattern>
-      <pattern id="fill-path-honey" width={honey.w} height={honey.h} patternUnits="userSpaceOnUse">
-        <rect width={honey.w} height={honey.h} fill="rgba(168, 160, 148, 0.42)" />
-        <path d={honey.d} fill="none" stroke="#7a7368" strokeWidth="1" />
-      </pattern>
-      <pattern id="fill-concrete" width={u} height={u} patternUnits="userSpaceOnUse">
-        <rect width={u} height={u} fill="rgba(176, 176, 172, 0.5)" />
-        <path d={`M 0 ${u} L ${u} 0`} stroke="#9a9a96" strokeWidth="1" />
-      </pattern>
-      <pattern id="fill-water" width={u * 1.4} height={u} patternUnits="userSpaceOnUse">
-        <rect width={u * 1.4} height={u} fill="rgba(72, 140, 188, 0.32)" />
-        <path d={`M 0 ${u * 0.45} Q ${u * 0.35} ${u * 0.2} ${u * 0.7} ${u * 0.45} T ${u * 1.4} ${u * 0.45}`} fill="none" stroke="#3a7aa8" strokeWidth="1.3" />
-      </pattern>
-      <pattern id="fill-building" width={u} height={u} patternUnits="userSpaceOnUse">
-        <rect width={u} height={u} fill="rgba(110, 100, 92, 0.5)" />
-        <path d={`M 0 0 L ${u} ${u} M ${u} 0 L 0 ${u}`} stroke="#5a524c" strokeWidth="1" />
-      </pattern>
+      {HATCHES.map((item) => {
+        const tile = hatchTile(item.id, ppm)
+        return (
+          <pattern key={item.id} id={`fill-${item.id}`} width={tile.w} height={tile.h} patternUnits="userSpaceOnUse">
+            {tile.nodes.map((node, index) => (
+              <HatchMark key={index} node={node} />
+            ))}
+          </pattern>
+        )
+      })}
     </>
+  )
+}
+
+function HatchMark({ node }: { node: HatchNode }) {
+  if (node.kind === 'fill') return <rect x={node.x} y={node.y} width={node.w} height={node.h} fill={node.fill} />
+  if (node.kind === 'dot') return <circle cx={node.cx} cy={node.cy} r={node.r} fill={node.fill} />
+  if (node.kind === 'chip') {
+    return (
+      <ellipse
+        cx={node.cx}
+        cy={node.cy}
+        rx={node.rx}
+        ry={node.ry}
+        fill={node.fill}
+        transform={`rotate(${node.turn} ${node.cx} ${node.cy})`}
+      />
+    )
+  }
+  return (
+    <path
+      d={node.d}
+      fill="none"
+      stroke={node.stroke}
+      strokeWidth={node.width ?? 1}
+      strokeLinecap={node.cap ?? 'butt'}
+    />
   )
 }
 

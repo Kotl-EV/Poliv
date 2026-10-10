@@ -1,7 +1,7 @@
 import { emitterPoints } from './drip.ts'
 import { fixtureMarkup } from './fixtures.ts'
 import { plantMarkup } from './plants.ts'
-import { gridStepM, surfaceOf, SURFACES, DEFAULT_PPM, DEFAULT_SHEET_M, hatchOf, honeycomb } from './landscape.ts'
+import { gridStepM, surfaceOf, SURFACES, DEFAULT_PPM, DEFAULT_SHEET_M, hatchOf, hatchPatternMarkup, HATCHES } from './landscape.ts'
 import { coverPath, zoneShapeD } from './geom.ts'
 import { nozzleById } from './nozzles.ts'
 import { gearHint, gearList } from './gear.ts'
@@ -533,23 +533,8 @@ function gridSvg(bounds: { minX: number; minY: number; maxX: number; maxY: numbe
 }
 
 function patterns(ppm: number): string {
-  const u = Math.max(8, ppm * 0.7)
-  const honey = honeycomb(u)
-  const grass = `M 0 ${u * 0.7} L ${u * 0.35} ${u * 0.15} M ${u * 0.45} ${u} L ${u} ${u * 0.35}`
-  return `<defs>
-    <pattern id="sheet-lawn" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(88,150,78,0.34)"/><path d="${grass}" stroke="#3d7a38" stroke-width="1.2"/></pattern>
-    <pattern id="sheet-lawn-stripe" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(88,150,78,0.34)"/><path d="${grass}" stroke="#3d7a38" stroke-width="1.2"/><path d="M 0 ${u * 0.33} L ${u} ${u * 0.33} M 0 ${u * 0.66} L ${u} ${u * 0.66}" stroke="#2a6b32" stroke-width="1.1"/></pattern>
-    <pattern id="sheet-bed" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(196,132,52,0.34)"/><circle cx="${u * 0.3}" cy="${u * 0.35}" r="1.6" fill="#c45b5b"/><circle cx="${u * 0.7}" cy="${u * 0.7}" r="1.4" fill="#d4a03a"/></pattern>
-    <pattern id="sheet-bed-mulch" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(150,104,52,0.45)"/><circle cx="${u * 0.22}" cy="${u * 0.28}" r="1.5" fill="#6a4324"/><circle cx="${u * 0.58}" cy="${u * 0.22}" r="1.2" fill="#7a5230"/><circle cx="${u * 0.78}" cy="${u * 0.62}" r="1.6" fill="#5c3a1e"/><circle cx="${u * 0.36}" cy="${u * 0.72}" r="1.1" fill="#6a4324"/></pattern>
-    <pattern id="sheet-shrub" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(48,96,54,0.4)"/><circle cx="${u * 0.5}" cy="${u * 0.5}" r="${u * 0.22}" fill="none" stroke="#24522c" stroke-width="1.2"/></pattern>
-    <pattern id="sheet-path" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(168,160,148,0.42)"/><path d="M 0 ${u / 2} L ${u / 2} 0 L ${u} ${u / 2} L ${u / 2} ${u} Z" fill="none" stroke="#7a7368"/></pattern>
-    <pattern id="sheet-path-diagonal" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(168,160,148,0.42)"/><path d="M 0 ${u} L ${u} 0 M 0 ${u / 2} L ${u / 2} 0 M ${u / 2} ${u} L ${u} ${u / 2}" fill="none" stroke="#7a7368"/></pattern>
-    <pattern id="sheet-path-brick" width="${u * 2}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u * 2}" height="${u}" fill="rgba(168,160,148,0.42)"/><path d="M 0 ${u / 2} L ${u * 2} ${u / 2} M ${u} 0 L ${u} ${u / 2} M ${u / 2} ${u / 2} L ${u / 2} ${u} M ${u * 1.5} ${u / 2} L ${u * 1.5} ${u}" fill="none" stroke="#7a7368"/></pattern>
-    <pattern id="sheet-path-honey" width="${fmt(honey.w)}" height="${fmt(honey.h)}" patternUnits="userSpaceOnUse"><rect width="${fmt(honey.w)}" height="${fmt(honey.h)}" fill="rgba(168,160,148,0.42)"/><path d="${honey.d}" fill="none" stroke="#7a7368"/></pattern>
-    <pattern id="sheet-concrete" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(176,176,172,0.5)"/><path d="M 0 ${u} L ${u} 0" stroke="#9a9a96"/></pattern>
-    <pattern id="sheet-water" width="${u * 1.4}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u * 1.4}" height="${u}" fill="rgba(72,140,188,0.32)"/></pattern>
-    <pattern id="sheet-building" width="${u}" height="${u}" patternUnits="userSpaceOnUse"><rect width="${u}" height="${u}" fill="rgba(110,100,92,0.5)"/><path d="M 0 0 L ${u} ${u} M ${u} 0 L 0 ${u}" stroke="#5a524c"/></pattern>
-  </defs>`
+  const body = HATCHES.map((item) => hatchPatternMarkup(item.id, ppm, `sheet-${item.id}`)).join('')
+  return `<defs>${body}</defs>`
 }
 
 function pipeColor(od: number | null, status: string): string {

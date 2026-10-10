@@ -3,6 +3,7 @@ import test from 'node:test'
 import { analyze } from './analyze.ts'
 import { emptyDoc } from './doc.ts'
 import { exampleDoc } from './example.ts'
+import { hatchTile } from './landscape.ts'
 import { pdfFromJpegPages } from './pdf.ts'
 import { buildSheetPages, contentBounds, DEFAULT_SHEET_LAYERS, mmToPx, paperOf } from './sheet.ts'
 
@@ -110,6 +111,35 @@ test('stroke, opacity, anchor and a coloured note reach the sheet', () => {
   assert.match(svg, /opacity="0\.4"/)
   assert.match(svg, /fill="#2a6288"/)
   assert.match(svg, /font-weight="700"/)
+})
+
+test('zone textures are dense and water keeps its waves on the sheet', () => {
+  const lawn = hatchTile('lawn', 20)
+  assert.ok(lawn.nodes.filter((node) => node.kind === 'path').length >= 2)
+  const mulch = hatchTile('bed-mulch', 20)
+  assert.ok(mulch.nodes.filter((node) => node.kind === 'chip').length >= 6)
+  const shrub = hatchTile('shrub', 20)
+  assert.ok(shrub.nodes.filter((node) => node.kind === 'dot').length >= 6)
+  const water = hatchTile('water', 20)
+  const waves = water.nodes.filter((node) => node.kind === 'path')
+  assert.ok(waves.length >= 2)
+  assert.ok(waves.every((node) => node.kind === 'path' && node.d.includes('Q')))
+  const doc = {
+    ...emptyDoc(),
+    zones: [{
+      id: 'z',
+      name: 'Пруд',
+      kind: 'water' as const,
+      points: [{ x: 0, y: 0 }, { x: 80, y: 0 }, { x: 80, y: 40 }],
+      doseMm: 0,
+      soil: 'loam' as const,
+      slope: 'flat' as const,
+      climate: 'open' as const,
+    }],
+  }
+  const svg = buildSheetPages(doc, analyze(doc), { title: 'Т', date: '01.01.2026', includeSpec: false })[0].svg
+  assert.match(svg, /sheet-water/)
+  assert.match(svg, /id="sheet-water"[\s\S]*Q /)
 })
 
 test('a conifer crown reaches the printed sheet', () => {
