@@ -179,6 +179,8 @@ input, select {
   background: #f7f3ea;
 }
 .tool-fly select, .tool-panel select { width: 100%; }
+.nozzle-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.nozzle-grid .tool { text-align: center; padding: 6px 2px; font-size: 12px; }
 .tool-label {
   margin: 8px 0 2px;
   font-size: 11px;
@@ -343,6 +345,7 @@ input, select {
 .draft-start.hot .draft-start-hit { fill: rgba(31, 107, 69, 0.42); }
 .draft-start-dot { fill: #1f6b45; stroke: #f7f3ea; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .node { fill: #fffdf8; stroke: #1c2822; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.node.bubbler { fill: #2a6288; }
 .node.selected, .source.selected, .handle { stroke: #b86a09; }
 .source { fill: #1f6b45; stroke: #143c28; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .valve { fill: #f7f3ea; stroke: #6b3fa0; stroke-width: 2; vector-effect: non-scaling-stroke; }

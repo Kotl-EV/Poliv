@@ -352,6 +352,21 @@ test('a chosen fan stays at 4.5 m even on a large lawn', () => {
   assert.ok(coveredShare(next.zones[0].points, next.sprinklers, 10) >= 0.85)
 })
 
+test('fans on a wide lawn cover the middle', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 10
+  doc.zones = [zone('lawn', 'lawn', 0, 0, 300, 180)]
+  doc.source = { x: -40, y: 90, pressureBar: 3, flowLimitLph: null }
+  const next = layoutIrrigation(doc, 'fan')
+  assert.ok(next)
+  assert.ok(next.sprinklers.length >= 12)
+  assert.ok(next.sprinklers.every((head) => head.radiusM === 4.5))
+  const share = coveredShare(next.zones[0].points, next.sprinklers, 10)
+  assert.ok(share >= 0.95, `covered ${share}`)
+  const middle = next.sprinklers.some((head) => head.x > 90 && head.x < 210 && head.y > 45 && head.y < 135)
+  assert.ok(middle, 'no fan in the middle of a 30×18 m lawn')
+})
+
 test('a large lawn uses rotors and covers most of the grass', () => {
   const doc = emptyDoc()
   doc.pxPerMeter = 10
@@ -401,8 +416,23 @@ test('a small lawn uses fan nozzles', () => {
   const next = layoutIrrigation(doc)
   assert.ok(next)
   assert.ok(next.sprinklers.length >= 2)
-  assert.ok(next.sprinklers.every((head) => head.radiusM <= 5))
-  assert.ok(coveredShare(next.zones[0].points, next.sprinklers, 10) >= 0.8)
+  assert.ok(next.sprinklers.every((head) => head.radiusM <= 6))
+  assert.ok(next.sprinklers.every((head) => head.nozzleId.startsWith('fan')))
+  assert.ok(coveredShare(next.zones[0].points, next.sprinklers, 10) >= 0.9)
+})
+
+test('auto layout fits the throw to the width of the lawn', () => {
+  const wide = emptyDoc()
+  wide.pxPerMeter = 10
+  wide.zones = [zone('lawn', 'lawn', 0, 0, 300, 180)]
+  wide.source = { x: -40, y: 90, pressureBar: 3, flowLimitLph: null }
+  const next = layoutIrrigation(wide)
+  assert.ok(next)
+  assert.ok(next.sprinklers.length >= 4)
+  assert.ok(next.sprinklers.length <= 12)
+  assert.ok(next.sprinklers.every((head) => head.radiusM >= 8))
+  const share = coveredShare(next.zones[0].points, next.sprinklers, 10)
+  assert.ok(share >= 0.95, `covered ${share}`)
 })
 
 test('a bed without a lawn gets drip only at its plants', () => {

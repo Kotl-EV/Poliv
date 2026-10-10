@@ -16,7 +16,7 @@ const STATION_LPH = 1500
 const MIN_LAWN_M2 = 8
 const PLANT_DRIP_MIN = 90
 
-type HeadSpot = { key: number; point: Point; nozzleId: string; rotationDeg: number }
+type HeadSpot = { key: number; point: Point; nozzleId: string; rotationDeg: number; radiusM: number; flowLph: number }
 type LaidPipe = { id: string; points: Point[]; role: PipeRole }
 type DripSpot = { key: number; points: Point[]; spacingM: number; emitterLph: number }
 
@@ -330,7 +330,7 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
   if (keptHeads.length === 0 && keptDrips.length === 0) return null
 
   const consumers = [
-    ...keptHeads.map((head) => ({ key: head.key, flow: nozzleById(head.nozzleId).flowLph, kind: 'spray' as const })),
+    ...keptHeads.map((head) => ({ key: head.key, flow: head.flowLph, kind: 'spray' as const })),
     ...keptDrips.map((drip) => ({ key: drip.key, flow: dripFlow(drip, ppm), kind: 'drip' as const })),
   ]
   const zoneRuntime = new Map<string, number>()
@@ -342,7 +342,7 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
     }
     let flow = 0
     for (const head of keptHeads) {
-      if (pointInZone(head.point, zone.points, zone.holes)) flow += nozzleById(head.nozzleId).flowLph
+      if (pointInZone(head.point, zone.points, zone.holes)) flow += head.flowLph
     }
     for (const drip of keptDrips) {
       if (!isDripKind(zone.kind)) continue
@@ -476,10 +476,10 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
       nozzleId: nozzle.id,
       x: head.point.x,
       y: head.point.y,
-      radiusM: nozzle.radiusM,
+      radiusM: head.radiusM,
       arcDeg: nozzle.arcDeg,
       rotationDeg: head.rotationDeg,
-      flowLph: nozzle.flowLph,
+      flowLph: head.flowLph,
     }
   })
   doc.drips = finalDrips.map((drip) => ({ id: ids('drip'), points: drip.points, spacingM: drip.spacingM, emitterLph: drip.emitterLph }))
@@ -622,7 +622,7 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
   if (keptHeads.length === 0 && keptDrips.length === 0) return null
 
   const consumers = [
-    ...keptHeads.map((head) => ({ key: head.key, flow: nozzleById(head.nozzleId).flowLph, kind: 'spray' as const })),
+    ...keptHeads.map((head) => ({ key: head.key, flow: head.flowLph, kind: 'spray' as const })),
     ...keptDrips.map((drip) => ({ key: drip.key, flow: dripFlow(drip, ppm), kind: 'drip' as const })),
   ]
   const zoneRuntime = new Map<string, number>()
@@ -634,7 +634,7 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
     }
     let flow = 0
     for (const head of keptHeads) {
-      if (pointInZone(head.point, zone.points, zone.holes)) flow += nozzleById(head.nozzleId).flowLph
+      if (pointInZone(head.point, zone.points, zone.holes)) flow += head.flowLph
     }
     for (const drip of keptDrips) {
       if (!isDripKind(zone.kind)) continue
@@ -773,10 +773,10 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
         nozzleId: nozzle.id,
         x: head.point.x,
         y: head.point.y,
-        radiusM: nozzle.radiusM,
+        radiusM: head.radiusM,
         arcDeg: nozzle.arcDeg,
         rotationDeg: head.rotationDeg,
-        flowLph: nozzle.flowLph,
+        flowLph: head.flowLph,
       }
     }),
     drips: finalDrips.map((drip) => ({ id: ids('drip'), points: drip.points, spacingM: drip.spacingM, emitterLph: drip.emitterLph })),
@@ -1295,7 +1295,7 @@ function placeSprayHeads(opts: {
     }
     const key = snapHeadKey(point, partSet, center)
     if (key === null) continue
-    heads.push({ key, point, nozzleId: spot.nozzleId, rotationDeg: spot.rotationDeg })
+    heads.push({ key, point, nozzleId: spot.nozzleId, rotationDeg: spot.rotationDeg, radiusM: spot.radiusM, flowLph: spot.flowLph })
   }
   return heads
 }

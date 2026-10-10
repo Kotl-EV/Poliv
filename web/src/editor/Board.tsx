@@ -358,7 +358,7 @@ export const Board = forwardRef<SVGSVGElement, {
               cx={sprinkler.x}
               cy={sprinkler.y}
               r={9 / view.k}
-              className={props.selectionKind === 'sprinkler' && props.selectionId === sprinkler.id ? 'node selected' : 'node'}
+              className={`node${sprinkler.nozzleId.startsWith('bub') ? ' bubbler' : ''}${props.selectionKind === 'sprinkler' && props.selectionId === sprinkler.id ? ' selected' : ''}`}
             />
           </g>
         ))}

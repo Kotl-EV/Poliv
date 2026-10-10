@@ -37,7 +37,7 @@ import { fixtureGlyph, fixtureKinds, fixtureSpec, FIXTURE_GROUPS, groupOf } from
 import { DEFAULT_PPM, DEFAULT_SHEET_M, gridStepM, hatchOf, hatchesFor, HATCHES, INKS, isDripKind, isSprayKind, isWetKind, SURFACES, surfaceOf } from '@shared/landscape.ts'
 import { crownFill, formOf, formsFor, plantGlyph, plantPaint } from '@shared/plants.ts'
 import { DEFAULT_SHEET_LAYERS, PAPERS, type PaperId, type SheetLayers } from '@shared/sheet.ts'
-import { nozzleById, NOZZLES } from '@shared/nozzles.ts'
+import { nozzleById, nozzlesOf, type Nozzle, type NozzleKind } from '@shared/nozzles.ts'
 import { SERIES, type PipeSeriesId } from '@shared/pipes.ts'
 import type { Doc, Drip, Fixture, FixtureKind, HatchId, Hydrant, Measure, Note, Pipe, PipeRole, Plant, PlantForm, PlantKind, Point, Sleeve, Source, Sprinkler, Valve, ValveBox, Zone, ZoneKind } from '@shared/types.ts'
 import { api, type User } from '../api'
@@ -1191,7 +1191,7 @@ export function EditorPage({
       && !confirm('Заменить текущую схему новым расчётом?')) return
     setError('')
     setStatus('Считаю схему…')
-    const next = layoutIrrigation(current, nozzleId.startsWith('rotor') ? 'rotor' : 'fan')
+    const next = layoutIrrigation(current)
     if (!next) {
       const hasSpray = current.zones.some((zone) => isSprayKind(zone.kind))
       const hasPlant = (current.plants ?? []).length > 0
@@ -1853,7 +1853,13 @@ export function EditorPage({
   const elementOn = tool === 'scale' || tool === 'dim' || anchorPick || (tool === 'fixture' && groupOf(fixtureKind) === 'mark')
   const objectOn = tool === 'fixture' && groupOf(fixtureKind) !== 'mark'
   const shapeLabel = tool === 'brush' ? 'Кисть' : tool === 'rect' ? 'Прямоуг.' : tool === 'circle' ? 'Круг' : 'Полигон'
-  const rotorOn = nozzleId.startsWith('rotor')
+  const headKind = nozzleById(nozzleId).kind
+  function pickHead(kind: NozzleKind) {
+    setTool('sprinkler')
+    if (headKind === kind) return
+    const next = kind === 'fan' ? 'fan180' : kind === 'rotator' ? 'rot6-180' : kind === 'rotor' ? 'rotor' : 'bub240'
+    setNozzleId(next)
+  }
   const zoneDraft = tool === 'pipe' && pipeRole === 'zone'
   const previewPoints = zoneDraft && hover ? [...draft, hover] : draft
   const liveFlow = zoneDraft ? draftHeadFlow(doc, previewPoints, SNAP_PX) : 0
@@ -2119,11 +2125,17 @@ export function EditorPage({
         {step === 'irrig' && (
           <>
             <div className="tool-rail">
-              <RailButton active={tool === 'sprinkler' && !rotorOn} label="Форсунка" onClick={() => { setTool('sprinkler'); if (rotorOn) setNozzleId('fan180') }}>
+              <RailButton active={tool === 'sprinkler' && headKind === 'fan'} label="Форсунка" onClick={() => pickHead('fan')}>
                 <Glyph><circle cx="12" cy="12" r="3" {...pen} /><path d="M12 5 A7 7 0 0 1 19 12" {...pen} /></Glyph>
               </RailButton>
-              <RailButton active={tool === 'sprinkler' && rotorOn} label="Ротор" onClick={() => { setTool('sprinkler'); if (!rotorOn) setNozzleId('rotor') }}>
+              <RailButton active={tool === 'sprinkler' && headKind === 'rotator'} label="Ротатор" onClick={() => pickHead('rotator')}>
+                <Glyph><circle cx="12" cy="12" r="2.2" {...pen} /><path d="M12 6 L14 9 M12 6 L10 9 M16 12 L13 13 M8 12 L11 13" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'sprinkler' && headKind === 'rotor'} label="Ротор" onClick={() => pickHead('rotor')}>
                 <Glyph><circle cx="12" cy="12" r="2.2" {...pen} /><path d="M12 4 A8 8 0 0 1 20 12" {...pen} /></Glyph>
+              </RailButton>
+              <RailButton active={tool === 'sprinkler' && headKind === 'bubbler'} label="Баблер" onClick={() => pickHead('bubbler')}>
+                <Glyph><circle cx="12" cy="12" r="3.2" {...pen} /><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none" /></Glyph>
               </RailButton>
               <RailButton active={tool === 'drip'} label="Капля" onClick={() => { setTool('drip'); setDraftPoints([]) }}>
                 <Glyph><path d="M4 12 H20" {...pen} strokeDasharray="3 2" /></Glyph>
@@ -2152,16 +2164,7 @@ export function EditorPage({
               <button className="rail-go" onClick={runLayout}>Схема</button>
             </div>
             <div className="tool-fly">
-              {tool === 'sprinkler' && (
-                <>
-                  <p className="tool-label">{rotorOn ? 'Ротор' : 'Форсунка'}</p>
-                  {NOZZLES.filter((nozzle) => rotorOn ? nozzle.id.startsWith('rotor') : nozzle.id.startsWith('fan')).map((nozzle) => (
-                    <button key={nozzle.id} className={nozzleId === nozzle.id ? 'tool active' : 'tool'} onClick={() => setNozzleId(nozzle.id)}>
-                      {nozzle.name}
-                    </button>
-                  ))}
-                </>
-              )}
+              {tool === 'sprinkler' && <NozzleFly kind={headKind} nozzleId={nozzleId} onPick={setNozzleId} />}
               {tool === 'box' && <p className="hint">Коробка для нескольких клапанов. Клапан рядом садится в свободный слот.</p>}
               {tool === 'hydrant' && <p className="hint">Точка на трубе. В спецификации на этом конце стоит гидрант.</p>}
               {tool === 'sleeve' && <p className="hint">Два клика по концам. Длина попадёт в спецификацию.</p>}
@@ -3168,6 +3171,50 @@ function shapeZone(zone: Zone, points: Point[], holes?: Point[][]): Zone {
   if (holes && holes.length) next.holes = holes
   else delete next.holes
   return next
+}
+
+const HEAD_COPY: Record<NozzleKind, { title: string; hint: string }> = {
+  fan: { title: 'Форсунка', hint: 'Короткий веер. Сектор и радиус в рядке ниже.' },
+  rotator: { title: 'Ротатор', hint: 'Средняя дальность, осадки ниже, чем у веера.' },
+  rotor: { title: 'Ротор', hint: 'Дальняя струя для большого газона.' },
+  bubbler: { title: 'Баблер', hint: 'Заливает лунку у куста или дерева. Радиус потом меняется в свойствах.' },
+}
+
+function NozzleFly({ kind, nozzleId, onPick }: { kind: NozzleKind; nozzleId: string; onPick: (id: string) => void }) {
+  const list = nozzlesOf(kind)
+  const radii = [...new Set(list.map((item) => item.radiusM))]
+  const copy = HEAD_COPY[kind]
+  return (
+    <>
+      <p className="tool-label">{copy.title}</p>
+      <p className="hint">{copy.hint}</p>
+      {radii.map((radius) => (
+        <div key={radius}>
+          <p className="tool-label">{metres(radius)} м</p>
+          <div className="nozzle-grid">
+            {list.filter((item) => item.radiusM === radius).map((item) => (
+              <button key={item.id} type="button" className={nozzleId === item.id ? 'tool active' : 'tool'} onClick={() => onPick(item.id)}>
+                {nozzleChip(item)}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </>
+  )
+}
+
+function nozzleChip(item: Nozzle): string {
+  if (item.kind === 'bubbler') {
+    const litres = item.flowLph / 60
+    const text = Number.isInteger(litres) ? String(litres) : litres.toFixed(1)
+    return item.arcDeg >= 359 ? `${text} л` : `${text} л ${item.arcDeg}°`
+  }
+  return item.arcDeg >= 359 ? '360°' : `${item.arcDeg}°`
+}
+
+function metres(radiusM: number): string {
+  return Number.isInteger(radiusM) ? String(radiusM) : radiusM.toFixed(1)
 }
 
 function shiftZone(zone: Zone, dx: number, dy: number): Zone {

@@ -230,7 +230,8 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
   if (layers.spray) {
     for (const head of doc.sprinklers) {
       const r = 4.5 / k
-      parts.push(`<circle cx="${fmt(head.x)}" cy="${fmt(head.y)}" r="${fmt(r)}" fill="#fffdf8" stroke="#1c2822" stroke-width="${fmt(1.6 / k)}"/>`)
+      const fill = head.nozzleId.startsWith('bub') ? '#2a6288' : '#fffdf8'
+      parts.push(`<circle cx="${fmt(head.x)}" cy="${fmt(head.y)}" r="${fmt(r)}" fill="${fill}" stroke="#1c2822" stroke-width="${fmt(1.6 / k)}"/>`)
     }
   }
   if (layers.fittings) {

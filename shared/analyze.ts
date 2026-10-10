@@ -181,10 +181,15 @@ function nozzleRows(doc: Doc): Analysis['nozzles'] {
   const map = new Map<string, { nozzleId: string; name: string; count: number; flowLph: number }>()
   for (const sprinkler of doc.sprinklers) {
     const nozzle = nozzleById(sprinkler.nozzleId)
-    const row = map.get(sprinkler.nozzleId) ?? { nozzleId: sprinkler.nozzleId, name: nozzle.name, count: 0, flowLph: 0 }
+    const radius = Math.round(sprinkler.radiusM * 10) / 10
+    const sized = Math.abs(radius - nozzle.radiusM) >= 0.05
+    const text = Number.isInteger(radius) ? String(radius) : radius.toFixed(1)
+    const name = sized ? `${nozzle.name} ${text} м` : nozzle.name
+    const key = `${sprinkler.nozzleId}@${radius}`
+    const row = map.get(key) ?? { nozzleId: sprinkler.nozzleId, name, count: 0, flowLph: 0 }
     row.count += 1
     row.flowLph += sprinkler.flowLph
-    map.set(sprinkler.nozzleId, row)
+    map.set(key, row)
   }
   return [...map.values()]
 }

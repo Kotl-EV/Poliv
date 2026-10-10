@@ -13,13 +13,25 @@ const COVER_FRAC = 0.86
 const OVERSPRAY_MAX = 0.22
 const TARGET_FRAC = 0.87
 const KEEP_FRAC = 0.84
+const FILL_TARGET = 0.97
+const FILL_KEEP = 0.95
 const VIS_STEPS = 72
-const FAN_FAMILY = { radiusM: FAN_M, ids: { 90: 'fan90', 180: 'fan180', 360: 'fan360' } } as const
-const ROTOR_FAMILY = { radiusM: ROTOR_M, ids: { 90: 'rotor90', 180: 'rotor', 360: 'rotor360' } } as const
+const FAN_IDS = { 90: 'fan90', 180: 'fan180', 360: 'fan360' } as const
+const ROTOR_IDS = { 90: 'rotor90', 180: 'rotor', 360: 'rotor360' } as const
 
-export type SpraySpot = { point: Point; nozzleId: string; rotationDeg: number }
+export type SpraySpot = { point: Point; nozzleId: string; rotationDeg: number; radiusM: number; flowLph: number }
 
-type Family = typeof FAN_FAMILY | typeof ROTOR_FAMILY
+type ArcIds = { 90: string; 180: string; 360: string }
+type Family = { radiusM: number; kind: 'fan' | 'rotor' }
+type Prepared = {
+  outer: Point[]
+  holeRings: Point[][]
+  ppm: number
+  inside: (point: Point) => boolean
+  minSpan: number
+  samples: Point[]
+  weights: Float64Array
+}
 
 type Candidate = { point: Point; vertex: boolean; edge: boolean }
 
@@ -34,13 +46,21 @@ type Option = {
 
 export type SprayFamily = 'auto' | 'fan' | 'rotor'
 
-/** Покрытие газона: минимум голов, head-to-head, без плотной укладки вокруг клумб. */
+/** Покрытие газона: радиус под ширину, head-to-head, без плотной укладки вокруг клумб. */
 export function placeSprayOnPolygon(ring: Point[], holes: Point[][], ppm: number, family: SprayFamily = 'auto'): SpraySpot[] {
-  if (ring.length < 3 || !(ppm > 0)) return []
+  const prep = prepareLawn(ring, holes, ppm)
+  if (!prep) return []
+  if (family === 'fan') return lay(prep, FAN_M, 'fan', false)
+  if (family === 'rotor') return lay(prep, ROTOR_M, 'rotor', true)
+  return pickThrow(prep)
+}
+
+function prepareLawn(ring: Point[], holes: Point[][], ppm: number): Prepared | null {
+  if (ring.length < 3 || !(ppm > 0)) return null
   const outer = orient(simplifyRing(ring, 0.2 * ppm), true)
-  if (outer.length < 3) return []
+  if (outer.length < 3) return null
   const area = polygonAreaPx(outer) / (ppm * ppm)
-  if (area < MIN_LAWN_M2) return []
+  if (area < MIN_LAWN_M2) return null
   const holeRings = holes
     .map((hole) => orient(simplifyRing(hole, 0.2 * ppm), false))
     .filter((hole) => hole.length >= 3 && polygonAreaPx(hole) / (ppm * ppm) >= 1)
@@ -48,31 +68,92 @@ export function placeSprayOnPolygon(ring: Point[], holes: Point[][], ppm: number
   const { minSpan } = spansOf(outer, ppm)
   const stepM = area > 400 ? 0.75 : area > 140 ? 0.5 : 0.42
   const samples = sampleLawn(outer, holeRings, ppm, stepM)
-  if (samples.length === 0) return []
-  const rings = [outer, ...holeRings]
-  const weights = sampleWeights(samples, rings, ppm)
+  if (samples.length === 0) return null
+  return { outer, holeRings, ppm, inside, minSpan, samples, weights: sampleWeights(samples, [outer, ...holeRings], ppm) }
+}
 
-  const rotorsOk = family === 'fan' ? false : family === 'rotor' ? minSpan >= 6 : area >= 70 && minSpan >= 7.2
-  const primary = rotorsOk ? ROTOR_FAMILY : FAN_FAMILY
-  const candidates = collectCandidates(outer, holeRings, ppm, inside, primary.radiusM)
+/** Шаг 0,5 м от короткого веера до радиуса, который ещё помещается в короткую сторону. */
+function throwChoices(minSpan: number): number[] {
+  const cap = Math.min(12, Math.max(FAN_M, minSpan * 1.05))
+  const found: number[] = []
+  for (let radius = 2.5; radius <= cap + 0.001; radius += 0.5) found.push(Math.round(radius * 2) / 2)
+  return found
+}
+
+function pickThrow(prep: Prepared): SpraySpot[] {
+  let best: SpraySpot[] = []
+  let bestScore = Infinity
+  for (const radius of throwChoices(prep.minSpan)) {
+    const kind = radius <= 5.5 ? 'fan' as const : 'rotor' as const
+    const heads = lay(prep, radius, kind, false)
+    const score = layoutScore(heads, prep, radius)
+    if (score < bestScore) {
+      bestScore = score
+      best = heads
+    }
+  }
+  return best
+}
+
+function layoutScore(heads: SpraySpot[], prep: Prepared, radiusM: number): number {
+  if (heads.length === 0) return Infinity
+  const cover = coveredCount(heads, prep.samples, prep.ppm) / prep.samples.length
+  let waste = 0
+  for (const head of heads) waste += oversprayFrac(head, prep.ppm, prep.inside)
+  waste /= heads.length
+  const miss = Math.max(0, 0.96 - cover)
+  return miss * 100000 + heads.length * 100 + waste * 1200 + radiusM
+}
+
+function lay(prep: Prepared, radiusM: number, kind: 'fan' | 'rotor', fallback: boolean): SpraySpot[] {
+  const { outer, holeRings, ppm, inside, minSpan, samples, weights } = prep
+  const primary: Family = { radiusM, kind }
+  const wide = minSpan > radiusM * 1.85
+  const target = wide ? FILL_TARGET : TARGET_FRAC
+  const keep = wide ? FILL_KEEP : KEEP_FRAC
+  const candidates = collectCandidates(outer, holeRings, ppm, inside, radiusM, wide)
   const primaryOpts: Option[] = []
   for (const cand of candidates) primaryOpts.push(...optionsAt(cand, primary, samples, ppm, inside))
   const heads = seedCorners(outer, primaryOpts, ppm)
-  heads.push(...pickHeads(primaryOpts, samples, weights, ppm, TARGET_FRAC, heads))
-  if (rotorsOk && coveredCount(heads, samples, ppm) < samples.length * KEEP_FRAC) {
+  heads.push(...pickHeads(primaryOpts, samples, weights, ppm, target, heads))
+  const families: Family[] = [primary]
+  if (fallback && coveredCount(heads, samples, ppm) < samples.length * keep) {
+    const fans: Family = { radiusM: FAN_M, kind: 'fan' }
+    families.push(fans)
     const fanOpts: Option[] = []
-    for (const cand of candidates) fanOpts.push(...optionsAt(cand, FAN_FAMILY, samples, ppm, inside))
-    heads.push(...pickHeads(fanOpts, samples, weights, ppm, TARGET_FRAC, heads))
+    for (const cand of candidates) fanOpts.push(...optionsAt(cand, fans, samples, ppm, inside))
+    heads.push(...pickHeads(fanOpts, samples, weights, ppm, target, heads))
   }
-  if (coveredCount(heads, samples, ppm) < samples.length * KEEP_FRAC) {
-    const families: Family[] = rotorsOk ? [ROTOR_FAMILY, FAN_FAMILY] : [FAN_FAMILY]
+  if (wide) {
+    let guard = 0
+    while (guard < 30 && heads.length < MAX_HEADS && coveredCount(heads, samples, ppm) < samples.length * target) {
+      guard += 1
+      const covered = new Uint8Array(samples.length)
+      for (const head of heads) applyMask(covered, coverageMask(head, samples, ppm))
+      const extra = rescueDry(samples, covered, heads, candidates, families, inside, ppm, 0.03)
+      if (!extra) break
+      heads.push(extra)
+    }
+  } else if (coveredCount(heads, samples, ppm) < samples.length * KEEP_FRAC) {
     const covered = new Uint8Array(samples.length)
     for (const head of heads) applyMask(covered, coverageMask(head, samples, ppm))
     const extra = rescueDry(samples, covered, heads, candidates, families, inside, ppm)
     if (extra) heads.push(extra)
   }
-  pruneHeads(heads, samples, weights, outer, ppm)
+  pruneHeads(heads, samples, weights, outer, ppm, keep)
   return heads
+}
+
+function arcIds(kind: 'fan' | 'rotor'): ArcIds {
+  return kind === 'fan' ? FAN_IDS : ROTOR_IDS
+}
+
+function flowFor(kind: 'fan' | 'rotor', arcDeg: number, radiusM: number): number {
+  const base = kind === 'fan' ? FAN_M : ROTOR_M
+  const slot = arcDeg >= 359 ? 360 : arcDeg <= 100 ? 90 : 180
+  const nozzle = nozzleById(arcIds(kind)[slot])
+  if (Math.abs(radiusM - base) < 0.001) return nozzle.flowLph
+  return Math.max(1, Math.round(nozzle.flowLph * (radiusM / base) ** 2))
 }
 
 export function ringsOverlap(a: Point[], b: Point[]): boolean {
@@ -98,7 +179,13 @@ function optionsAt(
   const out: Option[] = []
   for (const nozzleId of ids) {
     const nozzle = nozzleById(nozzleId)
-    const spot: SpraySpot = { point: cand.point, nozzleId, rotationDeg: nozzle.arcDeg >= 359 ? 0 : aim }
+    const spot: SpraySpot = {
+      point: cand.point,
+      nozzleId,
+      rotationDeg: nozzle.arcDeg >= 359 ? 0 : aim,
+      radiusM: family.radiusM,
+      flowLph: flowFor(family.kind, nozzle.arcDeg, family.radiusM),
+    }
     const overspray = oversprayFrac(spot, ppm, inside)
     if (overspray > OVERSPRAY_MAX) continue
     const mask = coverageMask(spot, samples, ppm)
@@ -109,8 +196,8 @@ function optionsAt(
       spot,
       mask,
       overspray,
-      flow: nozzle.flowLph,
-      radiusM: nozzle.radiusM,
+      flow: spot.flowLph,
+      radiusM: family.radiusM,
       vertex: cand.vertex,
     })
   }
@@ -118,16 +205,17 @@ function optionsAt(
 }
 
 function nozzlesForSector(visDeg: number, family: Family, throwRoomM: number, onEdge: boolean): string[] {
-  const ids: string[] = []
+  const ids = arcIds(family.kind)
+  const found: string[] = []
   if (onEdge) {
-    if (visDeg >= 48 && visDeg <= 148) ids.push(family.ids[90])
-    if (visDeg >= 125 && visDeg <= 255) ids.push(family.ids[180])
+    if (visDeg >= 48 && visDeg <= 148) found.push(ids[90])
+    if (visDeg >= 125 && visDeg <= 255) found.push(ids[180])
   }
-  if (visDeg >= 305 && throwRoomM >= family.radiusM * 0.9) ids.push(family.ids[360])
-  if (ids.length === 0 && onEdge && visDeg >= 55) {
-    ids.push(visDeg < 155 ? family.ids[90] : family.ids[180])
+  if (visDeg >= 305 && throwRoomM >= family.radiusM * 0.9) found.push(ids[360])
+  if (found.length === 0 && onEdge && visDeg >= 55) {
+    found.push(visDeg < 155 ? ids[90] : ids[180])
   }
-  return ids
+  return found
 }
 
 function visibleFlags(point: Point, radiusPx: number, inside: (sample: Point) => boolean): boolean[] {
@@ -147,6 +235,7 @@ function collectCandidates(
   ppm: number,
   inside: (point: Point) => boolean,
   throwM: number,
+  fill: boolean,
 ): Candidate[] {
   const inset = INSET_M * ppm
   const minGap = Math.max(0.62 * throwM, 1.8) * ppm
@@ -229,6 +318,21 @@ function collectCandidates(
       push(point, false, false)
     }
   }
+  if (fill) {
+    const gap = HEAD_SPACING * throwM * ppm
+    const spanX = maxX - minX
+    const spanY = maxY - minY
+    const nx = Math.max(1, Math.round(spanX / gap))
+    const ny = Math.max(1, Math.round(spanY / gap))
+    const skirt = 0.45 * throwM * ppm
+    for (let ix = 1; ix < nx; ix++) {
+      for (let iy = 1; iy < ny; iy++) {
+        const point = { x: minX + (spanX * ix) / nx, y: minY + (spanY * iy) / ny }
+        if (!inside(point) || clearance(point) < skirt) continue
+        push(point, false, true)
+      }
+    }
+  }
   return points
 }
 
@@ -242,7 +346,7 @@ function coverageMask(head: SpraySpot, samples: Point[], ppm: number): Uint8Arra
 
 function oversprayFrac(head: SpraySpot, ppm: number, inside: (point: Point) => boolean): number {
   const nozzle = nozzleById(head.nozzleId)
-  const radius = nozzle.radiusM * ppm * 0.92
+  const radius = head.radiusM * ppm * 0.92
   const steps = 36
   let outside = 0
   if (nozzle.arcDeg >= 359) {
@@ -265,7 +369,7 @@ function spacingBonus(option: Option, heads: SpraySpot[], ppm: number): number {
   let best = 0
   for (const head of heads) {
     const gap = dist(head.point, option.spot.point)
-    const other = nozzleById(head.nozzleId).radiusM * HEAD_SPACING * ppm
+    const other = head.radiusM * HEAD_SPACING * ppm
     const want = (target + other) / 2
     const err = Math.abs(gap - want) / Math.max(want, 1)
     if (err < 0.38) best = Math.max(best, 3.2 * (1 - err / 0.38))
@@ -275,7 +379,7 @@ function spacingBonus(option: Option, heads: SpraySpot[], ppm: number): number {
 
 function tooClose(option: Option, heads: SpraySpot[], ppm: number): boolean {
   for (const head of heads) {
-    const other = nozzleById(head.nozzleId).radiusM
+    const other = head.radiusM
     const limit = Math.min(option.radiusM, other) * MIN_HEAD_SEP * ppm
     if (dist(option.spot.point, head.point) < Math.max(limit, 0.55 * ppm)) return true
   }
@@ -380,6 +484,7 @@ function rescueDry(
   families: Family[],
   inside: (point: Point) => boolean,
   ppm: number,
+  minFrac = 0.08,
 ): SpraySpot | null {
   const dry: Point[] = []
   for (let i = 0; i < samples.length; i++) {
@@ -400,10 +505,10 @@ function rescueDry(
   for (let i = 0; i < dry.length; i += stride) seeds.push(dry[i])
 
   let best: SpraySpot | null = null
-  let bestGain = Math.max(3, dry.length * 0.08)
+  let bestGain = Math.max(2, dry.length * minFrac)
   for (const point of seeds) {
     if (!inside(point)) continue
-    if (heads.some((head) => dist(head.point, point) < nozzleById(head.nozzleId).radiusM * MIN_HEAD_SEP * ppm)) continue
+    if (heads.some((head) => dist(head.point, point) < head.radiusM * MIN_HEAD_SEP * ppm)) continue
     for (const family of families) {
       for (const opt of optionsAt({ point, vertex: false, edge: true }, family, dry, ppm, inside)) {
         let gain = 0
@@ -421,7 +526,7 @@ function rescueDry(
   return best
 }
 
-function pruneHeads(heads: SpraySpot[], samples: Point[], weights: Float64Array, outer: Point[], ppm: number): void {
+function pruneHeads(heads: SpraySpot[], samples: Point[], weights: Float64Array, outer: Point[], ppm: number, keepFrac = KEEP_FRAC): void {
   const corners = outer.filter((_, i) => {
     const n = outer.length
     const prev = outer[(i + n - 1) % n]
@@ -446,16 +551,16 @@ function pruneHeads(heads: SpraySpot[], samples: Point[], weights: Float64Array,
     }
     return unique
   }
-  const minCover = Math.ceil(samples.length * KEEP_FRAC)
+  const minCover = Math.ceil(samples.length * keepFrac)
   let changed = true
   while (changed && heads.length > 3) {
     changed = false
     let drop = -1
     let dropScore = Infinity
     for (let i = 0; i < heads.length; i++) {
-      const ri = nozzleById(heads[i].nozzleId).radiusM
+      const ri = heads[i].radiusM
       for (let j = i + 1; j < heads.length; j++) {
-        const rj = nozzleById(heads[j].nozzleId).radiusM
+        const rj = heads[j].radiusM
         if (dist(heads[i].point, heads[j].point) >= 0.6 * Math.min(ri, rj) * ppm) continue
         const dropI = isCorner(heads[i]) ? j : isCorner(heads[j]) ? i : uniqueOf(i) <= uniqueOf(j) ? i : j
         if (isCorner(heads[dropI]) && isCorner(heads[dropI === i ? j : i])) continue
@@ -519,7 +624,7 @@ function maxThrowRoom(point: Point, ppm: number, inside: (sample: Point) => bool
 
 function headCovers(head: SpraySpot, sample: Point, ppm: number, frac = 1.02): boolean {
   const nozzle = nozzleById(head.nozzleId)
-  if (dist(head.point, sample) > nozzle.radiusM * ppm * frac) return false
+  if (dist(head.point, sample) > head.radiusM * ppm * frac) return false
   if (nozzle.arcDeg >= 359) return true
   let delta = bearing(head.point, sample) - head.rotationDeg
   while (delta > 180) delta -= 360

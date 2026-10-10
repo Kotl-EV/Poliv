@@ -3,7 +3,7 @@ import { dist } from '@shared/geom.ts'
 import { sleeveLengthM } from '@shared/join.ts'
 import { SURFACES } from '@shared/landscape.ts'
 import type { Analysis, Doc, Drip, PipeRole, Source, Sprinkler, Valve, Zone } from '@shared/types.ts'
-import { NOZZLES } from '@shared/nozzles.ts'
+import { nozzleById, nozzlesOf, type NozzleKind } from '@shared/nozzles.ts'
 import { SERIES, seriesById, type PipeSeriesId } from '@shared/pipes.ts'
 
 const KIND = Object.fromEntries(SURFACES.map((item) => [item.id, item.label])) as Record<string, string>
@@ -140,7 +140,7 @@ export function Spec({
             <select
               value={sprinkler.nozzleId}
               onChange={(event) => {
-                const nozzle = NOZZLES.find((item) => item.id === event.target.value) ?? NOZZLES[1]
+                const nozzle = nozzleById(event.target.value)
                 onSprinkler(sprinkler.id, {
                   nozzleId: nozzle.id,
                   radiusM: nozzle.radiusM,
@@ -149,14 +149,18 @@ export function Spec({
                 })
               }}
             >
-              {NOZZLES.map((nozzle) => (
-                <option key={nozzle.id} value={nozzle.id}>{nozzle.name}</option>
+              {(['fan', 'rotator', 'rotor', 'bubbler'] as NozzleKind[]).map((kind) => (
+                <optgroup key={kind} label={kind === 'fan' ? 'Веер' : kind === 'rotator' ? 'Ротатор' : kind === 'rotor' ? 'Ротор' : 'Баблер'}>
+                  {nozzlesOf(kind).map((nozzle) => (
+                    <option key={nozzle.id} value={nozzle.id}>{nozzle.name}</option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </label>
           <label>
             Радиус, м
-            <input type="number" min={0.5} max={30} step={0.1} value={sprinkler.radiusM} onChange={(event) => onSprinkler(sprinkler.id, { radiusM: Number(event.target.value) })} />
+            <input type="number" min={0.3} max={30} step={0.1} value={sprinkler.radiusM} onChange={(event) => onSprinkler(sprinkler.id, { radiusM: Number(event.target.value) })} />
           </label>
           <label>
             Сектор, °
