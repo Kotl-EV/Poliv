@@ -28,7 +28,9 @@ export type Hit =
   | { kind: 'drip-point'; id: string; index: number }
   | { kind: 'note'; id: string }
   | { kind: 'plant'; id: string }
+  | { kind: 'plant-size'; id: string }
   | { kind: 'fixture'; id: string }
+  | { kind: 'fixture-size'; id: string }
   | { kind: 'dim'; id: string }
   | { kind: 'dim-point'; id: string; index: number }
   | { kind: 'draft-close' }
@@ -58,7 +60,9 @@ export function readHit(target: EventTarget | null): Hit {
   if (kind === 'drip-point' && Number.isInteger(index)) return { kind, id, index }
   if (kind === 'note') return { kind, id }
   if (kind === 'plant') return { kind, id }
+  if (kind === 'plant-size') return { kind, id }
   if (kind === 'fixture') return { kind, id }
+  if (kind === 'fixture-size') return { kind, id }
   if (kind === 'dim') return { kind, id }
   if (kind === 'dim-point' && Number.isInteger(index)) return { kind, id, index }
   return { kind: 'board' }
@@ -410,6 +414,7 @@ export const Board = forwardRef<SVGSVGElement, {
         {selectedSprinkler && (
           <SprinklerHandles sprinkler={selectedSprinkler} ppm={ppm} k={view.k} />
         )}
+        <SelectedSize doc={doc} selectionKind={props.selectionKind} selectionId={props.selectionId} ppm={ppm} k={view.k} />
       </g>
     </svg>
   )
@@ -861,6 +866,57 @@ function PlantMark({ plant, ppm, k, selected }: { plant: Plant; ppm: number; k: 
         ))}
       </g>
       <circle data-hit="plant" data-id={plant.id} r={Math.max(radius, 10 / k)} fill="transparent" />
+    </g>
+  )
+}
+
+function SelectedSize({ doc, selectionKind, selectionId, ppm, k }: { doc: Doc; selectionKind: string | null; selectionId: string | null; ppm: number; k: number }) {
+  if (selectionKind === 'plant' && selectionId) {
+    const plant = (doc.plants ?? []).find((item) => item.id === selectionId)
+    if (!plant) return null
+    const radius = Math.max(plant.radiusM * ppm, 8 / k)
+    return (
+      <g transform={`translate(${plant.x} ${plant.y})`}>
+        <SizeGrip x={radius} y={0} id={plant.id} hit="plant-size" k={k} label={sizeLabel(plant.radiusM)} />
+      </g>
+    )
+  }
+  if (selectionKind === 'fixture' && selectionId) {
+    const fixture = (doc.fixtures ?? []).find((item) => item.id === selectionId)
+    if (!fixture) return null
+    const turn = fixture.rotationDeg || 0
+    if (fixture.kind === 'scalebar') {
+      const metres = Math.max(fixture.radiusM * 2, 0.2)
+      const len = Math.max(metres * ppm, 16 / k)
+      return (
+        <g transform={`translate(${fixture.x} ${fixture.y}) rotate(${turn})`}>
+          <SizeGrip x={len / 2} y={0} id={fixture.id} hit="fixture-size" k={k} />
+        </g>
+      )
+    }
+    const radius = Math.max(fixture.radiusM * ppm, 8 / k)
+    return (
+      <g transform={`translate(${fixture.x} ${fixture.y}) rotate(${turn})`}>
+        <SizeGrip x={radius} y={0} id={fixture.id} hit="fixture-size" k={k} label={sizeLabel(fixture.radiusM * 2)} />
+      </g>
+    )
+  }
+  return null
+}
+
+function sizeLabel(metres: number): string {
+  return `${Math.round(metres * 10) / 10} м`
+}
+
+function SizeGrip({ x, y, id, hit, k, label }: { x: number; y: number; id: string; hit: 'plant-size' | 'fixture-size'; k: number; label?: string }) {
+  const s = 7 / k
+  return (
+    <g className="size-grip">
+      <line x1={0} y1={0} x2={x} y2={y} stroke="#b86a09" strokeWidth={1.2 / k} pointerEvents="none" />
+      {label ? (
+        <text x={x} y={y - 12 / k} textAnchor="middle" fontSize={12 / k} fill="#1c2822" pointerEvents="none">{label}</text>
+      ) : null}
+      <rect data-hit={hit} data-id={id} x={x - s} y={y - s} width={s * 2} height={s * 2} className="handle size-handle" />
     </g>
   )
 }

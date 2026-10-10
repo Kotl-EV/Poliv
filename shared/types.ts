@@ -112,11 +112,12 @@ export type Measure = {
 
 /** Знак на плане. На полив не влияет. */
 export type FixtureKind =
-  | 'boulder' | 'rocks' | 'slab'
-  | 'bench' | 'chair' | 'table' | 'sofa'
-  | 'bollard' | 'lamp' | 'spot' | 'lantern'
-  | 'sedan' | 'suv' | 'wagon'
-  | 'lounger' | 'daybed' | 'parasol'
+  | 'boulder' | 'rocks' | 'slab' | 'steps' | 'wall' | 'pebble'
+  | 'bench' | 'chair' | 'table' | 'sofa' | 'picnic' | 'swing' | 'hammock' | 'stool'
+  | 'bollard' | 'lamp' | 'spot' | 'lantern' | 'spike' | 'twin'
+  | 'sedan' | 'suv' | 'wagon' | 'pickup' | 'van' | 'bike' | 'moto'
+  | 'lounger' | 'daybed' | 'parasol' | 'grill' | 'tub'
+  | 'planter' | 'pots' | 'pergola' | 'gazebo' | 'fountain' | 'statue' | 'greenhouse' | 'sandbox'
   | 'compass' | 'scalebar' | 'controller'
 
 export type Fixture = {

@@ -39,7 +39,7 @@ import { formOf, formsFor, plantGlyph, plantPaint } from '@shared/plants.ts'
 import { DEFAULT_SHEET_LAYERS, PAPERS, type PaperId, type SheetLayers } from '@shared/sheet.ts'
 import { nozzleById, NOZZLES } from '@shared/nozzles.ts'
 import { SERIES, type PipeSeriesId } from '@shared/pipes.ts'
-import type { Doc, Drip, Fixture, FixtureKind, HatchId, Note, Plant, PlantForm, PlantKind, Point, Source, Sprinkler, Valve, Zone, ZoneKind } from '@shared/types.ts'
+import type { Doc, Drip, Fixture, FixtureKind, HatchId, Measure, Note, Pipe, Plant, PlantForm, PlantKind, Point, Source, Sprinkler, Valve, Zone, ZoneKind } from '@shared/types.ts'
 import { api, type User } from '../api'
 import { layoutIrrigation } from '@shared/plan.ts'
 import { Board, readHit, worldPoint, type Hit, type View } from '../editor/Board'
@@ -52,6 +52,17 @@ configurePdfWorker(workerUrl)
 type Tool = 'select' | 'scale' | 'zone' | 'rect' | 'circle' | 'brush' | 'text' | 'tree' | 'bush' | 'fixture' | 'dim' | 'sprinkler' | 'pipe' | 'valve' | 'drip' | 'source'
 type Step = 'draw' | 'irrig' | 'layout' | 'spec'
 type Sel = { kind: 'sprinkler' | 'zone' | 'pipe' | 'source' | 'valve' | 'drip' | 'note' | 'plant' | 'fixture' | 'dim'; id?: string } | null
+
+type Clip =
+  | { kind: 'zone'; item: Zone }
+  | { kind: 'plant'; item: Plant }
+  | { kind: 'fixture'; item: Fixture }
+  | { kind: 'note'; item: Note }
+  | { kind: 'sprinkler'; item: Sprinkler }
+  | { kind: 'valve'; item: Valve }
+  | { kind: 'pipe'; item: Pipe }
+  | { kind: 'drip'; item: Drip }
+  | { kind: 'dim'; item: Measure }
 type Fav = { kind: 'tree' | 'bush'; form: PlantForm } | { kind: 'fixture'; form: FixtureKind }
 type LineOp = 'slice' | 'mirror'
 
@@ -216,12 +227,13 @@ export function EditorPage({
   const future = useRef<Doc[]>([])
   const ready = useRef(false)
   const drag = useRef<Hit | null>(null)
+  const stretch = useRef<{ grew: boolean } | null>(null)
   const pan = useRef<{ x: number; y: number; view: View; button: number; hit: Hit; moved: boolean } | null>(null)
   const click = useRef<{ hit: Hit; x: number; y: number; moved: boolean } | null>(null)
   const grab = useRef<Point | null>(null)
   const shapeStart = useRef<Point | null>(null)
   const brushing = useRef(false)
-  const clipboard = useRef<Zone | null>(null)
+  const clipboard = useRef<Clip | null>(null)
   const lineRef = useRef<Point[]>([])
   const dimRef = useRef<Point[]>([])
   const didFit = useRef(false)
@@ -384,6 +396,7 @@ export function EditorPage({
 
   function commit(next: Doc) {
     remember()
+    docRef.current = next
     setDoc(next)
   }
 
@@ -521,7 +534,7 @@ export function EditorPage({
   }
 
   function resolveBoardHit(hit: Hit, point: Point): Hit {
-    if (hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc' || hit.kind === 'draft-ok' || hit.kind === 'draft-close') return hit
+    if (hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc' || hit.kind === 'draft-ok' || hit.kind === 'draft-close' || hit.kind === 'plant-size' || hit.kind === 'fixture-size') return hit
     const id = pickSprinkler(docRef.current.sprinklers, point, view.k, ppm)
     if (id) return { kind: 'sprinkler', id }
     return hit
@@ -594,11 +607,12 @@ export function EditorPage({
     }
     const drafting = (tool === 'zone' || tool === 'pipe' || tool === 'drip') && draftRef.current.length > 0
     const placingDim = tool === 'dim' && hit.kind !== 'dim' && hit.kind !== 'dim-point'
-    const editHit = !placingDim && (hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc' || hit.kind === 'zone-point' || hit.kind === 'zone-mid' || hit.kind === 'pipe-point' || hit.kind === 'drip-point' || hit.kind === 'sprinkler' || hit.kind === 'source' || hit.kind === 'valve' || hit.kind === 'note' || hit.kind === 'plant' || hit.kind === 'fixture' || hit.kind === 'dim' || hit.kind === 'dim-point')
+    const editHit = !placingDim && (hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc' || hit.kind === 'zone-point' || hit.kind === 'zone-mid' || hit.kind === 'pipe-point' || hit.kind === 'drip-point' || hit.kind === 'sprinkler' || hit.kind === 'source' || hit.kind === 'valve' || hit.kind === 'note' || hit.kind === 'plant' || hit.kind === 'plant-size' || hit.kind === 'fixture' || hit.kind === 'fixture-size' || hit.kind === 'dim' || hit.kind === 'dim-point')
     if (!drafting && editHit) {
       remember()
       event.currentTarget.setPointerCapture(event.pointerId)
       drag.current = hit
+      if (hit.kind === 'plant-size' || hit.kind === 'fixture-size') stretch.current = null
       if (hit.kind === 'dim') grab.current = raw
       click.current = { hit, x: event.clientX, y: event.clientY, moved: false }
       setSelection(selectionFromHit(hit))
@@ -662,11 +676,13 @@ export function EditorPage({
       return
     }
     if (tool === 'text' || tool === 'tree' || tool === 'bush') {
-      placeMark(tool, point)
+      const id = placeMark(tool, point)
+      if (id) beginStretch(event, 'plant', id)
       return
     }
     if (tool === 'fixture') {
-      placeFixture(point)
+      const id = placeFixture(point)
+      if (id) beginStretch(event, 'fixture', id)
       return
     }
     if (tool === 'dim') {
@@ -806,6 +822,18 @@ export function EditorPage({
       }))
       return
     }
+    if (active.kind === 'plant-size' || active.kind === 'fixture-size') {
+      const gate = stretch.current
+      if (gate && !gate.grew) {
+        const centre = markPoint(docRef.current, active)
+        if (centre && dist(centre, rawMove) * view.k < 8) return
+        gate.grew = true
+      }
+      const scale = ppm
+      const shift = event.shiftKey
+      setDoc((current) => resizeMark(current, active, rawMove, scale, shift))
+      return
+    }
     const vertexDrag = active.kind === 'zone-point' || active.kind === 'dim-point'
     const snapped = vertexDrag
       ? worldSnap(rawMove, false, vertexAt(docRef.current, active))
@@ -817,7 +845,7 @@ export function EditorPage({
     if (pan.current) {
       const gesture = pan.current
       pan.current = null
-      drag.current = null
+      drag.current = null; stretch.current = null
       click.current = null
       grab.current = null
       if (gesture.button === 2 && !gesture.moved) {
@@ -832,7 +860,7 @@ export function EditorPage({
       shapeStart.current = null
       addZone(pts)
       setDraftPoints([])
-      drag.current = null
+      drag.current = null; stretch.current = null
       click.current = null
       grab.current = null
       return
@@ -844,14 +872,14 @@ export function EditorPage({
         if (region) addZone(region.points, region.holes)
         setDraftPoints([])
       }
-      drag.current = null
+      drag.current = null; stretch.current = null
       click.current = null
       grab.current = null
       return
     }
     const active = drag.current
     const tap = click.current
-    drag.current = null
+    drag.current = null; stretch.current = null
     pan.current = null
     click.current = null
     grab.current = null
@@ -1338,13 +1366,13 @@ export function EditorPage({
     })
   }
 
-  function placeMark(kind: 'text' | 'tree' | 'bush', point: Point) {
+  function placeMark(kind: 'text' | 'tree' | 'bush', point: Point): string | null {
     const current = docRef.current
     if (kind === 'text') {
       const note: Note = { id: uid('note'), x: point.x, y: point.y, text: 'Подпись', sizeM: 0.45 }
       commit({ ...current, notes: [...(current.notes ?? []), note] })
       setSelection({ kind: 'note', id: note.id })
-      return
+      return null
     }
     const plantKind = kind === 'tree' ? 'tree' : 'bush'
     const form = plantKind === 'tree' ? treeForm : bushForm
@@ -1359,13 +1387,14 @@ export function EditorPage({
     commit({ ...current, plants: [...(current.plants ?? []), plant] })
     setSelection({ kind: 'plant', id: plant.id })
     rememberFav({ kind: plantKind, form })
+    return plant.id
   }
 
-  function placeFixture(point: Point) {
+  function placeFixture(point: Point): string | null {
     const current = docRef.current
     if ((current.fixtures ?? []).length >= 800) {
       setPlanNote('На чертеже уже 800 объектов')
-      return
+      return null
     }
     const spec = fixtureSpec(fixtureKind)
     const item: Fixture = {
@@ -1379,28 +1408,189 @@ export function EditorPage({
     setSelection({ kind: 'fixture', id: item.id })
     setPlanNote('')
     rememberFav({ kind: 'fixture', form: fixtureKind })
+    return item.id
+  }
+
+  function beginStretch(event: React.PointerEvent<SVGSVGElement>, kind: 'plant' | 'fixture', id: string) {
+    const hit: Hit = { kind: kind === 'plant' ? 'plant-size' : 'fixture-size', id }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    drag.current = hit
+    stretch.current = { grew: false }
+    click.current = { hit, x: event.clientX, y: event.clientY, moved: false }
+  }
+
+  function takenFromSelection(): Clip | null {
+    const current = docRef.current
+    const sel = selection
+    if (!sel?.id) return null
+    if (sel.kind === 'zone') {
+      const item = current.zones.find((entry) => entry.id === sel.id)
+      return item ? { kind: 'zone', item: structuredClone(item) } : null
+    }
+    if (sel.kind === 'plant') {
+      const item = (current.plants ?? []).find((entry) => entry.id === sel.id)
+      return item ? { kind: 'plant', item: structuredClone(item) } : null
+    }
+    if (sel.kind === 'fixture') {
+      const item = (current.fixtures ?? []).find((entry) => entry.id === sel.id)
+      return item ? { kind: 'fixture', item: structuredClone(item) } : null
+    }
+    if (sel.kind === 'note') {
+      const item = (current.notes ?? []).find((entry) => entry.id === sel.id)
+      return item ? { kind: 'note', item: structuredClone(item) } : null
+    }
+    if (sel.kind === 'sprinkler') {
+      const item = current.sprinklers.find((entry) => entry.id === sel.id)
+      return item ? { kind: 'sprinkler', item: structuredClone(item) } : null
+    }
+    if (sel.kind === 'valve') {
+      const item = current.valves.find((entry) => entry.id === sel.id)
+      return item ? { kind: 'valve', item: structuredClone(item) } : null
+    }
+    if (sel.kind === 'pipe') {
+      const item = current.pipes.find((entry) => entry.id === sel.id)
+      return item ? { kind: 'pipe', item: structuredClone(item) } : null
+    }
+    if (sel.kind === 'drip') {
+      const item = current.drips.find((entry) => entry.id === sel.id)
+      return item ? { kind: 'drip', item: structuredClone(item) } : null
+    }
+    if (sel.kind === 'dim') {
+      const item = (current.measures ?? []).find((entry) => entry.id === sel.id)
+      return item ? { kind: 'dim', item: structuredClone(item) } : null
+    }
+    return null
   }
 
   function copySelected() {
-    const zone = selectedZoneOf()
-    if (zone) clipboard.current = structuredClone(zone)
+    const clip = takenFromSelection()
+    if (clip) clipboard.current = clip
   }
 
   function duplicateSelected() {
-    const zone = selectedZoneOf()
-    if (!zone) return
-    const copy = shiftZone({ ...structuredClone(zone), id: uid('zone') }, 28, 28)
-    commit({ ...docRef.current, zones: [...docRef.current.zones, copy] })
-    setSelection({ kind: 'zone', id: copy.id })
+    const clip = takenFromSelection()
+    if (clip) placeClip(clip)
   }
 
   function pasteClipboard() {
-    const zone = clipboard.current
-    if (!zone) return
-    const copy = shiftZone({ ...structuredClone(zone), id: uid('zone') }, 28, 28)
-    clipboard.current = copy
-    commit({ ...docRef.current, zones: [...docRef.current.zones, copy] })
-    setSelection({ kind: 'zone', id: copy.id })
+    const clip = clipboard.current
+    if (!clip) return
+    const placed = placeClip(clip)
+    if (placed) clipboard.current = placed
+  }
+
+  function placeClip(clip: Clip): Clip | null {
+    const current = docRef.current
+    const step = 28
+    if (clip.kind === 'zone') {
+      if (current.zones.length >= 200) {
+        setPlanNote('На чертеже уже 200 контуров')
+        return null
+      }
+      const copy = shiftZone({ ...structuredClone(clip.item), id: uid('zone') }, step, step)
+      commit({ ...current, zones: [...current.zones, copy] })
+      setSelection({ kind: 'zone', id: copy.id })
+      setPlanNote('')
+      return { kind: 'zone', item: copy }
+    }
+    if (clip.kind === 'plant') {
+      if ((current.plants ?? []).length >= 800) {
+        setPlanNote('На чертеже уже 800 растений')
+        return null
+      }
+      const copy: Plant = { ...structuredClone(clip.item), id: uid('plant'), x: clip.item.x + step, y: clip.item.y + step }
+      commit({ ...current, plants: [...(current.plants ?? []), copy] })
+      setSelection({ kind: 'plant', id: copy.id })
+      setPlanNote('')
+      return { kind: 'plant', item: copy }
+    }
+    if (clip.kind === 'fixture') {
+      if ((current.fixtures ?? []).length >= 800) {
+        setPlanNote('На чертеже уже 800 объектов')
+        return null
+      }
+      const copy: Fixture = { ...structuredClone(clip.item), id: uid('obj'), x: clip.item.x + step, y: clip.item.y + step }
+      commit({ ...current, fixtures: [...(current.fixtures ?? []), copy] })
+      setSelection({ kind: 'fixture', id: copy.id })
+      setPlanNote('')
+      return { kind: 'fixture', item: copy }
+    }
+    if (clip.kind === 'note') {
+      if ((current.notes ?? []).length >= 400) {
+        setPlanNote('На чертеже уже 400 подписей')
+        return null
+      }
+      const copy: Note = { ...structuredClone(clip.item), id: uid('note'), x: clip.item.x + step, y: clip.item.y + step }
+      commit({ ...current, notes: [...(current.notes ?? []), copy] })
+      setSelection({ kind: 'note', id: copy.id })
+      setPlanNote('')
+      return { kind: 'note', item: copy }
+    }
+    if (clip.kind === 'sprinkler') {
+      if (current.sprinklers.length >= 2000) {
+        setPlanNote('На чертеже уже 2000 форсунок')
+        return null
+      }
+      const copy: Sprinkler = { ...structuredClone(clip.item), id: uid('s'), x: clip.item.x + step, y: clip.item.y + step }
+      commit({ ...current, sprinklers: [...current.sprinklers, copy] })
+      setSelection({ kind: 'sprinkler', id: copy.id })
+      setPlanNote('')
+      return { kind: 'sprinkler', item: copy }
+    }
+    if (clip.kind === 'valve') {
+      if (current.valves.length >= 500) {
+        setPlanNote('На чертеже уже 500 клапанов')
+        return null
+      }
+      const copy: Valve = { ...structuredClone(clip.item), id: uid('valve'), x: clip.item.x + step, y: clip.item.y + step }
+      commit({ ...current, valves: [...current.valves, copy] })
+      setSelection({ kind: 'valve', id: copy.id })
+      setPlanNote('')
+      return { kind: 'valve', item: copy }
+    }
+    if (clip.kind === 'pipe') {
+      if (current.pipes.length >= 2000) {
+        setPlanNote('На чертеже уже 2000 труб')
+        return null
+      }
+      const copy: Pipe = {
+        ...structuredClone(clip.item),
+        id: uid('pipe'),
+        points: clip.item.points.map((point) => ({ x: point.x + step, y: point.y + step })),
+      }
+      commit({ ...current, pipes: [...current.pipes, copy] })
+      setSelection({ kind: 'pipe', id: copy.id })
+      setPlanNote('')
+      return { kind: 'pipe', item: copy }
+    }
+    if (clip.kind === 'drip') {
+      if (current.drips.length >= 400) {
+        setPlanNote('На чертеже уже 400 капельных линий')
+        return null
+      }
+      const copy: Drip = {
+        ...structuredClone(clip.item),
+        id: uid('drip'),
+        points: clip.item.points.map((point) => ({ x: point.x + step, y: point.y + step })),
+      }
+      commit({ ...current, drips: [...current.drips, copy] })
+      setSelection({ kind: 'drip', id: copy.id })
+      setPlanNote('')
+      return { kind: 'drip', item: copy }
+    }
+    if ((current.measures ?? []).length >= 400) {
+      setPlanNote('На чертеже уже 400 размеров')
+      return null
+    }
+    const copy: Measure = {
+      id: uid('dim'),
+      a: { x: clip.item.a.x + step, y: clip.item.a.y + step },
+      b: { x: clip.item.b.x + step, y: clip.item.b.y + step },
+    }
+    commit({ ...current, measures: [...(current.measures ?? []), copy] })
+    setSelection({ kind: 'dim', id: copy.id })
+    setPlanNote('')
+    return { kind: 'dim', item: copy }
   }
 
   if (!loaded) return <div className="boot">{error || 'Загрузка проекта…'}</div>
@@ -1795,7 +1985,7 @@ export function EditorPage({
           onPointerUp={onPointerUp}
           onPointerCancel={() => {
             pan.current = null
-            drag.current = null
+            drag.current = null; stretch.current = null
             click.current = null
             grab.current = null
           }}
@@ -1837,6 +2027,7 @@ export function EditorPage({
             <button className="tool" onClick={() => rotateSelected(-15)} title="Против часовой">↺ 15°</button>
             <button className="tool" onClick={() => rotateSelected(15)} title="По часовой">↻ 15°</button>
             <button className="tool" onClick={() => rotateSelected(90)} title="Повернуть на 90°">↻ 90°</button>
+            <button className="tool" onClick={duplicateSelected} title="Копия, Ctrl+D">Копия</button>
             <button className="tool" onClick={removeSelection}>Удалить</button>
           </div>
         )}
@@ -1908,6 +2099,7 @@ export function EditorPage({
                 Жирный
               </button>
             </span>
+            <button className="tool" onClick={duplicateSelected} title="Копия, Ctrl+D">Копия</button>
             <button className="tool" onClick={removeSelection}>Удалить</button>
           </div>
         )}
@@ -1930,6 +2122,7 @@ export function EditorPage({
                 }}
               />
             </label>
+            <button className="tool" onClick={duplicateSelected} title="Копия, Ctrl+D">Копия</button>
             <button className="tool" onClick={removeSelection}>Удалить</button>
           </div>
         )}
@@ -1981,12 +2174,14 @@ export function EditorPage({
             >
               ↻ 90°
             </button>
+            <button className="tool" onClick={duplicateSelected} title="Копия, Ctrl+D">Копия</button>
             <button className="tool" onClick={removeSelection}>Удалить</button>
           </div>
         )}
         {selectedMeasure && draft.length === 0 && (
           <div className="ops">
             <span>Размер {(dist(selectedMeasure.a, selectedMeasure.b) / ppm).toFixed(2)} м</span>
+            <button className="tool" onClick={duplicateSelected} title="Копия, Ctrl+D">Копия</button>
             <button className="tool" onClick={removeSelection}>Удалить</button>
           </div>
         )}
@@ -2238,8 +2433,8 @@ function selectionFromHit(hit: Hit): Sel {
   if (hit.kind === 'sprinkler' || hit.kind === 'sprinkler-rot' || hit.kind === 'sprinkler-arc') return { kind: 'sprinkler', id: hit.id }
   if (hit.kind === 'valve') return { kind: 'valve', id: hit.id }
   if (hit.kind === 'note') return { kind: 'note', id: hit.id }
-  if (hit.kind === 'plant') return { kind: 'plant', id: hit.id }
-  if (hit.kind === 'fixture') return { kind: 'fixture', id: hit.id }
+  if (hit.kind === 'plant' || hit.kind === 'plant-size') return { kind: 'plant', id: hit.id }
+  if (hit.kind === 'fixture' || hit.kind === 'fixture-size') return { kind: 'fixture', id: hit.id }
   if (hit.kind === 'dim' || hit.kind === 'dim-point') return { kind: 'dim', id: hit.id }
   return null
 }
@@ -2286,6 +2481,44 @@ function snapDrag(doc: Doc, hit: Hit): Doc {
     }
   }
   return doc
+}
+
+function markPoint(doc: Doc, hit: Hit): Point | null {
+  if (hit.kind === 'plant-size') {
+    const item = (doc.plants ?? []).find((entry) => entry.id === hit.id)
+    return item ? { x: item.x, y: item.y } : null
+  }
+  if (hit.kind === 'fixture-size') {
+    const item = (doc.fixtures ?? []).find((entry) => entry.id === hit.id)
+    return item ? { x: item.x, y: item.y } : null
+  }
+  return null
+}
+
+function resizeMark(doc: Doc, hit: Hit, point: Point, ppm: number, shift: boolean): Doc {
+  if (hit.kind === 'plant-size') {
+    return {
+      ...doc,
+      plants: (doc.plants ?? []).map((item) => (
+        item.id === hit.id ? { ...item, radiusM: sizedRadius(dist(item, point) / ppm, 0.2, 8, shift) } : item
+      )),
+    }
+  }
+  if (hit.kind === 'fixture-size') {
+    return {
+      ...doc,
+      fixtures: (doc.fixtures ?? []).map((item) => (
+        item.id === hit.id ? { ...item, radiusM: sizedRadius(dist(item, point) / ppm, 0.1, 20, shift) } : item
+      )),
+    }
+  }
+  return doc
+}
+
+function sizedRadius(raw: number, min: number, max: number, shift: boolean): number {
+  const clamped = Math.min(max, Math.max(min, raw))
+  const places = shift ? 10 : 100
+  return Math.round(clamped * places) / places
 }
 
 function moveHit(doc: Doc, hit: Hit, point: Point): Doc {

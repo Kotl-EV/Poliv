@@ -351,6 +351,7 @@ input, select {
 .drip-hit { stroke: transparent; }
 .emitter { fill: #6b3fa0; stroke: #fffdf8; }
 .handle, .scale-point { fill: #fffdf8; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.size-handle { cursor: nwse-resize; }
 .scale-point { stroke: #8d2b1f; }
 .guide { stroke: #8d2b1f; stroke-width: 1.6; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; }
 .measure { fill: none; stroke: #8d2b1f; stroke-width: 1.4; vector-effect: non-scaling-stroke; }

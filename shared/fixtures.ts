@@ -2,7 +2,7 @@ import type { Fixture, FixtureKind } from './types.ts'
 
 const TAU = Math.PI * 2
 
-export type FixtureGroup = 'stone' | 'seat' | 'light' | 'car' | 'sun' | 'mark'
+export type FixtureGroup = 'stone' | 'seat' | 'light' | 'car' | 'sun' | 'yard' | 'mark'
 
 export type FixtureSpec = { id: FixtureKind; label: string; group: FixtureGroup; radiusM: number }
 
@@ -10,20 +10,43 @@ export const FIXTURES: FixtureSpec[] = [
   { id: 'boulder', label: 'Камень', group: 'stone', radiusM: 0.55 },
   { id: 'rocks', label: 'Россыпь', group: 'stone', radiusM: 0.85 },
   { id: 'slab', label: 'Плита', group: 'stone', radiusM: 0.7 },
+  { id: 'steps', label: 'Шаги', group: 'stone', radiusM: 0.9 },
+  { id: 'wall', label: 'Стенка', group: 'stone', radiusM: 1.2 },
+  { id: 'pebble', label: 'Галька', group: 'stone', radiusM: 0.6 },
   { id: 'bench', label: 'Скамья', group: 'seat', radiusM: 0.9 },
   { id: 'chair', label: 'Кресло', group: 'seat', radiusM: 0.45 },
   { id: 'table', label: 'Стол', group: 'seat', radiusM: 0.7 },
   { id: 'sofa', label: 'Диван', group: 'seat', radiusM: 1.05 },
+  { id: 'picnic', label: 'Пикник', group: 'seat', radiusM: 1.2 },
+  { id: 'swing', label: 'Качели', group: 'seat', radiusM: 0.8 },
+  { id: 'hammock', label: 'Гамак', group: 'seat', radiusM: 1.1 },
+  { id: 'stool', label: 'Табурет', group: 'seat', radiusM: 0.28 },
   { id: 'bollard', label: 'Боллард', group: 'light', radiusM: 0.18 },
   { id: 'lamp', label: 'Фонарь', group: 'light', radiusM: 0.32 },
   { id: 'spot', label: 'Прожектор', group: 'light', radiusM: 0.28 },
   { id: 'lantern', label: 'Светильник', group: 'light', radiusM: 0.3 },
+  { id: 'spike', label: 'Штырь', group: 'light', radiusM: 0.18 },
+  { id: 'twin', label: 'Пара', group: 'light', radiusM: 0.45 },
   { id: 'sedan', label: 'Седан', group: 'car', radiusM: 2.25 },
   { id: 'suv', label: 'Внедорожник', group: 'car', radiusM: 2.35 },
   { id: 'wagon', label: 'Универсал', group: 'car', radiusM: 2.5 },
+  { id: 'pickup', label: 'Пикап', group: 'car', radiusM: 2.6 },
+  { id: 'van', label: 'Фургон', group: 'car', radiusM: 2.45 },
+  { id: 'bike', label: 'Велосипед', group: 'car', radiusM: 0.9 },
+  { id: 'moto', label: 'Мото', group: 'car', radiusM: 1.1 },
   { id: 'lounger', label: 'Шезлонг', group: 'sun', radiusM: 1 },
   { id: 'daybed', label: 'Лежак', group: 'sun', radiusM: 1.1 },
   { id: 'parasol', label: 'Зонт', group: 'sun', radiusM: 1.2 },
+  { id: 'grill', label: 'Мангал', group: 'sun', radiusM: 0.45 },
+  { id: 'tub', label: 'Купель', group: 'sun', radiusM: 0.9 },
+  { id: 'planter', label: 'Кашпо', group: 'yard', radiusM: 0.4 },
+  { id: 'pots', label: 'Горшки', group: 'yard', radiusM: 0.55 },
+  { id: 'pergola', label: 'Пергола', group: 'yard', radiusM: 1.5 },
+  { id: 'gazebo', label: 'Беседка', group: 'yard', radiusM: 1.4 },
+  { id: 'fountain', label: 'Фонтан', group: 'yard', radiusM: 0.8 },
+  { id: 'statue', label: 'Скульптура', group: 'yard', radiusM: 0.4 },
+  { id: 'greenhouse', label: 'Теплица', group: 'yard', radiusM: 1.6 },
+  { id: 'sandbox', label: 'Песочница', group: 'yard', radiusM: 0.9 },
   { id: 'compass', label: 'Компас', group: 'mark', radiusM: 0.65 },
   { id: 'scalebar', label: 'Масштаб', group: 'mark', radiusM: 2 },
   { id: 'controller', label: 'Пульт', group: 'mark', radiusM: 0.42 },
@@ -35,6 +58,7 @@ export const FIXTURE_GROUPS: { id: FixtureGroup; label: string }[] = [
   { id: 'light', label: 'Свет' },
   { id: 'car', label: 'Машины' },
   { id: 'sun', label: 'Шезлонги' },
+  { id: 'yard', label: 'Двор' },
   { id: 'mark', label: 'Элементы' },
 ]
 
@@ -70,7 +94,246 @@ export function parseFixtureKind(value: unknown): FixtureKind | null {
   return FIXTURES.find((item) => item.id === value)?.id ?? null
 }
 
+function extraGlyph(kind: FixtureKind): FixtureGlyph | null {
+  if (kind === 'steps') {
+    return {
+      parts: [
+        { d: ellipse(-0.68, 0.22, 0.24, 0.16), fill: STONE, stroke: STONE_DARK },
+        { d: ellipse(-0.22, -0.12, 0.24, 0.16), fill: '#9a948a', stroke: STONE_DARK },
+        { d: ellipse(0.24, 0.18, 0.24, 0.16), fill: STONE, stroke: STONE_DARK },
+        { d: ellipse(0.7, -0.16, 0.24, 0.16), fill: '#7d776f', stroke: STONE_DARK },
+      ],
+      lines: [],
+    }
+  }
+  if (kind === 'wall') {
+    return {
+      parts: [{ d: roundRect(-0.96, -0.28, 1.92, 0.56, 0.04), fill: STONE, stroke: STONE_DARK }],
+      lines: [
+        { d: 'M -0.48 -0.28 V 0.28', stroke: STONE_DARK },
+        { d: 'M 0 -0.28 V 0.28', stroke: STONE_DARK },
+        { d: 'M 0.48 -0.28 V 0.28', stroke: STONE_DARK },
+      ],
+    }
+  }
+  if (kind === 'pebble') {
+    return {
+      parts: [
+        { d: ellipse(-0.55, 0.22, 0.18, 0.12), fill: STONE, stroke: STONE_DARK },
+        { d: ellipse(-0.18, -0.28, 0.14, 0.1), fill: '#9a948a', stroke: STONE_DARK },
+        { d: ellipse(0.12, 0.18, 0.2, 0.13), fill: '#7d776f', stroke: STONE_DARK },
+        { d: ellipse(0.52, -0.08, 0.14, 0.1), fill: STONE, stroke: STONE_DARK },
+        { d: ellipse(0.28, -0.48, 0.1, 0.08), fill: '#b7b1a8', stroke: STONE_DARK },
+        { d: ellipse(-0.42, -0.38, 0.12, 0.08), fill: '#9a948a', stroke: STONE_DARK },
+      ],
+      lines: [],
+    }
+  }
+  if (kind === 'picnic') {
+    return {
+      parts: [
+        { d: roundRect(-0.92, -0.78, 1.84, 0.22, 0.04), fill: WOOD, stroke: WOOD_DARK },
+        { d: roundRect(-0.92, 0.56, 1.84, 0.22, 0.04), fill: WOOD, stroke: WOOD_DARK },
+        { d: roundRect(-0.62, -0.28, 1.24, 0.56, 0.05), fill: '#d7b98a', stroke: WOOD_DARK },
+      ],
+      lines: [],
+    }
+  }
+  if (kind === 'swing') {
+    return {
+      parts: [
+        { d: ellipse(-0.72, 0.62, 0.1, 0.1), fill: WOOD_DARK, stroke: WOOD_DARK },
+        { d: ellipse(0.72, 0.62, 0.1, 0.1), fill: WOOD_DARK, stroke: WOOD_DARK },
+        { d: roundRect(-0.42, 0.12, 0.84, 0.18, 0.04), fill: WOOD, stroke: WOOD_DARK },
+      ],
+      lines: [
+        { d: 'M -0.72 0.62 L 0 -0.88 L 0.72 0.62', stroke: WOOD_DARK },
+        { d: 'M -0.22 0.12 L -0.12 -0.28', stroke: WOOD_DARK },
+        { d: 'M 0.22 0.12 L 0.12 -0.28', stroke: WOOD_DARK },
+      ],
+    }
+  }
+  if (kind === 'hammock') {
+    return {
+      parts: [
+        { d: roundRect(-0.92, -0.72, 0.12, 1.44, 0.03), fill: WOOD_DARK, stroke: WOOD_DARK },
+        { d: roundRect(0.8, -0.72, 0.12, 1.44, 0.03), fill: WOOD_DARK, stroke: WOOD_DARK },
+        { d: blob(0, 0.22, 0.68, 0.32, 6, 0.1, 0.4), fill: CLOTH, stroke: '#8a8175' },
+      ],
+      lines: [{ d: 'M -0.8 -0.55 Q 0 -0.15 0.8 -0.55', stroke: '#8a8175' }],
+    }
+  }
+  if (kind === 'stool') {
+    return {
+      parts: [{ d: ellipse(0, 0, 0.72, 0.72), fill: WOOD, stroke: WOOD_DARK }],
+      lines: [],
+    }
+  }
+  if (kind === 'spike') {
+    return {
+      parts: [
+        { d: poly([[0, -0.88], [-0.22, 0.78], [0.22, 0.78]]), fill: '#2c3230', stroke: INK },
+        { d: ellipse(0, -0.48, 0.16, 0.12), fill: '#f4e7b0', stroke: '#8a7030' },
+      ],
+      lines: [],
+    }
+  }
+  if (kind === 'twin') {
+    return {
+      parts: [
+        { d: ellipse(-0.42, 0, 0.32, 0.32), fill: '#2a2e2c', stroke: INK },
+        { d: ellipse(-0.42, 0, 0.12, 0.12), fill: '#e6c75a', stroke: '#8a7030' },
+        { d: ellipse(0.42, 0, 0.32, 0.32), fill: '#2a2e2c', stroke: INK },
+        { d: ellipse(0.42, 0, 0.12, 0.12), fill: '#e6c75a', stroke: '#8a7030' },
+      ],
+      lines: [],
+    }
+  }
+  if (kind === 'pickup') return car('#6a5344', -0.98, 0.7, -0.78, 0.62, 0.48)
+  if (kind === 'van') return car('#3e4c5e', -0.96, 0.88, -0.55, 1.15, 0.62)
+  if (kind === 'bike') {
+    return {
+      parts: [
+        { d: ellipse(-0.55, 0.18, 0.28, 0.28), fill: '#f7f3ea', stroke: WHEEL },
+        { d: ellipse(0.55, 0.18, 0.28, 0.28), fill: '#f7f3ea', stroke: WHEEL },
+        { d: ellipse(-0.55, 0.18, 0.06, 0.06), fill: WHEEL, stroke: WHEEL },
+        { d: ellipse(0.55, 0.18, 0.06, 0.06), fill: WHEEL, stroke: WHEEL },
+      ],
+      lines: [
+        { d: 'M -0.55 0.18 L 0.05 -0.42 L 0.55 0.18', stroke: INK },
+        { d: 'M 0.05 -0.42 L 0.28 -0.62', stroke: INK },
+        { d: 'M -0.1 -0.05 L 0.18 0.42', stroke: INK },
+      ],
+    }
+  }
+  if (kind === 'moto') {
+    return {
+      parts: [
+        { d: ellipse(-0.58, 0.22, 0.24, 0.24), fill: WHEEL, stroke: WHEEL },
+        { d: ellipse(0.58, 0.12, 0.32, 0.32), fill: WHEEL, stroke: WHEEL },
+        { d: roundRect(-0.28, -0.22, 0.72, 0.42, 0.1), fill: '#314238', stroke: INK },
+      ],
+      lines: [{ d: 'M 0.05 -0.22 L 0.35 -0.55', stroke: INK }],
+    }
+  }
+  if (kind === 'grill') {
+    return {
+      parts: [{ d: roundRect(-0.72, -0.42, 1.44, 0.84, 0.06), fill: '#2c2420', stroke: INK }],
+      lines: [
+        { d: 'M -0.55 -0.24 H 0.55', stroke: '#c9a15b' },
+        { d: 'M -0.55 -0.08 H 0.55', stroke: '#c9a15b' },
+        { d: 'M -0.55 0.08 H 0.55', stroke: '#c9a15b' },
+        { d: 'M -0.55 0.24 H 0.55', stroke: '#c9a15b' },
+      ],
+    }
+  }
+  if (kind === 'tub') {
+    return {
+      parts: [
+        { d: ellipse(0, 0, 0.88, 0.72), fill: STONE, stroke: STONE_DARK },
+        { d: ellipse(0, 0, 0.62, 0.48), fill: '#7eb6d4', stroke: '#2a6288' },
+      ],
+      lines: [],
+    }
+  }
+  if (kind === 'planter') {
+    return {
+      parts: [
+        { d: roundRect(-0.72, -0.72, 1.44, 1.44, 0.08), fill: '#a85a3a', stroke: '#6a3424' },
+        { d: ellipse(0, 0, 0.4, 0.4), fill: '#3d7a45', stroke: '#24522c' },
+      ],
+      lines: [],
+    }
+  }
+  if (kind === 'pots') {
+    return {
+      parts: [
+        { d: ellipse(-0.42, 0.18, 0.3, 0.34), fill: '#a85a3a', stroke: '#6a3424' },
+        { d: ellipse(-0.42, -0.02, 0.16, 0.14), fill: '#3d7a45', stroke: '#24522c' },
+        { d: ellipse(0.18, 0.22, 0.26, 0.3), fill: '#c4784a', stroke: '#6a3424' },
+        { d: ellipse(0.18, 0.04, 0.14, 0.12), fill: '#3d7a45', stroke: '#24522c' },
+        { d: ellipse(0.5, -0.22, 0.2, 0.22), fill: STONE, stroke: STONE_DARK },
+        { d: ellipse(0.5, -0.34, 0.1, 0.08), fill: '#3d7a45', stroke: '#24522c' },
+      ],
+      lines: [],
+    }
+  }
+  if (kind === 'pergola') {
+    return {
+      parts: [
+        { d: roundRect(-0.92, -0.72, 1.84, 1.44, 0.03), fill: '#d7b98a', stroke: WOOD_DARK },
+        { d: ellipse(-0.72, -0.5, 0.08, 0.08), fill: WOOD_DARK, stroke: WOOD_DARK },
+        { d: ellipse(0.72, -0.5, 0.08, 0.08), fill: WOOD_DARK, stroke: WOOD_DARK },
+        { d: ellipse(-0.72, 0.5, 0.08, 0.08), fill: WOOD_DARK, stroke: WOOD_DARK },
+        { d: ellipse(0.72, 0.5, 0.08, 0.08), fill: WOOD_DARK, stroke: WOOD_DARK },
+      ],
+      lines: [
+        { d: 'M -0.92 0 H 0.92', stroke: WOOD_DARK },
+        { d: 'M 0 -0.72 V 0.72', stroke: WOOD_DARK },
+        { d: 'M -0.46 -0.72 V 0.72', stroke: WOOD_DARK },
+        { d: 'M 0.46 -0.72 V 0.72', stroke: WOOD_DARK },
+      ],
+    }
+  }
+  if (kind === 'gazebo') {
+    return {
+      parts: [
+        { d: ellipse(0, 0, 0.9, 0.9), fill: '#d7b98a', stroke: WOOD_DARK },
+        { d: ellipse(0, -0.62, 0.08, 0.08), fill: WOOD_DARK, stroke: WOOD_DARK },
+        { d: ellipse(0.54, -0.32, 0.08, 0.08), fill: WOOD_DARK, stroke: WOOD_DARK },
+        { d: ellipse(0.54, 0.32, 0.08, 0.08), fill: WOOD_DARK, stroke: WOOD_DARK },
+        { d: ellipse(0, 0.62, 0.08, 0.08), fill: WOOD_DARK, stroke: WOOD_DARK },
+        { d: ellipse(-0.54, 0.32, 0.08, 0.08), fill: WOOD_DARK, stroke: WOOD_DARK },
+        { d: ellipse(-0.54, -0.32, 0.08, 0.08), fill: WOOD_DARK, stroke: WOOD_DARK },
+      ],
+      lines: [],
+    }
+  }
+  if (kind === 'fountain') {
+    return {
+      parts: [
+        { d: ellipse(0, 0, 0.9, 0.9), fill: STONE, stroke: STONE_DARK },
+        { d: ellipse(0, 0, 0.62, 0.62), fill: '#7eb6d4', stroke: '#2a6288' },
+        { d: ellipse(0, 0, 0.18, 0.18), fill: '#f7f3ea', stroke: STONE_DARK },
+      ],
+      lines: [],
+    }
+  }
+  if (kind === 'statue') {
+    return {
+      parts: [
+        { d: roundRect(-0.38, 0.2, 0.76, 0.55, 0.04), fill: STONE, stroke: STONE_DARK },
+        { d: ellipse(0, -0.22, 0.26, 0.38), fill: '#b7b1a8', stroke: STONE_DARK },
+      ],
+      lines: [],
+    }
+  }
+  if (kind === 'greenhouse') {
+    return {
+      parts: [{ d: roundRect(-0.92, -0.55, 1.84, 1.1, 0.04), fill: GLASS, stroke: '#6d8ea0' }],
+      lines: [
+        { d: 'M -0.92 0 H 0.92', stroke: '#6d8ea0' },
+        { d: 'M -0.46 -0.55 V 0.55', stroke: '#6d8ea0' },
+        { d: 'M 0 -0.55 V 0.55', stroke: '#6d8ea0' },
+        { d: 'M 0.46 -0.55 V 0.55', stroke: '#6d8ea0' },
+      ],
+    }
+  }
+  if (kind === 'sandbox') {
+    return {
+      parts: [
+        { d: roundRect(-0.88, -0.62, 1.76, 1.24, 0.06), fill: '#e2c27a', stroke: WOOD_DARK },
+        { d: ellipse(0.42, 0.18, 0.14, 0.14), fill: SUN, stroke: '#8a3030' },
+      ],
+      lines: [],
+    }
+  }
+  return null
+}
+
 export function fixtureGlyph(kind: FixtureKind): FixtureGlyph {
+  const extra = extraGlyph(kind)
+  if (extra) return extra
   if (kind === 'boulder') {
     return {
       parts: [{ d: blob(0, 0.02, 0.86, 0.72, 7, 0.16, 0.4), fill: STONE, stroke: STONE_DARK }],
