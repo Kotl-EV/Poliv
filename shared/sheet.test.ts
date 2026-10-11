@@ -364,18 +364,7 @@ test('a flow arrow points at the head and hides with the pipes', () => {
   assert.equal(off[0].svg.includes('data-flow='), false)
 })
 
-test('a calm pipe speed stays off the sheet and a fast one is marked', () => {
-  const calmDoc = {
-    ...emptyDoc(),
-    source: { x: 0, y: 0, pressureBar: 3, flowLimitLph: null },
-    zones: [],
-    valves: [],
-    pipes: [{ id: 'run', points: [{ x: 0, y: 0 }, { x: 200, y: 0 }] }],
-    sprinklers: [{ id: 's', nozzleId: 'fan180', x: 200, y: 0, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 360 }],
-  }
-  const calm = analyze(calmDoc)
-  const calmSheet = buildSheetPages(calmDoc, calm, { title: 'Скорость', date: '01.01.2026', includeSpec: false })
-  assert.equal(calmSheet[0].svg.includes('data-speed='), false)
+test('a pipe on the sheet keeps diameter and length and skips speed', () => {
   const doc = {
     ...emptyDoc(),
     source: { x: 0, y: 0, pressureBar: 3, flowLimitLph: null },
@@ -385,19 +374,22 @@ test('a calm pipe speed stays off the sheet and a fast one is marked', () => {
     sprinklers: [{ id: 's', nozzleId: 'fan180', x: 200, y: 0, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 200_000 }],
   }
   const analysis = analyze(doc)
-  const fed = analysis.segments.find((segment) => segment.status === 'ok' && segment.velocity && segment.velocity > 1.5)
-  assert.ok(fed?.velocity)
-  const label = `${fed.velocity.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} м/с`
-  const on = buildSheetPages(doc, analysis, { title: 'Скорость', date: '01.01.2026', includeSpec: false })
-  assert.match(on[0].svg, /data-speed="1"/)
+  const fed = analysis.segments.find((segment) => segment.status === 'ok' && segment.odMm && segment.lengthM)
+  assert.ok(fed?.odMm && fed.lengthM)
+  const label = `Ø${fed.odMm} · ${fed.lengthM.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} м`
+  const speed = analysis.segments.find((segment) => segment.velocity && segment.velocity > 1.5)
+  assert.ok(speed?.velocity)
+  const on = buildSheetPages(doc, analysis, { title: 'Труба', date: '01.01.2026', includeSpec: false })
   assert.equal(on[0].svg.includes(`>${label}</text>`), true)
+  assert.equal(on[0].svg.includes('data-speed='), false)
+  assert.equal(on[0].svg.includes('м/с'), false)
   const off = buildSheetPages(doc, analysis, {
-    title: 'Скорость',
+    title: 'Труба',
     date: '01.01.2026',
     includeSpec: false,
     layers: { ...DEFAULT_SHEET_LAYERS, pipes: false },
   })
-  assert.equal(off[0].svg.includes('data-speed='), false)
+  assert.equal(off[0].svg.includes(label), false)
 })
 
 test('a pipe loss stays off the sheet', () => {

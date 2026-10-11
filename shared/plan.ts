@@ -2079,7 +2079,9 @@ function polylinePx(points: Point[]): number {
   return sum
 }
 
-function plantGetsDrip(plant: Point, zones: Zone[]): boolean {
+function plantGetsDrip(plant: { x: number; y: number; kind: 'tree' | 'bush'; form?: string }, zones: Zone[]): boolean {
+  // Злак на плане — куртина травы. Её поливает дождевание, отдельное кольцо не нужно.
+  if (plant.kind === 'bush' && plant.form === 'grass') return false
   let wet = false
   for (const zone of zones) {
     if (zone.points.length < 3 || !pointInZone(plant, zone.points, zone.holes)) continue

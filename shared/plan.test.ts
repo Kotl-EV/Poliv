@@ -850,6 +850,23 @@ test('auto layout fits the throw to the width of the lawn', () => {
   assert.ok(share >= 0.95, `covered ${share}`)
 })
 
+test('an ornamental grass bush skips the drip ring', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 10
+  doc.zones = [zone('bed', 'bed', 100, 80, 80, 40)]
+  doc.source = { x: 60, y: 100, pressureBar: 3, flowLimitLph: null }
+  doc.plants = [
+    { id: 'grass', kind: 'bush', x: 120, y: 100, radiusM: 0.5, form: 'grass' },
+    { id: 'bush', kind: 'bush', x: 155, y: 100, radiusM: 0.5, form: 'ball' },
+  ]
+  const next = layoutIrrigation(doc)
+  assert.ok(next)
+  assert.equal(next.drips.length, 1)
+  const near = (plant: { x: number; y: number }) => next.drips[0].points.some((point) => Math.hypot(point.x - plant.x, point.y - plant.y) < 12)
+  assert.equal(near(doc.plants[0]), false)
+  assert.equal(near(doc.plants[1]), true)
+})
+
 test('a bed without a lawn gets drip only at its plants', () => {
   const doc = emptyDoc()
   doc.pxPerMeter = 10

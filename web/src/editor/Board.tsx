@@ -9,7 +9,7 @@ import { headCaption, nozzleById } from '@shared/nozzles.ts'
 import { runtimeLabel } from '@shared/program.ts'
 import { DEFAULT_PPM, gridStepM, hatchOf, hatchTile, HATCHES, precipWash, surfaceOf, type HatchNode } from '@shared/landscape.ts'
 import { pipeWeight, pressureLabel, sourceLabel, valveFlowLabel } from '@shared/pipes.ts'
-import { dripFlowTags, dripTags, fittingShape, flowArrows, funnyPoints, lossTags, pipeTags, sleeveTags, speedTags, type FlowArrow } from '@shared/pipeview.ts'
+import { dripFlowTags, dripTags, fittingShape, flowArrows, funnyPoints, pipeTags, sleeveTags, type FlowArrow } from '@shared/pipeview.ts'
 import type { Analysis, Doc, FittingMark, Fixture, Measure, Note, Plant, Point, Sprinkler, Zone, ZoneKind } from '@shared/types.ts'
 
 export const CLOSE_SCREEN_PX = 14
@@ -330,47 +330,6 @@ export const Board = forwardRef<SVGSVGElement, {
         {pipeTags(analysis.segments, doc.pxPerMeter, view.k).map((tag, index) => (
           <text
             key={`tag-${index}`}
-            x={tag.x}
-            y={tag.y}
-            className="pipe-tag"
-            fontSize={11 / view.k}
-            textAnchor="middle"
-            dominantBaseline="middle"
-            transform={`rotate(${tag.rotate} ${tag.x} ${tag.y})`}
-            stroke="#f7f3ea"
-            strokeWidth={3 / view.k}
-            paintOrder="stroke"
-            pointerEvents="none"
-          >
-            {tag.text}
-          </text>
-        ))}
-        {speedTags(analysis.segments, doc.pxPerMeter, view.k).map((tag, index) => (
-          <text
-            key={`speed-${index}`}
-            x={tag.x}
-            y={tag.y}
-            className="pipe-tag"
-            fontSize={11 / view.k}
-            textAnchor="middle"
-            dominantBaseline="middle"
-            transform={`rotate(${tag.rotate} ${tag.x} ${tag.y})`}
-            stroke="#f7f3ea"
-            strokeWidth={3 / view.k}
-            paintOrder="stroke"
-            style={tag.hot ? { fill: '#8d2b1f' } : undefined}
-            pointerEvents="none"
-          >
-            {tag.text}
-          </text>
-        ))}
-        {props.selectionKind === 'pipe' && lossTags(
-          analysis.segments.filter((segment) => segment.pipeId === props.selectionId),
-          doc.pxPerMeter,
-          view.k,
-        ).map((tag, index) => (
-          <text
-            key={`loss-${index}`}
             x={tag.x}
             y={tag.y}
             className="pipe-tag"

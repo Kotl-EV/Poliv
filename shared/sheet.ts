@@ -8,7 +8,7 @@ import { headCaption, nozzleById } from './nozzles.ts'
 import { programTable, runtimeLabel } from './program.ts'
 import { gearHint, gearList } from './gear.ts'
 import { sleeveLengthM } from './join.ts'
-import { dripFlowTags, dripTags, fittingShape, flowArrows, funnyPoints, pipeTags, sleeveTags, speedTags } from './pipeview.ts'
+import { dripFlowTags, dripTags, fittingShape, flowArrows, funnyPoints, pipeTags, sleeveTags } from './pipeview.ts'
 import { pipeWeight, pressureLabel, sourceLabel, valveFlowLabel } from './pipes.ts'
 import type { Analysis, Doc, FittingMark, Plant, Point } from './types.ts'
 
@@ -274,12 +274,6 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
     for (const tag of pipeTags(analysis.segments, doc.pxPerMeter, k)) {
       parts.push(
         `<text x="${fmt(tag.x)}" y="${fmt(tag.y)}" fill="#1c2822" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle" transform="rotate(${fmt(tag.rotate)} ${fmt(tag.x)} ${fmt(tag.y)})">${xml(tag.text)}</text>`,
-      )
-    }
-    for (const tag of speedTags(analysis.segments, doc.pxPerMeter, k)) {
-      const fill = draft || !tag.hot ? '#1c2822' : '#8d2b1f'
-      parts.push(
-        `<text data-speed="1" x="${fmt(tag.x)}" y="${fmt(tag.y)}" fill="${fill}" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle" transform="rotate(${fmt(tag.rotate)} ${fmt(tag.x)} ${fmt(tag.y)})">${xml(tag.text)}</text>`,
       )
     }
     for (const mark of analysis.fittingMarks) parts.push(fittingMarkSvg(mark, k, draft))
