@@ -5,28 +5,39 @@ export type { Program }
 /** 0 — понедельник … 6 — воскресенье. */
 type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6
 
-export const DEFAULT_PROGRAM: Program = { days: [0, 2, 4], startHour: 6, startMin: 0 }
+export const DEFAULT_PROGRAM: Program = { days: [0, 2, 4], startHour: 6, startMin: 0, endHour: 12, endMin: 0 }
 
 const DAY = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
 
-export function programOf(doc: { program?: Program | null }): Program {
-  return doc.program ?? DEFAULT_PROGRAM
+export function programOf(doc: { program?: Partial<Program> | null }): Program {
+  const program = doc.program ?? DEFAULT_PROGRAM
+  return {
+    days: program.days ?? DEFAULT_PROGRAM.days,
+    startHour: program.startHour ?? DEFAULT_PROGRAM.startHour,
+    startMin: program.startMin ?? DEFAULT_PROGRAM.startMin,
+    endHour: program.endHour ?? DEFAULT_PROGRAM.endHour,
+    endMin: program.endMin ?? DEFAULT_PROGRAM.endMin,
+  }
 }
 
 export function withProgram(current: Program, patch: Partial<Program>): Program {
   const days = [...new Set((patch.days ?? current.days).filter((day): day is Weekday => Number.isInteger(day) && day >= 0 && day <= 6))].sort((a, b) => a - b)
   let startHour = patch.startHour ?? current.startHour
   let startMin = patch.startMin ?? current.startMin
+  let endHour = patch.endHour ?? current.endHour
+  let endMin = patch.endMin ?? current.endMin
   if (!Number.isInteger(startHour) || startHour < 0 || startHour > 23) startHour = current.startHour
   if (!Number.isInteger(startMin) || startMin < 0 || startMin > 59) startMin = current.startMin
-  return { days, startHour, startMin }
+  if (!Number.isInteger(endHour) || endHour < 0 || endHour > 23) endHour = current.endHour
+  if (!Number.isInteger(endMin) || endMin < 0 || endMin > 59) endMin = current.endMin
+  return { days, startHour, startMin, endHour, endMin }
 }
 
 /** Пустое поле — нет программы. Битый объект отвергает документ. */
 export function parseProgram(value: unknown): Program | undefined | null {
   if (value === undefined || value === null) return undefined
   if (typeof value !== 'object') return null
-  const raw = value as { days?: unknown; startHour?: unknown; startMin?: unknown }
+  const raw = value as { days?: unknown; startHour?: unknown; startMin?: unknown; endHour?: unknown; endMin?: unknown }
   if (!Array.isArray(raw.days) || raw.days.length > 7) return null
   const days: Weekday[] = []
   for (const day of raw.days) {
@@ -36,7 +47,21 @@ export function parseProgram(value: unknown): Program | undefined | null {
   days.sort((a, b) => a - b)
   if (typeof raw.startHour !== 'number' || !Number.isInteger(raw.startHour) || raw.startHour < 0 || raw.startHour > 23) return null
   if (typeof raw.startMin !== 'number' || !Number.isInteger(raw.startMin) || raw.startMin < 0 || raw.startMin > 59) return null
-  return { days, startHour: raw.startHour, startMin: raw.startMin }
+  const endHour = raw.endHour === undefined ? DEFAULT_PROGRAM.endHour : raw.endHour
+  const endMin = raw.endMin === undefined ? DEFAULT_PROGRAM.endMin : raw.endMin
+  if (typeof endHour !== 'number' || !Number.isInteger(endHour) || endHour < 0 || endHour > 23) return null
+  if (typeof endMin !== 'number' || !Number.isInteger(endMin) || endMin < 0 || endMin > 59) return null
+  return { days, startHour: raw.startHour, startMin: raw.startMin, endHour, endMin }
+}
+
+/** Полив, который не успевает к заданному часу. Конец не позже старта — это уже следующие сутки. */
+export function programWindowWarning(program: Program, clockMin: number | null): string | null {
+  if (clockMin === null || !(clockMin > 0)) return null
+  const start = program.startHour * 60 + program.startMin
+  let end = program.endHour * 60 + program.endMin
+  if (end <= start) end += 24 * 60
+  if (start + clockMin <= end + 1e-6) return null
+  return `Полив с ${clock(start)} не заканчивается к ${clock(program.endHour * 60 + program.endMin)}.`
 }
 
 /** Литры и секунды ведра → лимит источника, л/ч. */
@@ -88,7 +113,8 @@ export function programTable(doc: Pick<Doc, 'program'>, analysis: Pick<Analysis,
   const program = programOf(doc)
   const days = program.days.length ? program.days.map((day) => DAY[day]).join(', ') : 'ни одного дня'
   const start = clock(program.startHour * 60 + program.startMin)
-  const lines: ProgramLine[] = [{ name: days, when: `старт ${start}`, note: '' }]
+  const end = clock(program.endHour * 60 + program.endMin)
+  const lines: ProgramLine[] = [{ name: days, when: `старт ${start} · до ${end}`, note: '' }]
   let cursor = program.startHour * 60 + program.startMin
   if (analysis.stations.length === 0) {
     const span = analysis.clockMin ?? analysis.programMin

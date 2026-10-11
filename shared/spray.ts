@@ -1,5 +1,6 @@
 import { dist, pointInPolygon, polygonAreaPx, polar } from './geom.ts'
 import { nozzleById } from './nozzles.ts'
+import { barToHeadM, headLossM, pickPipeKeepingPressure } from './pipes.ts'
 import type { Point } from './types.ts'
 
 export const FAN_M = 4.5
@@ -16,6 +17,8 @@ const KEEP_FRAC = 0.84
 const FILL_TARGET = 0.97
 const FILL_KEEP = 0.95
 const VIS_STEPS = 72
+/** Ротору нужно около 3 бар. Ниже 2,8 бар после трубы схема берёт веер. */
+const ROTOR_BAR = 2.8
 const FAN_IDS = { 90: 'fan90', 180: 'fan180', 360: 'fan360' } as const
 const ROTOR_IDS = { 90: 'rotor90', 180: 'rotor', 360: 'rotor360' } as const
 
@@ -46,13 +49,21 @@ type Option = {
 
 export type SprayFamily = 'auto' | 'fan' | 'rotor'
 
-/** Покрытие газона: радиус под ширину, head-to-head, без плотной укладки вокруг клумб. */
-export function placeSprayOnPolygon(ring: Point[], holes: Point[][], ppm: number, family: SprayFamily = 'auto'): SpraySpot[] {
+/** Покрытие газона: радиус под ширину, head-to-head, без плотной укладки вокруг клумб. headCapLph и давление режут только автоподбор. */
+export function placeSprayOnPolygon(
+  ring: Point[],
+  holes: Point[][],
+  ppm: number,
+  family: SprayFamily = 'auto',
+  headCapLph = 0,
+  pressureBar = 0,
+  reachM = 0,
+): SpraySpot[] {
   const prep = prepareLawn(ring, holes, ppm)
   if (!prep) return []
   if (family === 'fan') return lay(prep, FAN_M, 'fan', false)
   if (family === 'rotor') return lay(prep, ROTOR_M, 'rotor', true)
-  return pickThrow(prep)
+  return pickThrow(prep, headCapLph, pressureBar, reachM)
 }
 
 function prepareLawn(ring: Point[], holes: Point[][], ppm: number): Prepared | null {
@@ -80,13 +91,13 @@ function throwChoices(minSpan: number): number[] {
   return found
 }
 
-function pickThrow(prep: Prepared): SpraySpot[] {
+function pickThrow(prep: Prepared, headCapLph: number, pressureBar: number, reachM: number): SpraySpot[] {
   let best: SpraySpot[] = []
   let bestScore = Infinity
   for (const radius of throwChoices(prep.minSpan)) {
     const kind = radius <= 5.5 ? 'fan' as const : 'rotor' as const
     const heads = lay(prep, radius, kind, false)
-    const score = layoutScore(heads, prep, radius)
+    const score = layoutScore(heads, prep, radius, headCapLph, pressureBar, reachM)
     if (score < bestScore) {
       bestScore = score
       best = heads
@@ -95,14 +106,34 @@ function pickThrow(prep: Prepared): SpraySpot[] {
   return best
 }
 
-function layoutScore(heads: SpraySpot[], prep: Prepared, radiusM: number): number {
+/** Остаток после утолщения трубы до дальней точки. Ниже 2,8 бар ротор не берём. */
+function rotorHolds(flowLph: number, reachM: number, pressureBar: number): boolean {
+  if (!(pressureBar > 0) || !(flowLph > 0)) return true
+  const start = barToHeadM(pressureBar)
+  const floor = barToHeadM(ROTOR_BAR)
+  if (start < floor - 1e-6) return false
+  const lengthM = Math.max(reachM, 0)
+  if (lengthM <= 0) return true
+  const picked = pickPipeKeepingPressure(flowLph, 'sdr11', lengthM, start, ROTOR_BAR)
+  const loss = headLossM(flowLph, picked.pipe.idMm, lengthM)
+  return start - loss >= floor - 1e-6
+}
+
+function layoutScore(heads: SpraySpot[], prep: Prepared, radiusM: number, headCapLph: number, pressureBar: number, reachM: number): number {
   if (heads.length === 0) return Infinity
   const cover = coveredCount(heads, prep.samples, prep.ppm) / prep.samples.length
   let waste = 0
-  for (const head of heads) waste += oversprayFrac(head, prep.ppm, prep.inside)
+  let heaviest = 0
+  for (const head of heads) {
+    waste += oversprayFrac(head, prep.ppm, prep.inside)
+    if (head.flowLph > heaviest) heaviest = head.flowLph
+  }
   waste /= heads.length
   const miss = Math.max(0, 0.96 - cover)
-  return miss * 100000 + heads.length * 100 + waste * 1200 + radiusM
+  // Лишние литры одной головки важнее клочка без полива: иначе ведро не выполнимо.
+  const over = headCapLph > 0 ? Math.max(0, heaviest - headCapLph) : 0
+  const softRotor = radiusM > 5.5 && !rotorHolds(heaviest, reachM, pressureBar) ? 1 : 0
+  return softRotor * 10_000_000 + over * 1_000_000 + miss * 100000 + heads.length * 100 + waste * 1200 + radiusM
 }
 
 function lay(prep: Prepared, radiusM: number, kind: 'fan' | 'rotor', fallback: boolean): SpraySpot[] {

@@ -208,9 +208,29 @@ test('a fed head keeps the pressure left in the pipe and a loose head does not',
   doc.pxPerMeter = 20
   doc.source = { x: 0, y: 0, pressureBar: 1.5, flowLimitLph: null }
   doc.sprinklers = [{ id: 's', nozzleId: 'fan180', x: 200, y: 0, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 360 }]
-  const low = analyze(doc).pressureMarks.find((item) => item.id === 's')
+  const starved = analyze(doc)
+  const low = starved.pressureMarks.find((item) => item.id === 's')
   assert.equal(low?.low, true)
   assert.ok((low?.bar ?? 2) < 2)
+  assert.equal(starved.segments[0]?.odMm, 20)
+})
+
+test('a long run steps up a diameter so the far head keeps 2 bar', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 10
+  doc.zones = []
+  doc.valves = []
+  doc.source = { x: 0, y: 0, pressureBar: 2.5, flowLimitLph: null }
+  doc.sprinklers = [{ id: 'far', nozzleId: 'fan360', x: 600, y: 0, radiusM: 4.5, arcDeg: 360, rotationDeg: 0, flowLph: 720 }]
+  doc.pipes = [{ id: 'run', points: [{ x: 0, y: 0 }, { x: 600, y: 0 }] }]
+  const analysis = analyze(doc)
+  const run = analysis.segments[0]
+  assert.equal(run?.odMm, 25)
+  assert.ok((run?.velocity ?? 2) <= 1.5)
+  assert.equal(analysis.warnings.some((item) => item.includes('меньше 2 бар')), false)
+  const mark = analysis.pressureMarks.find((item) => item.id === 'far')
+  assert.equal(mark?.low, false)
+  assert.ok((mark?.bar ?? 0) >= 2)
 })
 
 test('a hydrant on a dead end replaces the cap', () => {

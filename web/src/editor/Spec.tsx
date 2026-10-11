@@ -559,6 +559,18 @@ export function Spec({
           }}
         />
       </label>
+      <label>
+        До
+        <input
+          type="time"
+          aria-label="Конец полива"
+          value={`${String(program.endHour).padStart(2, '0')}:${String(program.endMin).padStart(2, '0')}`}
+          onChange={(event) => {
+            const [hour, minute] = event.target.value.split(':').map((part) => Number(part))
+            if (Number.isInteger(hour) && Number.isInteger(minute)) onProgram({ endHour: hour, endMin: minute })
+          }}
+        />
+      </label>
       {table ? (
         <table>
           <tbody>

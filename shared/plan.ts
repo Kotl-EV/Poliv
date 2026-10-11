@@ -1,10 +1,10 @@
-import { SNAP_PX, defaultDose, emptyDoc } from './doc.ts'
+import { PLANT_DRIP_MIN, SNAP_PX, climateFactor, cyclePlan, defaultDose, emptyDoc } from './doc.ts'
 import { placeDripAtPlant } from './drip.ts'
 import { dist, pointInPolygon, pointInZone, polygonAreaPx, zoneAreaPx } from './geom.ts'
 import { isDripKind, isObstacleKind, isSprayKind, isWetKind } from './landscape.ts'
 import { nozzleById } from './nozzles.ts'
 import { placeSprayOnPolygon, ringsOverlap, type SprayFamily } from './spray.ts'
-import type { Doc, PipeRole, Point, Zone, ZoneKind } from './types.ts'
+import type { Doc, PipeRole, Point, Sleeve, Zone, ZoneKind } from './types.ts'
 
 export type Rgb = [number, number, number]
 export type InkRole = 'structure' | 'hatch' | 'plant' | 'bed' | 'grid' | 'stipple'
@@ -13,8 +13,138 @@ export type InkSeg = { a: Point; b: Point; role: InkRole }
 const MAX_HEADS = 120
 const MAX_DRIPS = 48
 const STATION_LPH = 1500
+/** Клапан не дольёт короткой зоне больше четверти её времени. */
+const RUNTIME_BAND = 1.25
 const MIN_LAWN_M2 = 8
-const PLANT_DRIP_MIN = 90
+
+type StationFamily = 'fan' | 'rotator' | 'rotor' | 'bubbler' | 'drip'
+type StationItem = { key: number; flow: number; family: StationFamily }
+
+/** Ведро источника, если оно задано и уже потолка клапана. Ноль и пустое поле оставляют 1500 л/ч. */
+function stationLimit(flowLimitLph: number | null | undefined): number {
+  if (flowLimitLph != null && flowLimitLph > 0) return Math.min(STATION_LPH, flowLimitLph)
+  return STATION_LPH
+}
+
+type ZoneWater = { minutes: number; cycles: number; soak: number }
+
+/** Время и число включений зоны по её расходу. Пустая зона — ноль. */
+function zoneWaters(zones: Zone[], heads: { point: Point; flowLph: number }[], drips: DripSpot[], ppm: number): Map<string, ZoneWater> {
+  const waters = new Map<string, ZoneWater>()
+  for (const zone of zones) {
+    const area = zoneAreaPx(zone.points, zone.holes) / (ppm * ppm)
+    if (zone.doseMm <= 0 || area <= 0) {
+      waters.set(zone.id, { minutes: 0, cycles: 0, soak: 0 })
+      continue
+    }
+    let flow = 0
+    for (const head of heads) {
+      if (pointInZone(head.point, zone.points, zone.holes)) flow += head.flowLph
+    }
+    for (const drip of drips) {
+      if (!isDripKind(zone.kind)) continue
+      if (pointInZone(centroid(drip.points), zone.points, zone.holes)) flow += dripFlow(drip, ppm)
+    }
+    if (flow <= 0) {
+      waters.set(zone.id, { minutes: 0, cycles: 0, soak: 0 })
+      continue
+    }
+    const precip = flow / area
+    const minutes = (zone.doseMm * climateFactor(zone.climate) / precip) * 60
+    const plan = cyclePlan(minutes, precip, zone.soil, zone.slope)
+    waters.set(zone.id, { minutes, cycles: plan.cycles ?? 0, soak: plan.soakMin })
+  }
+  return waters
+}
+
+function longerWater(row: ZoneWater, best: ZoneWater): boolean {
+  return row.minutes > best.minutes || (row.minutes === best.minutes && row.cycles > best.cycles)
+}
+
+function headWater(point: Point, zones: Zone[], waters: Map<string, ZoneWater>): ZoneWater {
+  let best: ZoneWater = { minutes: 0, cycles: 0, soak: 0 }
+  for (const zone of zones) {
+    if (!pointInZone(point, zone.points, zone.holes)) continue
+    const row = waters.get(zone.id)
+    if (row && longerWater(row, best)) best = row
+  }
+  return best
+}
+
+/** Клумба и кусты дают своё время. Дерево на газоне остаётся на 90 минутах и одном цикле. */
+function dripWater(points: Point[], zones: Zone[], waters: Map<string, ZoneWater>): ZoneWater {
+  if (points.length === 0) return { minutes: PLANT_DRIP_MIN, cycles: 1, soak: 0 }
+  let best: ZoneWater = { minutes: 0, cycles: 0, soak: 0 }
+  const at = centroid(points)
+  for (const zone of zones) {
+    if (!isDripKind(zone.kind) || !pointInZone(at, zone.points, zone.holes)) continue
+    const row = waters.get(zone.id)
+    if (row && longerWater(row, best)) best = row
+  }
+  return best.minutes > 0 ? best : { minutes: PLANT_DRIP_MIN, cycles: 1, soak: 0 }
+}
+
+/** Ноль с нулём держится вместе. Сухой полив не садится на станцию, которая ещё льёт. */
+function runtimesShare(left: number, right: number): boolean {
+  const low = Math.min(left, right)
+  const high = Math.max(left, right)
+  if (high <= 1e-6) return true
+  if (low <= 1e-6) return false
+  return high <= low * RUNTIME_BAND
+}
+
+/**
+ * Одно семейство на клапан: веер, ротатор, ротор, баблер и капля не делят станцию.
+ * Головка тяжелее потолка остаётся одна: её нельзя разрезать.
+ * Короткое и длинное время тоже не делят клапан, иначе короткая зона получит чужую норму.
+ * Разная почва даёт разное число включений и тоже не делит клапан.
+ * Одинаковое число включений с разной паузой не делит клапан: глина ждёт дольше суглинка.
+ */
+function groupStations(
+  items: StationItem[],
+  runtimeOf: Map<number, number>,
+  cap: number,
+  cyclesOf: Map<number, number>,
+  soakOf: Map<number, number>,
+): StationItem[][] {
+  const consumers = [...items].sort((a, b) => (runtimeOf.get(b.key) ?? 0) - (runtimeOf.get(a.key) ?? 0) || b.flow - a.flow || a.key - b.key)
+  const groups: StationItem[][] = []
+  const bins: { flow: number; runtime: number; cycles: number; soak: number; family: StationFamily }[] = []
+  for (const item of consumers) {
+    const runtime = runtimeOf.get(item.key) ?? 0
+    const cycles = cyclesOf.get(item.key) ?? 0
+    const soak = soakOf.get(item.key) ?? 0
+    let best = -1
+    let bestCost = Infinity
+    for (let i = 0; i < bins.length; i++) {
+      if (bins[i].family !== item.family) continue
+      if (bins[i].cycles !== cycles) continue
+      if (bins[i].soak !== soak) continue
+      if (!runtimesShare(bins[i].runtime, runtime)) continue
+      if (bins[i].flow + item.flow > cap) continue
+      const cost = Math.max(bins[i].runtime, runtime) - bins[i].runtime
+      const tighter = cost < bestCost || (cost === bestCost && best !== -1 && bins[i].flow > bins[best].flow)
+      if (tighter) {
+        bestCost = cost
+        best = i
+      }
+    }
+    if (best === -1) {
+      groups.push([item])
+      bins.push({ flow: item.flow, runtime, cycles, soak, family: item.family })
+    } else {
+      groups[best].push(item)
+      bins[best].flow += item.flow
+      bins[best].runtime = Math.max(bins[best].runtime, runtime)
+    }
+  }
+  return groups
+}
+/** Цена шага сетки. Здание и вода в сетку не входят. Гильза, которую уже начертили, стоит как грунт. */
+const ROUTE_OPEN = 1
+const ROUTE_BED = 3
+const ROUTE_PATH = 8
+const ROUTE_CONCRETE = 24
 
 type HeadSpot = { key: number; point: Point; nozzleId: string; rotationDeg: number; radiusM: number; flowLph: number }
 type LaidPipe = { id: string; points: Point[]; role: PipeRole }
@@ -329,64 +459,27 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
   const keptDrips = placedDrips.filter((drip) => reachable.has(drip.key))
   if (keptHeads.length === 0 && keptDrips.length === 0) return null
 
-  const consumers = [
-    ...keptHeads.map((head) => ({ key: head.key, flow: head.flowLph, kind: 'spray' as const })),
-    ...keptDrips.map((drip) => ({ key: drip.key, flow: dripFlow(drip, ppm), kind: 'drip' as const })),
+  const consumers: StationItem[] = [
+    ...keptHeads.map((head) => ({ key: head.key, flow: head.flowLph, family: nozzleById(head.nozzleId).kind })),
+    ...keptDrips.map((drip) => ({ key: drip.key, flow: dripFlow(drip, ppm), family: 'drip' as const })),
   ]
-  const zoneRuntime = new Map<string, number>()
-  for (const zone of zones) {
-    const area = zoneAreaPx(zone.points, zone.holes) / (ppm * ppm)
-    if (zone.doseMm <= 0 || area <= 0) {
-      zoneRuntime.set(zone.id, 0)
-      continue
-    }
-    let flow = 0
-    for (const head of keptHeads) {
-      if (pointInZone(head.point, zone.points, zone.holes)) flow += head.flowLph
-    }
-    for (const drip of keptDrips) {
-      if (!isDripKind(zone.kind)) continue
-      if (pointInZone(centroid(drip.points), zone.points, zone.holes)) flow += dripFlow(drip, ppm)
-    }
-    zoneRuntime.set(zone.id, flow > 0 ? (zone.doseMm / (flow / area)) * 60 : 0)
-  }
-  const runtimeAt = (point: Point) => {
-    let best = 0
-    for (const zone of zones) {
-      if (!pointInZone(point, zone.points, zone.holes)) continue
-      best = Math.max(best, zoneRuntime.get(zone.id) ?? 0)
-    }
-    return best
-  }
+  const waters = zoneWaters(zones, keptHeads, keptDrips, ppm)
   const runtimeOf = new Map<number, number>()
-  for (const head of keptHeads) runtimeOf.set(head.key, Math.max(runtimeOf.get(head.key) ?? 0, runtimeAt(head.point)))
-  for (const drip of keptDrips) runtimeOf.set(drip.key, PLANT_DRIP_MIN)
-  consumers.sort((a, b) => (runtimeOf.get(b.key) ?? 0) - (runtimeOf.get(a.key) ?? 0) || b.flow - a.flow || a.key - b.key)
-  const groups: { key: number; flow: number; kind: 'spray' | 'drip' }[][] = []
-  const bins: { flow: number; runtime: number; kind: 'spray' | 'drip' }[] = []
-  for (const item of consumers) {
-    const runtime = runtimeOf.get(item.key) ?? 0
-    let best = -1
-    let bestCost = Infinity
-    for (let i = 0; i < bins.length; i++) {
-      if (bins[i].kind !== item.kind) continue
-      if (bins[i].flow + item.flow > STATION_LPH) continue
-      const cost = Math.max(bins[i].runtime, runtime) - bins[i].runtime
-      const tighter = cost < bestCost || (cost === bestCost && best !== -1 && bins[i].flow > bins[best].flow)
-      if (tighter) {
-        bestCost = cost
-        best = i
-      }
-    }
-    if (best === -1) {
-      groups.push([item])
-      bins.push({ flow: item.flow, runtime, kind: item.kind })
-    } else {
-      groups[best].push(item)
-      bins[best].flow += item.flow
-      bins[best].runtime = Math.max(bins[best].runtime, runtime)
-    }
+  const cyclesOf = new Map<number, number>()
+  const soakOf = new Map<number, number>()
+  for (const head of keptHeads) {
+    const water = headWater(head.point, zones, waters)
+    runtimeOf.set(head.key, Math.max(runtimeOf.get(head.key) ?? 0, water.minutes))
+    cyclesOf.set(head.key, Math.max(cyclesOf.get(head.key) ?? 0, water.cycles))
+    soakOf.set(head.key, Math.max(soakOf.get(head.key) ?? 0, water.soak))
   }
+  for (const drip of keptDrips) {
+    const water = dripWater(drip.points, zones, waters)
+    runtimeOf.set(drip.key, water.minutes)
+    cyclesOf.set(drip.key, water.cycles)
+    soakOf.set(drip.key, water.soak)
+  }
+  const groups = groupStations(consumers, runtimeOf, STATION_LPH, cyclesOf, soakOf)
 
   const terminalKeys = new Set(consumers.map((item) => item.key))
   const reserved = new Set<number>([root, ...terminalKeys])
@@ -416,16 +509,28 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
   const pipes: LaidPipe[] = []
   const clear = (a: Point, b: Point) => segmentClear(a, b, buildings, cellPx)
   const trunkAllowed = new Set<number>([root])
-  for (const key of allowed) if (!terminalKeys.has(key)) trunkAllowed.add(key)
+  for (const key of allowed) {
+    if (terminalKeys.has(key)) continue
+    const at = center(key)
+    // Магистраль не подходит к головке ближе привязки, иначе расход сядет до клапана.
+    if (keptHeads.some((head) => dist(at, head.point) <= SNAP_PX)) continue
+    if (keptDrips.some((drip) => drip.points[0] && dist(at, drip.points[0]) <= SNAP_PX)) continue
+    trunkAllowed.add(key)
+  }
   for (const spot of spots) trunkAllowed.add(spot)
-  const trunk = steiner(root, spots.filter((spot) => spot !== root), trunkAllowed, cols, rows)
+  const valveLeaves = new Set(spots.filter((spot) => spot !== root))
+  const trunk = steiner(root, spots.filter((spot) => spot !== root), trunkAllowed, cols, rows, undefined, valveLeaves)
   const trunkCells = new Set(trunk.keys())
   pipes.push(...pipesFromTree(trunk, center, ids, clear, new Set(spots), 'main'))
+  const zoneBundles: LaidPipe[][] = []
+  const bundleOf = new Map<number, number>()
   for (let i = 0; i < groups.length; i++) {
     const spot = spots[i]
+    for (const item of groups[i]) bundleOf.set(item.key, i)
     if (spot !== root && !trunk.has(spot)) {
       pipes.push({ id: ids('pipe'), points: [center(root), center(spot)], role: 'main' })
     }
+    const zonePipes: LaidPipe[] = []
     const owned = groups[i].map((item) => item.key)
     const local = new Set<number>([spot])
     for (const key of allowed) {
@@ -440,7 +545,7 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
       const cells = key === spot ? [spot] : pathTo(prev, key, spot)
       if (cells && cells.length >= 2) {
         const points = shorten(cells.map(center), clear)
-        if (points.length >= 2) pipes.push({ id: ids('pipe'), points, role: 'zone' })
+        if (points.length >= 2) zonePipes.push({ id: ids('pipe'), points, role: 'zone' })
         hit = true
         reached.add(key)
         continue
@@ -450,10 +555,11 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
         reached.add(key)
         continue
       }
-      pipes.push({ id: ids('pipe'), points: [center(spot), center(key)], role: 'zone' })
+      zonePipes.push({ id: ids('pipe'), points: [center(spot), center(key)], role: 'zone' })
       hit = true
       reached.add(key)
     }
+    zoneBundles.push(zonePipes)
     if (hit && !valveKeys.includes(spot)) valveKeys.push(spot)
   }
   const finalHeads = keptHeads.filter((head) => reached.has(head.key))
@@ -461,7 +567,12 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
   if (finalHeads.length === 0 && finalDrips.length === 0) return null
   for (const head of finalHeads) {
     const at = center(head.key)
-    if (dist(at, head.point) > 1) pipes.push({ id: ids('pipe'), points: [at, head.point], role: 'zone' })
+    if (dist(at, head.point) > 1) {
+      const tail: LaidPipe = { id: ids('pipe'), points: [at, head.point], role: 'zone' }
+      const index = bundleOf.get(head.key)
+      if (index === undefined) pipes.push(tail)
+      else zoneBundles[index].push(tail)
+    }
   }
   const sourcePoint = sourceOutside(center(root), centroid(hull), cellPx, page)
   pipes.unshift({ id: ids('pipe'), points: [sourcePoint, center(root)], role: 'main' })
@@ -484,7 +595,7 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
   })
   doc.drips = finalDrips.map((drip) => ({ id: ids('drip'), points: drip.points, spacingM: drip.spacingM, emitterLph: drip.emitterLph }))
   doc.valves = valveKeys.map((key, index) => ({ id: ids('valve'), name: `Клапан ${index + 1}`, ...center(key) }))
-  doc.pipes = treePipes(pipes, SNAP_PX, ids)
+  doc.pipes = joinPipes([pipes, ...zoneBundles], SNAP_PX, ids)
   return doc
 
   function center(key: number): Point {
@@ -543,6 +654,8 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
   }
   const lawnKeys: number[] = []
   const allowed = new Set<number>()
+  const routeCost = new Map<number, number>()
+  const sleeveCells = new Set<number>()
   const hull = convexHull(pts)
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -550,12 +663,21 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
       const point = center(key)
       const mask = wetMask(point, doc.zones)
       if (mask === 'spray') lawnKeys.push(key)
-      if (mask !== 'hard' && (mask !== null || (hull.length >= 3 && pointInPolygon(point, hull)))) allowed.add(key)
+      if (mask !== 'hard' && (mask !== null || (hull.length >= 3 && pointInPolygon(point, hull)))) {
+        allowed.add(key)
+        routeCost.set(key, routeCellCost(point, doc.zones))
+      }
     }
   }
+  stampSleeves(doc.sleeves ?? [], sleeveCells, allowed, minX, minY, cellPx, cols, rows)
+  const stand = new Map<number, Point>()
+  stampPassages(allowed, routeCost, stand, cols, rows, center, cellPx, doc.zones, hull)
+  const place = (key: number) => stand.get(key) ?? center(key)
+  const stepCost = (key: number) => (sleeveCells.has(key) ? ROUTE_OPEN : routeCost.get(key) ?? ROUTE_OPEN)
 
   const lawnSet = new Set(lawnKeys)
   const heads: HeadSpot[] = []
+  const headCapLph = source.flowLimitLph != null && source.flowLimitLph > 0 ? stationLimit(source.flowLimitLph) : 0
   for (const zone of doc.zones) {
     if (!isSprayKind(zone.kind) || zone.points.length < 3) continue
     if (zoneAreaPx(zone.points, zone.holes) / (ppm * ppm) < MIN_LAWN_M2) continue
@@ -566,7 +688,9 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
         .filter((other) => ringsOverlap(zone.points, other.points))
         .map((other) => other.points),
     ]
-    for (const spot of placeSprayOnPolygon(zone.points, holes, ppm, family)) {
+    let far = 0
+    for (const point of zone.points) far = Math.max(far, dist(source, point))
+    for (const spot of placeSprayOnPolygon(zone.points, holes, ppm, family, headCapLph, source.pressureBar, far / ppm)) {
       if (heads.length >= MAX_HEADS) break
       const key = snapHeadKey(spot.point, lawnSet, center) ?? snapHeadKey(spot.point, allowed, center)
       if (key === null) continue
@@ -616,69 +740,32 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
   }
   const placedHeads = heads.filter((head) => head.key >= 0)
   const placedDrips = drips.filter((drip) => drip.key >= 0)
-  const reachable = steiner(root, [...placedHeads.map((head) => head.key), ...placedDrips.map((drip) => drip.key)], allowed, cols, rows)
+  const reachable = steiner(root, [...placedHeads.map((head) => head.key), ...placedDrips.map((drip) => drip.key)], allowed, cols, rows, stepCost)
   const keptHeads = placedHeads.filter((head) => reachable.has(head.key))
   const keptDrips = placedDrips.filter((drip) => reachable.has(drip.key))
   if (keptHeads.length === 0 && keptDrips.length === 0) return null
 
-  const consumers = [
-    ...keptHeads.map((head) => ({ key: head.key, flow: head.flowLph, kind: 'spray' as const })),
-    ...keptDrips.map((drip) => ({ key: drip.key, flow: dripFlow(drip, ppm), kind: 'drip' as const })),
+  const consumers: StationItem[] = [
+    ...keptHeads.map((head) => ({ key: head.key, flow: head.flowLph, family: nozzleById(head.nozzleId).kind })),
+    ...keptDrips.map((drip) => ({ key: drip.key, flow: dripFlow(drip, ppm), family: 'drip' as const })),
   ]
-  const zoneRuntime = new Map<string, number>()
-  for (const zone of doc.zones) {
-    const area = zoneAreaPx(zone.points, zone.holes) / (ppm * ppm)
-    if (zone.doseMm <= 0 || area <= 0) {
-      zoneRuntime.set(zone.id, 0)
-      continue
-    }
-    let flow = 0
-    for (const head of keptHeads) {
-      if (pointInZone(head.point, zone.points, zone.holes)) flow += head.flowLph
-    }
-    for (const drip of keptDrips) {
-      if (!isDripKind(zone.kind)) continue
-      if (pointInZone(centroid(drip.points), zone.points, zone.holes)) flow += dripFlow(drip, ppm)
-    }
-    zoneRuntime.set(zone.id, flow > 0 ? (zone.doseMm / (flow / area)) * 60 : 0)
-  }
-  const runtimeAt = (point: Point) => {
-    let best = 0
-    for (const zone of doc.zones) {
-      if (!pointInZone(point, zone.points, zone.holes)) continue
-      best = Math.max(best, zoneRuntime.get(zone.id) ?? 0)
-    }
-    return best
-  }
+  const waters = zoneWaters(doc.zones, keptHeads, keptDrips, ppm)
   const runtimeOf = new Map<number, number>()
-  for (const head of keptHeads) runtimeOf.set(head.key, Math.max(runtimeOf.get(head.key) ?? 0, runtimeAt(head.point)))
-  for (const drip of keptDrips) runtimeOf.set(drip.key, PLANT_DRIP_MIN)
-  consumers.sort((a, b) => (runtimeOf.get(b.key) ?? 0) - (runtimeOf.get(a.key) ?? 0) || b.flow - a.flow || a.key - b.key)
-  const groups: { key: number; flow: number; kind: 'spray' | 'drip' }[][] = []
-  const bins: { flow: number; runtime: number; kind: 'spray' | 'drip' }[] = []
-  for (const item of consumers) {
-    const runtime = runtimeOf.get(item.key) ?? 0
-    let best = -1
-    let bestCost = Infinity
-    for (let i = 0; i < bins.length; i++) {
-      if (bins[i].kind !== item.kind) continue
-      if (bins[i].flow + item.flow > STATION_LPH) continue
-      const cost = Math.max(bins[i].runtime, runtime) - bins[i].runtime
-      const tighter = cost < bestCost || (cost === bestCost && best !== -1 && bins[i].flow > bins[best].flow)
-      if (tighter) {
-        bestCost = cost
-        best = i
-      }
-    }
-    if (best === -1) {
-      groups.push([item])
-      bins.push({ flow: item.flow, runtime, kind: item.kind })
-    } else {
-      groups[best].push(item)
-      bins[best].flow += item.flow
-      bins[best].runtime = Math.max(bins[best].runtime, runtime)
-    }
+  const cyclesOf = new Map<number, number>()
+  const soakOf = new Map<number, number>()
+  for (const head of keptHeads) {
+    const water = headWater(head.point, doc.zones, waters)
+    runtimeOf.set(head.key, Math.max(runtimeOf.get(head.key) ?? 0, water.minutes))
+    cyclesOf.set(head.key, Math.max(cyclesOf.get(head.key) ?? 0, water.cycles))
+    soakOf.set(head.key, Math.max(soakOf.get(head.key) ?? 0, water.soak))
   }
+  for (const drip of keptDrips) {
+    const water = dripWater(drip.points, doc.zones, waters)
+    runtimeOf.set(drip.key, water.minutes)
+    cyclesOf.set(drip.key, water.cycles)
+    soakOf.set(drip.key, water.soak)
+  }
+  const groups = groupStations(consumers, runtimeOf, stationLimit(doc.source?.flowLimitLph), cyclesOf, soakOf)
 
   const terminalKeys = new Set(consumers.map((item) => item.key))
   const reserved = new Set<number>([root, ...terminalKeys])
@@ -689,17 +776,7 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
       continue
     }
     const mid = centroid(group.map((item) => center(item.key)))
-    let best: number | null = null
-    let bestD = Infinity
-    for (const key of allowed) {
-      if (reserved.has(key)) continue
-      const distance = dist(center(key), mid)
-      if (distance < bestD) {
-        bestD = distance
-        best = key
-      }
-    }
-    const valveSpot: number = best ?? root
+    const valveSpot: number = pickValveCell(allowed, routeCost, reserved, mid, center) ?? root
     spots.push(valveSpot)
     if (valveSpot !== root) reserved.add(valveSpot)
   }
@@ -707,19 +784,31 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
   const valveKeys: number[] = []
   const pipes: LaidPipe[] = []
   const ids = sequencer()
-  const buildings = doc.zones.filter((zone) => zone.kind === 'building' || zone.kind === 'water').map((zone) => zone.points)
-  const clear = (a: Point, b: Point) => segmentClear(a, b, buildings, cellPx)
+  const clear = (a: Point, b: Point) => segmentOpen(a, b, doc.zones, cellPx)
   const trunkAllowed = new Set<number>([root])
-  for (const key of allowed) if (!terminalKeys.has(key)) trunkAllowed.add(key)
+  for (const key of allowed) {
+    if (terminalKeys.has(key)) continue
+    const at = place(key)
+    // Магистраль не подходит к головке ближе привязки, иначе расход сядет до клапана.
+    if (keptHeads.some((head) => dist(at, head.point) <= SNAP_PX)) continue
+    if (keptDrips.some((drip) => drip.points[0] && dist(at, drip.points[0]) <= SNAP_PX)) continue
+    trunkAllowed.add(key)
+  }
   for (const spot of spots) trunkAllowed.add(spot)
-  const trunk = steiner(root, spots.filter((spot) => spot !== root), trunkAllowed, cols, rows)
+  const valveLeaves = new Set(spots.filter((spot) => spot !== root))
+  const trunk = steiner(root, spots.filter((spot) => spot !== root), trunkAllowed, cols, rows, stepCost, valveLeaves)
   const trunkCells = new Set(trunk.keys())
-  pipes.push(...pipesFromTree(trunk, center, ids, clear, new Set(spots), 'main'))
+  pipes.push(...pipesFromTree(trunk, place, ids, clear, new Set(spots), 'main'))
+  const zoneBundles: LaidPipe[][] = []
+  const bundleOf = new Map<number, number>()
   for (let i = 0; i < groups.length; i++) {
     const spot = spots[i]
+    for (const item of groups[i]) bundleOf.set(item.key, i)
     if (spot !== root && !trunk.has(spot)) {
-      pipes.push({ id: ids('pipe'), points: [center(root), center(spot)], role: 'main' })
+      const around = linkCells(root, spot, allowed, cols, rows, stepCost, place, valveLeaves)
+      if (around) pipes.push({ id: ids('pipe'), points: shorten(around, clear), role: 'main' })
     }
+    const zonePipes: LaidPipe[] = []
     const owned = groups[i].map((item) => item.key)
     const local = new Set<number>([spot])
     for (const key of allowed) {
@@ -728,44 +817,49 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
       if (spots.some((other) => other === key && other !== spot)) continue
       local.add(key)
     }
-    const { prev } = dijkstra(new Map([[spot, null]]), local, cols, rows, terminalKeys)
+    // Одно дерево на станцию: пересечение бетона общее, а не отдельный прокол к каждой головке.
+    const branch = steiner(spot, owned.filter((key) => key !== spot), local, cols, rows, stepCost)
+    if (branch.size > 1) zonePipes.push(...pipesFromTree(branch, place, ids, clear, new Set([spot, ...owned]), 'zone'))
     let hit = false
     for (const key of owned) {
-      const cells = key === spot ? [spot] : pathTo(prev, key, spot)
-      if (cells && cells.length >= 2) {
-        const points = shorten(cells.map(center), clear)
-        if (points.length >= 2) pipes.push({ id: ids('pipe'), points, role: 'zone' })
+      if (key === spot || branch.has(key)) {
         hit = true
         reached.add(key)
         continue
       }
-      if (key === spot) {
-        hit = true
-        reached.add(key)
-        continue
-      }
-      pipes.push({ id: ids('pipe'), points: [center(spot), center(key)], role: 'zone' })
+      const around = linkCells(spot, key, allowed, cols, rows, stepCost, place, valveLeaves)
+      if (!around) continue
+      zonePipes.push({ id: ids('pipe'), points: shorten(around, clear), role: 'zone' })
       hit = true
       reached.add(key)
     }
+    zoneBundles.push(zonePipes)
     if (hit && !valveKeys.includes(spot)) valveKeys.push(spot)
   }
   const finalHeads = keptHeads.filter((head) => reached.has(head.key))
   const finalDrips = keptDrips.filter((drip) => reached.has(drip.key))
   if (finalHeads.length === 0 && finalDrips.length === 0) return null
+  const park = (key: number, pipe: LaidPipe) => {
+    const index = bundleOf.get(key)
+    if (index === undefined) pipes.push(pipe)
+    else zoneBundles[index].push(pipe)
+  }
   for (const head of finalHeads) {
-    const at = center(head.key)
-    if (dist(at, head.point) > 1) pipes.push({ id: ids('pipe'), points: [at, head.point], role: 'zone' })
+    const at = place(head.key)
+    if (dist(at, head.point) > 1) park(head.key, { id: ids('pipe'), points: [at, head.point], role: 'zone' })
   }
   for (const drip of finalDrips) {
-    const at = center(drip.key)
+    const at = place(drip.key)
     const start = drip.points[0]
-    if (start && dist(at, start) > 1) pipes.push({ id: ids('pipe'), points: [at, start], role: 'zone' })
+    if (start && dist(at, start) > 1) park(drip.key, { id: ids('pipe'), points: [at, start], role: 'zone' })
   }
 
-  pipes.unshift({ id: ids('pipe'), points: [{ x: source.x, y: source.y }, center(root)], role: 'main' })
+  pipes.unshift({ id: ids('pipe'), points: [{ x: source.x, y: source.y }, place(root)], role: 'main' })
+  const laid = joinPipes([pipes, ...zoneBundles], SNAP_PX, ids)
+  const autoSleeves = crossingSleeves(laid, doc.zones, doc.sleeves ?? [], cellPx, ids)
   return {
     ...doc,
+    sleeves: autoSleeves.length ? [...(doc.sleeves ?? []), ...autoSleeves] : doc.sleeves,
     sprinklers: finalHeads.map((head) => {
       const nozzle = nozzleById(head.nozzleId)
       return {
@@ -780,14 +874,19 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
       }
     }),
     drips: finalDrips.map((drip) => ({ id: ids('drip'), points: drip.points, spacingM: drip.spacingM, emitterLph: drip.emitterLph })),
-    valves: valveKeys.map((key, index) => ({ id: ids('valve'), name: `Клапан ${index + 1}`, ...center(key) })),
-    pipes: treePipes(pipes, SNAP_PX, ids),
+    valves: valveKeys.map((key, index) => ({ id: ids('valve'), name: `Клапан ${index + 1}`, ...place(key) })),
+    pipes: laid,
   }
 }
 
 function sequencer(): (prefix: string) => string {
   let n = 0
   return (prefix) => `${prefix}-${++n}`
+}
+
+/** Магистраль ложится первой, поэтому ветка станции не становится путём к чужому клапану. */
+function joinPipes(groups: LaidPipe[][], snap: number, ids: (prefix: string) => string): LaidPipe[] {
+  return treePipes(groups.flat(), snap, ids)
 }
 
 function treePipes(
@@ -805,7 +904,7 @@ function treePipes(
       segs.push({ a, b, len, role: pipe.role })
     }
   }
-  segs.sort((left, right) => left.len - right.len)
+  segs.sort((left, right) => (left.role === right.role ? left.len - right.len : left.role === 'main' ? -1 : 1))
   const nodes: Point[] = []
   const parent: number[] = []
   const find = (i: number): number => {
@@ -1452,14 +1551,348 @@ function boundaryCell(inside: number[], hull: Point[], cols: number, rows: numbe
   return nearestKey(centroid(hull), allowed, at, avoid, SNAP_PX) ?? nearestKey(centroid(hull), allowed, at)
 }
 
+function routeCellCost(point: Point, zones: Zone[]): number {
+  let cost = ROUTE_OPEN
+  for (const zone of zones) {
+    if (zone.points.length < 3 || !pointInZone(point, zone.points, zone.holes)) continue
+    if (zone.kind === 'concrete') cost = Math.max(cost, ROUTE_CONCRETE)
+    else if (zone.kind === 'path') cost = Math.max(cost, ROUTE_PATH)
+    else if (isDripKind(zone.kind)) cost = Math.max(cost, ROUTE_BED)
+  }
+  return cost
+}
+
+/** Клетки уже начерченной гильзы стоят как открытый грунт, чтобы трасса вошла в готовый прокол. */
+/**
+ * Узкий проход уже клетки: центр попал в дом, а грунт с одной стороны соединяет две открытые клетки.
+ * Труба встаёт на этот грунт, не на среднее зондов по разные стороны стены. Ряд длиннее восьми клеток не прокалывается.
+ */
+function stampPassages(
+  allowed: Set<number>,
+  routeCost: Map<number, number>,
+  stand: Map<number, Point>,
+  cols: number,
+  rows: number,
+  at: (key: number) => Point,
+  cellPx: number,
+  zones: Zone[],
+  hull: Point[],
+) {
+  const shifts = [0.28, 0.46]
+  const openAt = (point: Point) => {
+    const mask = wetMask(point, zones)
+    if (mask === 'hard') return false
+    if (mask === null && (hull.length < 3 || !pointInPolygon(point, hull))) return false
+    return true
+  }
+  type Side = 'up' | 'down' | 'left' | 'right'
+  type Sides = Partial<Record<Side, Point>>
+  const sides = new Map<number, Sides>()
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const key = c + r * cols
+      if (allowed.has(key)) continue
+      const mid = at(key)
+      for (const shift of shifts) {
+        const d = shift * cellPx
+        const probes: [Side, Point][] = [
+          ['left', { x: mid.x - d, y: mid.y }],
+          ['right', { x: mid.x + d, y: mid.y }],
+          ['up', { x: mid.x, y: mid.y - d }],
+          ['down', { x: mid.x, y: mid.y + d }],
+        ]
+        for (const [dir, point] of probes) {
+          if (!openAt(point)) continue
+          const row = sides.get(key) ?? {}
+          row[dir] = point
+          sides.set(key, row)
+        }
+      }
+    }
+  }
+  const flank = new Set(allowed)
+  const take = (keys: number[], dirs: Side[]) => {
+    if (keys.length === 0 || keys.length > 8) return
+    let best: Side | null = null
+    let bestShift = -1
+    for (const dir of dirs) {
+      let shift = 0
+      for (const key of keys) {
+        const point = sides.get(key)?.[dir]
+        if (!point) { shift = -1; break }
+        const mid = at(key)
+        shift += Math.hypot(point.x - mid.x, point.y - mid.y)
+      }
+      if (shift > bestShift) { bestShift = shift; best = dir }
+    }
+    if (!best || bestShift < 0) return
+    for (const key of keys) {
+      const point = sides.get(key)?.[best]
+      if (!point) return
+      allowed.add(key)
+      routeCost.set(key, ROUTE_OPEN)
+      stand.set(key, point)
+    }
+  }
+  const scan = (length: number, line: (index: number, step: number) => number, dirs: Side[]) => {
+    const limit = line === rowKey ? cols : rows
+    for (let index = 0; index < length; index++) {
+      let run: number[] = []
+      let flanked = false
+      const flush = () => { run = []; flanked = false }
+      for (let step = 0; step < limit; step++) {
+        const key = line(index, step)
+        if (flank.has(key)) {
+          if (flanked) take(run, dirs)
+          run = []
+          flanked = true
+          continue
+        }
+        const row = sides.get(key)
+        if (flanked && row && dirs.some((dir) => row[dir])) {
+          run.push(key)
+          continue
+        }
+        flush()
+      }
+    }
+  }
+  const rowKey = (r: number, c: number) => c + r * cols
+  const colKey = (c: number, r: number) => c + r * cols
+  scan(rows, rowKey, ['up', 'down'])
+  scan(cols, colKey, ['left', 'right'])
+}
+
+function stampSleeves(
+  sleeves: { a: Point; b: Point }[],
+  sleeveCells: Set<number>,
+  allowed: Set<number>,
+  minX: number,
+  minY: number,
+  cellPx: number,
+  cols: number,
+  rows: number,
+) {
+  for (const sleeve of sleeves) {
+    const steps = Math.max(1, Math.ceil(dist(sleeve.a, sleeve.b) / (cellPx * 0.4)))
+    for (let s = 0; s <= steps; s++) {
+      const point = {
+        x: sleeve.a.x + ((sleeve.b.x - sleeve.a.x) * s) / steps,
+        y: sleeve.a.y + ((sleeve.b.y - sleeve.a.y) * s) / steps,
+      }
+      const c = Math.floor((point.x - minX) / cellPx)
+      const r = Math.floor((point.y - minY) / cellPx)
+      if (c < 0 || r < 0 || c >= cols || r >= rows) continue
+      const key = c + r * cols
+      const near = [key, key - 1, key + 1, key - cols, key + cols]
+      for (const next of near) {
+        if (!allowed.has(next) || next < 0 || next >= cols * rows) continue
+        if (Math.abs((next % cols) - c) > 1) continue
+        sleeveCells.add(next)
+      }
+    }
+  }
+}
+
+/** Клапан стоит на грунте. Бетон и дорожка — только если грунта рядом нет. */
+function pickValveCell(
+  allowed: Set<number>,
+  routeCost: Map<number, number>,
+  reserved: Set<number>,
+  mid: Point,
+  at: (key: number) => Point,
+): number | null {
+  const seek = (openOnly: boolean) => {
+    let best: number | null = null
+    let bestD = Infinity
+    for (const key of allowed) {
+      if (reserved.has(key)) continue
+      if (openOnly && (routeCost.get(key) ?? ROUTE_OPEN) !== ROUTE_OPEN) continue
+      const distance = dist(at(key), mid)
+      if (distance < bestD) {
+        bestD = distance
+        best = key
+      }
+    }
+    return best
+  }
+  return seek(true) ?? seek(false)
+}
+
+function linkCells(
+  from: number,
+  to: number,
+  allowed: Set<number>,
+  cols: number,
+  rows: number,
+  stepCost: (key: number) => number,
+  at: (key: number) => Point,
+  avoid?: Set<number>,
+): Point[] | null {
+  const open = new Set(allowed)
+  if (avoid) {
+    for (const key of avoid) if (key !== from && key !== to) open.delete(key)
+  }
+  const { prev } = dijkstra(new Map([[from, null]]), open, cols, rows, new Set(), stepCost)
+  const cells = pathTo(prev, to, from)
+  if (!cells || cells.length < 2) return null
+  return cells.map(at)
+}
+
+/** Хорда не режет здание, воду, бетон и дорожку. Иначе спрямление срезало бы обход. */
+function segmentOpen(a: Point, b: Point, zones: Zone[], cellPx: number): boolean {
+  const steps = Math.max(1, Math.ceil(dist(a, b) / (cellPx * 0.5)))
+  for (let s = 0; s <= steps; s++) {
+    const point = { x: a.x + ((b.x - a.x) * s) / steps, y: a.y + ((b.y - a.y) * s) / steps }
+    for (const zone of zones) {
+      if (zone.points.length < 3) continue
+      const blocked = zone.kind === 'building' || zone.kind === 'water' || zone.kind === 'concrete' || zone.kind === 'path'
+      if (!blocked) continue
+      if (pointInZone(point, zone.points, zone.holes)) return false
+    }
+  }
+  return true
+}
+
+function crossingSleeves(
+  pipes: { points: Point[] }[],
+  zones: Zone[],
+  existing: { a: Point; b: Point }[],
+  cellPx: number,
+  ids: (prefix: string) => string,
+): Sleeve[] {
+  const hard = zones.filter((zone) => (zone.kind === 'concrete' || zone.kind === 'path') && zone.points.length >= 3)
+  if (hard.length === 0) return []
+  const inside = (point: Point) => hard.some((zone) => pointInZone(point, zone.points, zone.holes))
+  const runs: { a: Point; b: Point }[] = []
+  for (const chain of stitchPipes(pipes)) {
+    let enter: Point | null = null
+    let last: Point | null = null
+    const flush = () => {
+      if (enter && last) runs.push({ a: enter, b: last })
+      enter = null
+      last = null
+    }
+    for (let i = 1; i < chain.length; i++) {
+      const a = chain[i - 1]
+      const b = chain[i]
+      const steps = Math.max(1, Math.ceil(dist(a, b) / Math.max(cellPx * 0.35, 1)))
+      for (let s = 0; s <= steps; s++) {
+        const point = {
+          x: a.x + ((b.x - a.x) * s) / steps,
+          y: a.y + ((b.y - a.y) * s) / steps,
+        }
+        if (inside(point)) {
+          if (!enter) enter = point
+          last = point
+        } else if (enter) flush()
+      }
+    }
+    if (enter) flush()
+  }
+  const tol = cellPx * 1.6
+  const out: Sleeve[] = []
+  for (const run of mergeRuns(runs, cellPx * 0.9)) {
+    if (dist(run.a, run.b) < cellPx * 0.35) continue
+    const mid = { x: (run.a.x + run.b.x) / 2, y: (run.a.y + run.b.y) / 2 }
+    const covered = (sleeve: { a: Point; b: Point }) => pointSegmentDistance(mid, sleeve.a, sleeve.b) <= tol
+    if (existing.some(covered) || out.some(covered)) continue
+    out.push({ id: ids('sleeve'), a: run.a, b: run.b })
+  }
+  return out
+}
+
+function stitchPipes(pipes: { points: Point[] }[]): Point[][] {
+  const segs = pipes.map((pipe) => pipe.points).filter((points) => points.length >= 2)
+  const used = new Set<number>()
+  const chains: Point[][] = []
+  const near = (a: Point, b: Point) => dist(a, b) <= 1.5
+  for (let i = 0; i < segs.length; i++) {
+    if (used.has(i)) continue
+    used.add(i)
+    const chain = [...segs[i]]
+    let grew = true
+    while (grew) {
+      grew = false
+      const head = chain[0]
+      const tail = chain[chain.length - 1]
+      for (let j = 0; j < segs.length; j++) {
+        if (used.has(j)) continue
+        const seg = segs[j]
+        const last = seg.length - 1
+        if (near(seg[0], tail)) chain.push(...seg.slice(1))
+        else if (near(seg[last], tail)) chain.push(...[...seg].reverse().slice(1))
+        else if (near(seg[last], head)) chain.unshift(...seg.slice(0, -1))
+        else if (near(seg[0], head)) chain.unshift(...[...seg].reverse().slice(0, -1))
+        else continue
+        used.add(j)
+        grew = true
+        break
+      }
+    }
+    chains.push(chain)
+  }
+  return chains
+}
+
+function mergeRuns(runs: { a: Point; b: Point }[], tol: number): { a: Point; b: Point }[] {
+  const left = runs.map((run) => ({ a: run.a, b: run.b }))
+  let changed = true
+  while (changed) {
+    changed = false
+    for (let i = 0; i < left.length; i++) {
+      let joined = false
+      for (let j = i + 1; j < left.length; j++) {
+        const pair = joinRuns(left[i], left[j], tol)
+        if (!pair) continue
+        left[i] = pair
+        left.splice(j, 1)
+        changed = true
+        joined = true
+        break
+      }
+      if (joined) break
+    }
+  }
+  return left
+}
+
+function joinRuns(p: { a: Point; b: Point }, q: { a: Point; b: Point }, tol: number): { a: Point; b: Point } | null {
+  const close = dist(p.a, q.a) <= tol || dist(p.a, q.b) <= tol || dist(p.b, q.a) <= tol || dist(p.b, q.b) <= tol
+  if (!close) return null
+  const points = [p.a, p.b, q.a, q.b]
+  let best = -1
+  let a = points[0]
+  let b = points[1]
+  for (let i = 0; i < points.length; i++) {
+    for (let j = i + 1; j < points.length; j++) {
+      const span = dist(points[i], points[j])
+      if (span > best) {
+        best = span
+        a = points[i]
+        b = points[j]
+      }
+    }
+  }
+  return { a, b }
+}
+
 type Tree = Map<number, number | null>
 
-function steiner(root: number, terminals: number[], allowed: Set<number>, cols: number, rows: number): Tree {
+function steiner(
+  root: number,
+  terminals: number[],
+  allowed: Set<number>,
+  cols: number,
+  rows: number,
+  stepCost?: (key: number) => number,
+  leaves?: Set<number>,
+): Tree {
   const tree: Tree = new Map([[root, null]])
   const blocked = new Set(terminals)
   const left = new Set(terminals.filter((key) => key !== root && allowed.has(key)))
   while (left.size) {
-    const { distMap, prev } = dijkstra(tree, allowed, cols, rows, blocked)
+    const { distMap, prev } = dijkstra(tree, allowed, cols, rows, blocked, stepCost, leaves)
     let best: number | null = null
     let bestD = Infinity
     for (const key of left) {
@@ -1494,7 +1927,15 @@ function pathTo(prev: Map<number, number>, target: number, origin: number): numb
   return path
 }
 
-function dijkstra(tree: Tree, allowed: Set<number>, cols: number, rows: number, blocked: Set<number>): { distMap: Map<number, number>; prev: Map<number, number> } {
+function dijkstra(
+  tree: Tree,
+  allowed: Set<number>,
+  cols: number,
+  rows: number,
+  blocked: Set<number>,
+  stepCost?: (key: number) => number,
+  leaves?: Set<number>,
+): { distMap: Map<number, number>; prev: Map<number, number> } {
   const distMap = new Map<number, number>()
   const prev = new Map<number, number>()
   const heap: { key: number; d: number }[] = []
@@ -1537,14 +1978,17 @@ function dijkstra(tree: Tree, allowed: Set<number>, cols: number, rows: number, 
     const item = pop()
     if (!item || seen.has(item.key)) continue
     seen.add(item.key)
-    if (blocked.has(item.key)) continue
+    // Клапан — тупик магистрали: следующая станция обходит его.
+    if (leaves?.has(item.key)) continue
+    // Ещё не подключённая головка — конец ветки. Уже стоящая в дереве не затыкает узкий газон.
+    if (blocked.has(item.key) && !tree.has(item.key)) continue
     const c = item.key % cols
     const nbr = [item.key - 1, item.key + 1, item.key - cols, item.key + cols]
     for (const next of nbr) {
       if (!allowed.has(next) || seen.has(next)) continue
       if (next < 0 || next >= cols * rows) continue
       if (Math.abs((next % cols) - c) > 1) continue
-      const nd = item.d + 1
+      const nd = item.d + (stepCost ? stepCost(next) : 1)
       if (nd < (distMap.get(next) ?? Infinity)) {
         distMap.set(next, nd)
         prev.set(next, item.key)

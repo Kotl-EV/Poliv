@@ -77,6 +77,9 @@ function points(value: unknown, min: number, max: number): Point[] | null {
 
 const KINDS = new Set<ZoneKind>(['lawn', 'bed', 'shrub', 'path', 'concrete', 'water', 'building'])
 
+/** Капля у растения вне клумбы: свои 90 минут, не минуты газона. */
+export const PLANT_DRIP_MIN = 90
+
 export function defaultDose(kind: ZoneKind): number {
   const wet = surfaceOf(kind).wet
   if (wet === 'drip') return 8

@@ -1,8 +1,9 @@
-import { climateFactor, cyclePlan, defaultDose, intakeMmH, SNAP_PX } from './doc.ts'
+import { PLANT_DRIP_MIN, climateFactor, cyclePlan, defaultDose, intakeMmH, SNAP_PX } from './doc.ts'
 import { bearingDeg, closestOnSegment, dist, pointInZone, zoneAreaPx } from './geom.ts'
 import { isDripKind } from './landscape.ts'
 import { nozzleById } from './nozzles.ts'
-import { barToHeadM, headLossM, headMToBar, MIN_SPRINKLER_BAR, pickPipe, seriesById } from './pipes.ts'
+import { programOf, programWindowWarning } from './program.ts'
+import { barToHeadM, headLossM, headMToBar, MIN_SPRINKLER_BAR, pickPipeKeepingPressure, seriesById } from './pipes.ts'
 import type { Analysis, Doc, Drip, FittingMark, PipeRole, Point, PressureMark, SegmentResult, Valve, Zone } from './types.ts'
 
 /** Гибкий хвост дотягивается до головки не дальше этого расстояния. */
@@ -489,16 +490,16 @@ export function analyze(doc: Doc): Analysis {
         const edge = edgeByChild.get(child)
         if (!edge) continue
         const flow = designFlow(part.get(child) ?? new Map())
-        const picked = pickPipe(flow, doc.pipeSeries)
-        if (picked.overspeed) warnings.push(`На участке расход ${Math.round(flow)} л/ч не укладывается в ${series.sizes.at(-1)?.name} при 1,5 м/с.`)
         const lengthM = doc.pxPerMeter ? edge.lengthPx / doc.pxPerMeter : null
+        const start = headAt.get(current)
+        const picked = pickPipeKeepingPressure(flow, doc.pipeSeries, lengthM, start ?? null)
+        if (picked.overspeed) warnings.push(`На участке расход ${Math.round(flow)} л/ч не укладывается в ${series.sizes.at(-1)?.name} при 1,5 м/с.`)
         if (lengthM !== null) {
           const row = pipeTotals.get(picked.pipe.odMm) ?? { odMm: picked.pipe.odMm, name: picked.pipe.name, lengthM: 0 }
           row.lengthM += lengthM
           pipeTotals.set(picked.pipe.odMm, row)
         }
         const loss = lengthM === null ? null : headLossM(flow, picked.pipe.idMm, lengthM)
-        const start = headAt.get(current)
         const residual = loss === null || start === undefined ? null : start - loss
         if (residual !== null) headAt.set(child, residual)
         sized.add(edge.key)
@@ -565,6 +566,9 @@ export function analyze(doc: Doc): Analysis {
 
   pushDoseWarnings(doc, warnings)
   const zones = zoneRows(doc)
+  const clockMin = clockMinutes(zones, stations)
+  const late = programWindowWarning(programOf(doc), clockMin)
+  if (late) warnings.push(late)
   const fitted = fittingsOf(doc, nodes, segments, sourceId, feed)
   return {
     segments,
@@ -576,7 +580,7 @@ export function analyze(doc: Doc): Analysis {
     sourceHeadM,
     minResidualHeadM,
     programMin: programMinutes(zones, stations),
-    clockMin: clockMinutes(zones, stations),
+    clockMin,
     stations,
     drips: dripSummary(doc),
     fittings: fitted.rows,
@@ -612,11 +616,17 @@ function withStationRuntime(
     if (!hit || !seen.has(hit.node.id)) continue
     take(sprinkler, stationOf.get(hit.node.id))
   }
+  const plantStations = new Set<string>()
   for (const drip of doc.drips) {
     if (dripMeasure(drip, doc.pxPerMeter).flowLph <= 0) continue
     const nodeId = feed.nodeOf.get(drip.id)
     if (nodeId === undefined || !seen.has(nodeId)) continue
-    take(centroid(drip.points), stationOf.get(nodeId))
+    const station = stationOf.get(nodeId)
+    if (!station) continue
+    const at = centroid(drip.points)
+    const zoneIds = doc.zones.filter((zone) => isDripKind(zone.kind) && pointInZone(at, zone.points, zone.holes)).map((zone) => zone.id)
+    if (zoneIds.length) hits.push({ station, zoneIds })
+    else plantStations.add(station)
   }
   const byId = new Map(zones.map((zone) => [zone.id, zone]))
   return stations.map((station) => {
@@ -633,6 +643,7 @@ function withStationRuntime(
     }
     const best = govern(touched)
     if (unknown && !best) return { ...station, runtimeMin: null, cycles: null, soakMin: 0 }
+    if (!best && plantStations.has(station.id)) return { ...station, runtimeMin: PLANT_DRIP_MIN, cycles: 1, soakMin: 0 }
     if (!best) return { ...station, runtimeMin: 0, cycles: 0, soakMin: 0 }
     return {
       ...station,

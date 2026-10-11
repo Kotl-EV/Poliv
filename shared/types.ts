@@ -205,11 +205,13 @@ export type Doc = {
   program?: Program
 }
 
-/** Дни пульта: 0 — понедельник … 6 — воскресенье. */
+/** Дни пульта: 0 — понедельник … 6 — воскресенье. Конец пустой — полдень. */
 export type Program = {
   days: number[]
   startHour: number
   startMin: number
+  endHour: number
+  endMin: number
 }
 
 export type SegmentStatus = 'ok' | 'unfed' | 'cycle'

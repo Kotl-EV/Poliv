@@ -67,6 +67,32 @@ export function pickPipe(flowLph: number, seriesId: string): { pipe: PipeSize; v
   return { pipe, velocity: velocityMs(flowLph, pipe.idMm), overspeed: true }
 }
 
+/**
+ * Сначала труба по скорости. Если на этом участке остаток упал бы ниже minBar (обычно 2 бар),
+ * берётся следующий диаметр. Источник уже ниже порога не раздувает всю трассу.
+ */
+export function pickPipeKeepingPressure(
+  flowLph: number,
+  seriesId: string,
+  lengthM: number | null,
+  startHeadM: number | null,
+  minBar = MIN_SPRINKLER_BAR,
+): { pipe: PipeSize; velocity: number; overspeed: boolean } {
+  const sized = pickPipe(flowLph, seriesId)
+  if (sized.overspeed || lengthM === null || lengthM <= 0 || startHeadM === null) return sized
+  const floor = barToHeadM(minBar)
+  if (startHeadM < floor - 1e-6) return sized
+  const series = seriesById(seriesId)
+  const first = series.sizes.findIndex((pipe) => pipe.odMm === sized.pipe.odMm)
+  for (let i = Math.max(0, first); i < series.sizes.length; i++) {
+    const pipe = series.sizes[i]
+    const loss = headLossM(flowLph, pipe.idMm, lengthM)
+    if (startHeadM - loss >= floor - 1e-6) return { pipe, velocity: velocityMs(flowLph, pipe.idMm), overspeed: false }
+  }
+  const pipe = series.sizes[series.sizes.length - 1]
+  return { pipe, velocity: velocityMs(flowLph, pipe.idMm), overspeed: false }
+}
+
 /** Потери напора по Дарси–Вейсбаху, вода 15 °C, шероховатость 0,005 мм. */
 export function headLossM(flowLph: number, idMm: number, lengthM: number): number {
   if (flowLph <= 0 || idMm <= 0 || lengthM <= 0) return 0
