@@ -85,9 +85,10 @@ test('turning a layer off drops that geometry from the sheet', () => {
   })
   assert.equal(off.length, 1)
   assert.equal(off[0].svg.includes('Дождеватель'), false)
-  assert.equal(/rgba\(47,122,72/.test(off[0].svg), false)
+  assert.equal(/rgba\(29,111,191/.test(off[0].svg), false)
   const on = buildSheetPages(doc, analysis, { title: 'Тест', date: '01.01.2026', includeSpec: false })
   assert.match(on[0].svg, /Дождеватель/)
+  assert.match(on[0].svg, /rgba\(29,111,191/)
 })
 
 test('a hatch and a measure reach the printed sheet', () => {
@@ -250,7 +251,7 @@ test('runtime, a hidden cover and a draft sheet stay on the drawing', () => {
   assert.ok(label)
   const plain = buildSheetPages(doc, analysis, { title: 'План', date: '01.01.2026', includeSpec: false })
   assert.equal(plain[0].svg.includes(label), false)
-  assert.match(plain[0].svg, /#24633a/)
+  assert.match(plain[0].svg, /#1d6fbf/)
   assert.match(plain[0].svg, /sheet-lawn/)
   const timed = buildSheetPages(doc, analysis, {
     title: 'Время',
@@ -265,7 +266,7 @@ test('runtime, a hidden cover and a draft sheet stay on the drawing', () => {
     includeSpec: false,
     layers: { ...DEFAULT_SHEET_LAYERS, cover: false },
   })
-  assert.equal(bare[0].svg.includes('#24633a'), false)
+  assert.equal(bare[0].svg.includes('#1d6fbf'), false)
   assert.match(bare[0].svg, /Дождеватель/)
   const draft = buildSheetPages(doc, analysis, {
     title: 'Чертёж',
@@ -363,8 +364,8 @@ test('a flow arrow points at the head and hides with the pipes', () => {
   assert.equal(off[0].svg.includes('data-flow='), false)
 })
 
-test('a pipe speed reaches the sheet and hides with the pipes', () => {
-  const doc = {
+test('a calm pipe speed stays off the sheet and a fast one is marked', () => {
+  const calmDoc = {
     ...emptyDoc(),
     source: { x: 0, y: 0, pressureBar: 3, flowLimitLph: null },
     zones: [],
@@ -372,8 +373,19 @@ test('a pipe speed reaches the sheet and hides with the pipes', () => {
     pipes: [{ id: 'run', points: [{ x: 0, y: 0 }, { x: 200, y: 0 }] }],
     sprinklers: [{ id: 's', nozzleId: 'fan180', x: 200, y: 0, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 360 }],
   }
+  const calm = analyze(calmDoc)
+  const calmSheet = buildSheetPages(calmDoc, calm, { title: 'Скорость', date: '01.01.2026', includeSpec: false })
+  assert.equal(calmSheet[0].svg.includes('data-speed='), false)
+  const doc = {
+    ...emptyDoc(),
+    source: { x: 0, y: 0, pressureBar: 3, flowLimitLph: null },
+    zones: [],
+    valves: [],
+    pipes: [{ id: 'run', points: [{ x: 0, y: 0 }, { x: 200, y: 0 }] }],
+    sprinklers: [{ id: 's', nozzleId: 'fan180', x: 200, y: 0, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 200_000 }],
+  }
   const analysis = analyze(doc)
-  const fed = analysis.segments.find((segment) => segment.status === 'ok' && segment.velocity && segment.velocity > 0)
+  const fed = analysis.segments.find((segment) => segment.status === 'ok' && segment.velocity && segment.velocity > 1.5)
   assert.ok(fed?.velocity)
   const label = `${fed.velocity.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} м/с`
   const on = buildSheetPages(doc, analysis, { title: 'Скорость', date: '01.01.2026', includeSpec: false })
@@ -388,7 +400,7 @@ test('a pipe speed reaches the sheet and hides with the pipes', () => {
   assert.equal(off[0].svg.includes('data-speed='), false)
 })
 
-test('a pipe loss reaches the sheet and hides with the pipes', () => {
+test('a pipe loss stays off the sheet', () => {
   const doc = {
     ...emptyDoc(),
     source: { x: 0, y: 0, pressureBar: 3, flowLimitLph: null },
@@ -401,15 +413,8 @@ test('a pipe loss reaches the sheet and hides with the pipes', () => {
   const tags = lossTags(analysis.segments, doc.pxPerMeter, 1)
   assert.equal(tags.length, 1)
   const on = buildSheetPages(doc, analysis, { title: 'Потери', date: '01.01.2026', includeSpec: false })
-  assert.match(on[0].svg, /data-loss="1"/)
-  assert.equal(on[0].svg.includes(`>${tags[0].text}</text>`), true)
-  const off = buildSheetPages(doc, analysis, {
-    title: 'Потери',
-    date: '01.01.2026',
-    includeSpec: false,
-    layers: { ...DEFAULT_SHEET_LAYERS, pipes: false },
-  })
-  assert.equal(off[0].svg.includes('data-loss='), false)
+  assert.equal(on[0].svg.includes('data-loss='), false)
+  assert.equal(on[0].svg.includes(tags[0].text), false)
 })
 
 test('a drip emitter count reaches the sheet and hides with the drip', () => {

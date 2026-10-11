@@ -99,22 +99,20 @@ test('a flow arrow points downstream and skips a dry or a short pipe', () => {
   assert.equal(flowArrows([segment({ b: { x: 4, y: 0 }, flowLph: 360, downB: true })], 20, 1).length, 0)
 })
 
-test('a pipe speed sits opposite the diameter and a fast pipe is marked', () => {
-  const calm = speedTags([segment({ velocity: 0.5 })], 20, 1)
-  assert.equal(calm.length, 1)
-  assert.equal(calm[0].text, '0,5 м/с')
-  assert.equal(calm[0].hot, false)
-  assert.equal(calm[0].rotate, 0)
-  assert.ok(Math.abs(calm[0].x - 50) < 1e-6)
-  assert.ok(calm[0].y < 0)
+test('a pipe speed sits opposite the diameter and only a fast pipe is marked', () => {
+  assert.equal(speedTags([segment({ velocity: 0.5 })], 20, 1).length, 0)
+  assert.equal(speedTags([segment({ velocity: 1.5 })], 20, 1).length, 0)
   const fast = speedTags([segment({ velocity: 1.62 })], 20, 1)
+  assert.equal(fast.length, 1)
   assert.equal(fast[0].text, '1,62 м/с')
   assert.equal(fast[0].hot, true)
-  assert.equal(speedTags([segment({ velocity: 1.5 })], 20, 1)[0].hot, false)
+  assert.equal(fast[0].rotate, 0)
+  assert.ok(Math.abs(fast[0].x - 50) < 1e-6)
+  assert.ok(fast[0].y < 0)
   assert.equal(speedTags([segment({ velocity: 0 })], 20, 1).length, 0)
   assert.equal(speedTags([segment({ velocity: null })], 20, 1).length, 0)
-  assert.equal(speedTags([segment({ status: 'unfed', velocity: 1 })], 20, 1).length, 0)
-  assert.equal(speedTags([segment({ b: { x: 4, y: 0 }, velocity: 1 })], 20, 1).length, 0)
+  assert.equal(speedTags([segment({ status: 'unfed', velocity: 2 })], 20, 1).length, 0)
+  assert.equal(speedTags([segment({ b: { x: 4, y: 0 }, velocity: 2 })], 20, 1).length, 0)
 })
 
 test('a pipe loss sits outside the diameter and a dry pipe is skipped', () => {

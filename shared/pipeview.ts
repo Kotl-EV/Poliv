@@ -80,13 +80,13 @@ export function pipeTags(segments: SegmentResult[], ppm: number | null, k: numbe
 
 export type SpeedTag = { text: string; x: number; y: number; rotate: number; hot: boolean }
 
-/** Скорость с другой стороны от диаметра. Выше 1,5 м/с подпись горячая. Нулевой и короткий участок молчат. */
+/** Скорость с другой стороны от диаметра, только быстрее 1,5 м/с. Спокойный, нулевой и короткий участок молчат. */
 export function speedTags(segments: SegmentResult[], ppm: number | null, k: number): SpeedTag[] {
   const minPx = ppm && ppm > 0 ? 0.55 * ppm : 36
   const gap = 8 / Math.max(k, 0.05)
   const tags: SpeedTag[] = []
   for (const segment of segments) {
-    if (segment.status !== 'ok' || segment.velocity === null || !(segment.velocity > 0)) continue
+    if (segment.status !== 'ok' || segment.velocity === null || !(segment.velocity > V_MAX)) continue
     const dx = segment.b.x - segment.a.x
     const dy = segment.b.y - segment.a.y
     const len = Math.hypot(dx, dy)

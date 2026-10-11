@@ -364,7 +364,11 @@ export const Board = forwardRef<SVGSVGElement, {
             {tag.text}
           </text>
         ))}
-        {lossTags(analysis.segments, doc.pxPerMeter, view.k).map((tag, index) => (
+        {props.selectionKind === 'pipe' && lossTags(
+          analysis.segments.filter((segment) => segment.pipeId === props.selectionId),
+          doc.pxPerMeter,
+          view.k,
+        ).map((tag, index) => (
           <text
             key={`loss-${index}`}
             x={tag.x}

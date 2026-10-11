@@ -8,7 +8,7 @@ import { headCaption, nozzleById } from './nozzles.ts'
 import { programTable, runtimeLabel } from './program.ts'
 import { gearHint, gearList } from './gear.ts'
 import { sleeveLengthM } from './join.ts'
-import { dripFlowTags, dripTags, fittingShape, flowArrows, funnyPoints, lossTags, pipeTags, sleeveTags, speedTags } from './pipeview.ts'
+import { dripFlowTags, dripTags, fittingShape, flowArrows, funnyPoints, pipeTags, sleeveTags, speedTags } from './pipeview.ts'
 import { pipeWeight, pressureLabel, sourceLabel, valveFlowLabel } from './pipes.ts'
 import type { Analysis, Doc, FittingMark, Plant, Point } from './types.ts'
 
@@ -245,9 +245,9 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
   }
   if (layers.spray && layers.cover) {
     for (const head of doc.sprinklers) {
-      const wash = draft ? 'none' : layers.precip ? precipWash(precipAt(doc, analysis, head)) : 'rgba(47,122,72,0.18)'
+      const wash = draft ? 'none' : layers.precip ? precipWash(precipAt(doc, analysis, head)) : 'rgba(29,111,191,0.22)'
       parts.push(
-        `<path d="${xml(coverPath(head, ppm, nozzleById(head.nozzleId)))}" fill="${wash}" stroke="${draft ? '#1c2822' : '#24633a'}" stroke-width="${fmt(1 / k)}"/>`,
+        `<path d="${xml(coverPath(head, ppm, nozzleById(head.nozzleId)))}" fill="${wash}" stroke="${draft ? '#1c2822' : '#1d6fbf'}" stroke-width="${fmt(1.25 / k)}"/>`,
       )
     }
   }
@@ -280,11 +280,6 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
       const fill = draft || !tag.hot ? '#1c2822' : '#8d2b1f'
       parts.push(
         `<text data-speed="1" x="${fmt(tag.x)}" y="${fmt(tag.y)}" fill="${fill}" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle" transform="rotate(${fmt(tag.rotate)} ${fmt(tag.x)} ${fmt(tag.y)})">${xml(tag.text)}</text>`,
-      )
-    }
-    for (const tag of lossTags(analysis.segments, doc.pxPerMeter, k)) {
-      parts.push(
-        `<text data-loss="1" x="${fmt(tag.x)}" y="${fmt(tag.y)}" fill="#1c2822" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle" transform="rotate(${fmt(tag.rotate)} ${fmt(tag.x)} ${fmt(tag.y)})">${xml(tag.text)}</text>`,
       )
     }
     for (const mark of analysis.fittingMarks) parts.push(fittingMarkSvg(mark, k, draft))

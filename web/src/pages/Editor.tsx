@@ -271,6 +271,8 @@ export function EditorPage({
   const [paper, setPaper] = useState<PaperId>('a4')
   const [sheetLayers, setSheetLayers] = useState<SheetLayers>(DEFAULT_SHEET_LAYERS)
   const [dripBare, setDripBare] = useState(false)
+  const [placeBar, setPlaceBar] = useState(3)
+  const [placeLimit, setPlaceLimit] = useState<number | null>(null)
   const [along, setAlong] = useState(false)
   const [alongSide, setAlongSide] = useState<1 | -1>(1)
   const [alongDensity, setAlongDensity] = useState<'rare' | 'usual' | 'dense'>('usual')
@@ -1081,7 +1083,7 @@ export function EditorPage({
 
     const point = tool === 'scale' ? raw : worldSnap(raw, (tool === 'zone' || tool === 'pipe' || tool === 'drip') && lineLocked(event.shiftKey))
     if (tool === 'source') {
-      commit(withSourcePoint(doc, point))
+      commit(withSourcePoint(doc, point, placeBar, placeLimit))
       setSelection({ kind: 'source' })
       return
     }
@@ -2428,6 +2430,24 @@ export function EditorPage({
       nozzleId: fitted.nozzleId,
     }
   })()
+  function applyPlacePressure(value: number) {
+    if (!(value >= 0.2) || value > 16) return
+    setPlaceBar(value)
+    setDoc((current) => (current.source ? { ...current, source: cleanSource(current.source, { pressureBar: value }) } : current))
+  }
+  function applyPlaceLimit(value: number | null) {
+    if (value !== null && (!(value > 0) || value > 1_000_000)) return
+    setPlaceLimit(value)
+    setDoc((current) => (current.source ? { ...current, source: cleanSource(current.source, { flowLimitLph: value }) } : current))
+  }
+  const sourceFields = (
+    <SourceFields
+      pressureBar={doc.source?.pressureBar ?? placeBar}
+      flowLimitLph={doc.source ? doc.source.flowLimitLph : placeLimit}
+      onPressure={applyPlacePressure}
+      onLimit={applyPlaceLimit}
+    />
+  )
   const zoneArea = selectedZone ? zoneAreaPx(selectedZone.points, selectedZone.holes) / (ppm * ppm) : 0
   const zonePerim = selectedZone
     ? (ringLength(selectedZone.points, selectedZone.bends) + (selectedZone.holes ?? []).reduce((sum, hole) => sum + ringLength(hole), 0)) / ppm
@@ -2670,6 +2690,12 @@ export function EditorPage({
                 )}
               </div>
             )}
+            {!mapOpen && !favOpen && tool === 'source' && (
+              <div className="tool-fly">
+                <p className="tool-label">Источник</p>
+                {sourceFields}
+              </div>
+            )}
             <input
               ref={underlayRef}
               type="file"
@@ -2792,6 +2818,7 @@ export function EditorPage({
                     {dripMetres && <p className="hint">{dripMetres}</p>}
                   </>
                 )}
+                {tool === 'source' && sourceFields}
                 {tool === 'box' && <p className="hint">Коробка для нескольких клапанов. Клапан рядом садится в свободный слот.</p>}
                 {tool === 'hydrant' && <p className="hint">Точка на трубе. В спецификации на этом конце стоит гидрант.</p>}
                 {tool === 'sleeve' && <p className="hint">Два клика по концам. Длина попадёт в спецификацию.</p>}
@@ -3488,16 +3515,58 @@ function cleanSource(source: Source, patch: Partial<Source>): Source {
   return next
 }
 
-function withSourcePoint(doc: Doc, point: Point): Doc {
+function withSourcePoint(doc: Doc, point: Point, pressureBar = 3, flowLimitLph: number | null = null): Doc {
   return {
     ...doc,
     source: {
       x: point.x,
       y: point.y,
-      pressureBar: doc.source?.pressureBar ?? 3,
-      flowLimitLph: doc.source?.flowLimitLph ?? null,
+      pressureBar: doc.source?.pressureBar ?? pressureBar,
+      flowLimitLph: doc.source?.flowLimitLph ?? flowLimitLph,
     },
   }
+}
+
+function SourceFields({
+  pressureBar,
+  flowLimitLph,
+  onPressure,
+  onLimit,
+}: {
+  pressureBar: number
+  flowLimitLph: number | null
+  onPressure: (value: number) => void
+  onLimit: (value: number | null) => void
+}) {
+  return (
+    <>
+      <label className="side-field">
+        Давление, бар
+        <input
+          type="number"
+          min={0.2}
+          max={16}
+          step={0.1}
+          aria-label="Давление источника, бар"
+          value={pressureBar}
+          onChange={(event) => onPressure(Number(event.target.value))}
+        />
+      </label>
+      <label className="side-field">
+        Лимит, л/ч
+        <input
+          type="number"
+          min={1}
+          step={10}
+          placeholder="без лимита"
+          aria-label="Лимит расхода, л/ч"
+          value={flowLimitLph ?? ''}
+          onChange={(event) => onLimit(event.target.value === '' ? null : Number(event.target.value))}
+        />
+      </label>
+      <p className="hint">Новый источник берёт эти значения. 3 бара — обычный домашний ввод: поставьте своё до клика. «Схема» оставляет введённое давление.</p>
+    </>
+  )
 }
 
 function cleanDrip(item: Drip, patch: Partial<Drip>): Drip {

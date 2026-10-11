@@ -351,8 +351,8 @@ button.warn { display: block; width: 100%; text-align: left; border: 0; cursor: 
 .grid.major { stroke: rgba(46, 90, 62, 0.28); }
 .dim { fill: #1c2822; font-weight: 650; paint-order: stroke; stroke: #e7efe6; stroke-width: 3px; }
 .mid-handle { fill: #fffdf8; stroke: #1f6b45; stroke-width: 2; vector-effect: non-scaling-stroke; }
-.cover { fill: rgba(47, 122, 72, 0.16); stroke: #24633a; stroke-width: 1; vector-effect: non-scaling-stroke; }
-.cover.selected { fill: rgba(47, 122, 72, 0.28); stroke: #b86a09; }
+.cover { fill: rgba(29, 111, 191, 0.22); stroke: #1d6fbf; stroke-width: 1.25; vector-effect: non-scaling-stroke; }
+.cover.selected { fill: rgba(29, 111, 191, 0.4); stroke: #b86a09; }
 .sprinkler-widget { fill: rgba(184, 106, 9, 0.14); stroke: #b86a09; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .sprinkler-ray { fill: none; stroke: #b86a09; stroke-width: 2.4; vector-effect: non-scaling-stroke; }
 .rot-handle { fill: #b86a09; stroke: #fffdf8; stroke-width: 2; cursor: grab; }
