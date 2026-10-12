@@ -172,6 +172,7 @@ function lay(prep: Prepared, radiusM: number, kind: 'fan' | 'rotor', fallback: b
     if (extra) heads.push(extra)
   }
   pruneHeads(heads, samples, weights, outer, ppm, keep)
+  fillPockets(prep, heads)
   return heads
 }
 
@@ -199,6 +200,7 @@ function optionsAt(
   samples: Point[],
   ppm: number,
   inside: (point: Point) => boolean,
+  overMax = OVERSPRAY_MAX,
 ): Option[] {
   const radiusPx = family.radiusM * ppm
   const flags = visibleFlags(cand.point, radiusPx, inside)
@@ -218,7 +220,7 @@ function optionsAt(
       flowLph: flowFor(family.kind, nozzle.arcDeg, family.radiusM),
     }
     const overspray = oversprayFrac(spot, ppm, inside)
-    if (overspray > OVERSPRAY_MAX) continue
+    if (overspray > overMax) continue
     const mask = coverageMask(spot, samples, ppm)
     let hits = 0
     for (let i = 0; i < mask.length; i++) hits += mask[i]
@@ -547,6 +549,116 @@ function rescueDry(
           if (opt.mask[i]) gain += 1
         }
         const score = gain * (1 - 1.4 * opt.overspray)
+        if (score > bestGain) {
+          bestGain = score
+          best = opt.spot
+        }
+      }
+    }
+  }
+  return best
+}
+
+/** Узкий сухой карман не закрывает ротор с широкого газона. Туда встаёт короткий веер. */
+function fillPockets(prep: Prepared, heads: SpraySpot[]): void {
+  const { samples, ppm, inside } = prep
+  const reach = 2.2 * ppm
+  const narrow = (point: Point) => {
+    let open = 0
+    for (let i = 0; i < 8; i++) {
+      if (inside(polar(point, reach, (i / 8) * 360))) open += 1
+    }
+    return open <= 3
+  }
+  const families: Family[] = [
+    { radiusM: 2.5, kind: 'fan' },
+    { radiusM: 3.5, kind: 'fan' },
+    { radiusM: 4.5, kind: 'fan' },
+  ]
+  for (let guard = 0; guard < 6 && heads.length < MAX_HEADS; guard++) {
+    const covered = new Uint8Array(samples.length)
+    for (const head of heads) applyMask(covered, coverageMask(head, samples, ppm))
+    const dry: Point[] = []
+    for (let i = 0; i < samples.length; i++) {
+      if (!covered[i] && narrow(samples[i])) dry.push(samples[i])
+    }
+    if (dry.length < 3) return
+    const clusters = clusterPoints(dry, 1.8 * ppm)
+    clusters.sort((a, b) => b.length - a.length)
+    let placed = false
+    for (const cluster of clusters) {
+      if (cluster.length < 3 || spanOf(cluster) < 2.4 * ppm) continue
+      const extra = pocketHead(cluster, heads, families, inside, ppm)
+      if (!extra) continue
+      heads.push(extra)
+      placed = true
+      break
+    }
+    if (!placed) return
+  }
+}
+
+function spanOf(points: Point[]): number {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const point of points) {
+    minX = Math.min(minX, point.x)
+    minY = Math.min(minY, point.y)
+    maxX = Math.max(maxX, point.x)
+    maxY = Math.max(maxY, point.y)
+  }
+  return Math.hypot(maxX - minX, maxY - minY)
+}
+
+function clusterPoints(points: Point[], gap: number): Point[][] {
+  const used = new Set<number>()
+  const groups: Point[][] = []
+  for (let i = 0; i < points.length; i++) {
+    if (used.has(i)) continue
+    const group: Point[] = []
+    const queue = [i]
+    used.add(i)
+    while (queue.length) {
+      const index = queue.pop()!
+      const point = points[index]
+      group.push(point)
+      for (let j = 0; j < points.length; j++) {
+        if (used.has(j) || dist(point, points[j]) > gap) continue
+        used.add(j)
+        queue.push(j)
+      }
+    }
+    groups.push(group)
+  }
+  return groups
+}
+
+function pocketHead(
+  cluster: Point[],
+  heads: SpraySpot[],
+  families: Family[],
+  inside: (point: Point) => boolean,
+  ppm: number,
+): SpraySpot | null {
+  const cx = cluster.reduce((sum, point) => sum + point.x, 0) / cluster.length
+  const cy = cluster.reduce((sum, point) => sum + point.y, 0) / cluster.length
+  const seeds: Point[] = []
+  const mid = { x: cx, y: cy }
+  if (inside(mid)) seeds.push(mid)
+  const stride = Math.max(1, Math.floor(cluster.length / 24))
+  for (let i = 0; i < cluster.length; i += stride) seeds.push(cluster[i])
+  let best: SpraySpot | null = null
+  let bestGain = Math.max(2, cluster.length * 0.45)
+  for (const point of seeds) {
+    if (!inside(point)) continue
+    if (heads.some((head) => dist(head.point, point) < Math.max(0.55 * ppm, head.radiusM * MIN_HEAD_SEP * ppm * 0.35))) continue
+    for (const family of families) {
+      for (const opt of optionsAt({ point, vertex: false, edge: true }, family, cluster, ppm, inside, 0.72)) {
+        let gain = 0
+        for (let i = 0; i < cluster.length; i++) if (opt.mask[i]) gain += 1
+        const score = gain * (1 - opt.overspray)
         if (score > bestGain) {
           bestGain = score
           best = opt.spot

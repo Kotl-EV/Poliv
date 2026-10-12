@@ -214,11 +214,12 @@ test('layoutIrrigation waters plants and leaves an empty bed dry', () => {
   ]
   const next = layoutIrrigation(doc)
   assert.ok(next)
-  assert.equal(next.drips.length, 2)
+  const rings = next.drips.filter((drip) => !drip.bare)
+  assert.equal(rings.length, 2)
   assert.equal(next.sprinklers.length, 0)
-  const lengthM = runLen(next.drips, PPM)
+  const lengthM = runLen(rings, PPM)
   assert.ok(lengthM < 12, `plant drip ${lengthM}m should stay at the plants`)
-  for (const drip of next.drips) {
+  for (const drip of rings) {
     const mid = {
       x: drip.points.reduce((sum, point) => sum + point.x, 0) / drip.points.length,
       y: drip.points.reduce((sum, point) => sum + point.y, 0) / drip.points.length,

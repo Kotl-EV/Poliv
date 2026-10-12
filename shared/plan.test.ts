@@ -212,9 +212,9 @@ test('layout puts drip on a bed and keeps the lawn heads out of it', () => {
   assert.ok(next)
   const bed = next.zones.find((zone) => zone.kind === 'bed')
   assert.ok(bed)
-  assert.equal(next.drips.length, 2)
+  assert.equal(next.drips.filter((drip) => !drip.bare).length, 2)
   let px = 0
-  for (const drip of next.drips) {
+  for (const drip of next.drips.filter((item) => !item.bare)) {
     for (let i = 1; i < drip.points.length; i++) {
       px += Math.hypot(drip.points[i].x - drip.points[i - 1].x, drip.points[i].y - drip.points[i - 1].y)
     }
@@ -583,7 +583,7 @@ test('a heavy bed does not share a drip valve with a light bed', () => {
   const next = layoutIrrigation(doc)
   assert.ok(next)
   assert.equal(next.sprinklers.length, 0)
-  assert.equal(next.drips.length, 2)
+  assert.equal(next.drips.filter((drip) => !drip.bare).length, 2)
   const row = analyze(next)
   assert.equal(row.warnings.some((item) => item.includes('за другим клапаном')), false)
   assert.equal(row.warnings.some((item) => item.includes('не соединена')), false)
@@ -612,7 +612,7 @@ test('two beds with the same dose still share a drip valve', () => {
   ]
   const next = layoutIrrigation(doc)
   assert.ok(next)
-  assert.equal(next.drips.length, 2)
+  assert.equal(next.drips.filter((drip) => !drip.bare).length, 2)
   const row = analyze(next)
   const onLeft = dripStations(next.drips, row.marks, doc.zones[0].points)
   const onRight = dripStations(next.drips, row.marks, doc.zones[1].points)
@@ -700,7 +700,7 @@ test('a tree on the lawn keeps a 90 minute drip station', () => {
   doc.plants = [{ id: 'oak', kind: 'tree', x: 80, y: 50, radiusM: 1.2 }]
   const next = layoutIrrigation(doc, 'fan')
   assert.ok(next)
-  assert.equal(next.drips.length, 1)
+  assert.equal(next.drips.filter((drip) => !drip.bare).length, 1)
   const row = analyze(next)
   const lawn = row.zones.find((item) => item.id === 'lawn')
   assert.ok(lawn?.runtimeMin && lawn.runtimeMin < 60, `lawn ${lawn?.runtimeMin}`)
@@ -887,8 +887,9 @@ test('an ornamental grass bush skips the drip ring', () => {
   ]
   const next = layoutIrrigation(doc)
   assert.ok(next)
-  assert.equal(next.drips.length, 1)
-  const near = (plant: { x: number; y: number }) => next.drips[0].points.some((point) => Math.hypot(point.x - plant.x, point.y - plant.y) < 12)
+  const rings = next.drips.filter((drip) => !drip.bare)
+  assert.equal(rings.length, 1)
+  const near = (plant: { x: number; y: number }) => rings[0].points.some((point) => Math.hypot(point.x - plant.x, point.y - plant.y) < 12)
   assert.equal(near(doc.plants[0]), false)
   assert.equal(near(doc.plants[1]), true)
 })
@@ -928,8 +929,11 @@ test('a bed without a lawn gets drip only at its plants', () => {
   const next = layoutIrrigation(doc)
   assert.ok(next)
   assert.equal(next.sprinklers.length, 0)
-  assert.equal(next.drips.length, 1)
-  const lengthM = next.drips.reduce((sum, drip) => {
+  assert.equal(next.drips.filter((drip) => !drip.bare).length, 1)
+  const bedZone = next.zones.find((item) => item.kind === 'bed')
+  assert.ok(bedZone)
+  assert.ok(metresInside(next.pipes, bedZone.points, 10) < 0.5)
+  const lengthM = next.drips.filter((drip) => !drip.bare).reduce((sum, drip) => {
     let px = 0
     for (let i = 1; i < drip.points.length; i++) {
       px += Math.hypot(drip.points[i].x - drip.points[i - 1].x, drip.points[i].y - drip.points[i - 1].y)
@@ -964,7 +968,7 @@ test('shrubs get drip and a building stays dry', () => {
   const shrub = next.zones.find((item) => item.kind === 'shrub')
   const house = next.zones.find((item) => item.kind === 'building')
   assert.ok(shrub && house)
-  assert.equal(next.drips.length, 2)
+  assert.equal(next.drips.filter((drip) => !drip.bare).length, 2)
   assert.equal(next.sprinklers.some((head) => pointInPolygon(head, shrub.points)), false)
   assert.equal(next.sprinklers.some((head) => pointInPolygon(head, house.points)), false)
   const dripInShrub = next.drips.some((drip) => drip.points.some((point) => pointInPolygon(point, shrub.points)))
@@ -1056,6 +1060,65 @@ test('a path across the plot is crossed in a sleeve, not trenched along', () => 
   const sleeves = next.sleeves ?? []
   assert.ok(sleeves.length >= 1)
   assert.ok(sleeves.every((sleeve) => Math.hypot(sleeve.b.x - sleeve.a.x, sleeve.b.y - sleeve.a.y) / 10 < 8))
+})
+
+test('the main stays off a bed and a grass clump is sprayed', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 10
+  doc.zones = [
+    zone('lawn', 'lawn', 0, 0, 240, 160),
+    zone('bed', 'bed', 70, 40, 100, 70),
+  ]
+  doc.source = { x: 20, y: 20, pressureBar: 3, flowLimitLph: null }
+  doc.plants = [
+    { id: 'tree', kind: 'tree', x: 120, y: 75, radiusM: 1.2 },
+    { id: 'grass', kind: 'bush', x: 150, y: 90, radiusM: 0.4, form: 'grass' },
+  ]
+  const next = layoutIrrigation(doc)
+  assert.ok(next)
+  const bed = next.zones.find((item) => item.kind === 'bed')
+  assert.ok(bed)
+  assert.ok(metresInside(next.pipes, bed.points, 10) < 0.5, `pipe in bed ${metresInside(next.pipes, bed.points, 10).toFixed(2)} m`)
+  assert.equal(next.drips.some((drip) => !drip.bare && drip.points.some((point) => Math.hypot(point.x - 150, point.y - 90) < 12)), false)
+  const grass = doc.plants[1]
+  assert.ok(next.sprinklers.some((head) => {
+    const reach = head.radiusM * 10 * 1.05
+    return Math.hypot(head.x - grass.x, head.y - grass.y) <= reach
+  }))
+  const row = analyze(next)
+  assert.equal(row.warnings.some((item) => item.includes('не соединена')), false)
+  assert.equal(row.warnings.some((item) => item.includes('не стоит на трубе')), false)
+})
+
+test('a narrow tongue of lawn still gets spray', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 10
+  doc.zones = [
+    {
+      ...zone('lawn', 'lawn', 0, 0, 220, 160),
+      points: [
+        { x: 0, y: 0 },
+        { x: 220, y: 0 },
+        { x: 220, y: 160 },
+        { x: 40, y: 160 },
+        { x: 40, y: 176 },
+        { x: 180, y: 176 },
+        { x: 180, y: 160 },
+        { x: 0, y: 160 },
+      ],
+    },
+  ]
+  doc.source = { x: 20, y: -20, pressureBar: 3, flowLimitLph: null }
+  const next = layoutIrrigation(doc)
+  assert.ok(next)
+  const tongue = [
+    { x: 40, y: 160 },
+    { x: 180, y: 160 },
+    { x: 180, y: 176 },
+    { x: 40, y: 176 },
+  ]
+  const share = coveredShare(tongue, next.sprinklers, 10)
+  assert.ok(share >= 0.55, `tongue ${share}`)
 })
 
 test('a building and a pond stay clear of the pipe', () => {

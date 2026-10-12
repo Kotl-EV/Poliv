@@ -1,6 +1,6 @@
 import { PLANT_DRIP_MIN, SNAP_PX, climateFactor, cyclePlan, defaultDose, emptyDoc, plantDripMinutes } from './doc.ts'
 import { placeDripAtPlant } from './drip.ts'
-import { dist, pointInPolygon, pointInZone, polygonAreaPx, zoneAreaPx } from './geom.ts'
+import { bearingDeg, dist, pointInPolygon, pointInZone, polygonAreaPx, zoneAreaPx } from './geom.ts'
 import { isDripKind, isObstacleKind, isSprayKind, isWetKind } from './landscape.ts'
 import { nozzleById } from './nozzles.ts'
 import { placeSprayOnPolygon, ringsOverlap, type SprayFamily } from './spray.ts'
@@ -174,6 +174,8 @@ const ROUTE_OPEN = 1
 const ROUTE_BED = 3
 const ROUTE_PATH = 8
 const ROUTE_CONCRETE = 24
+/** Бетон берём только когда обхода нет: иначе магистраль не заходит под плиту. */
+const ROUTE_FORCED = 10000
 
 type HeadSpot = { key: number; point: Point; nozzleId: string; rotationDeg: number; radiusM: number; flowLph: number }
 type LaidPipe = { id: string; points: Point[]; role: PipeRole }
@@ -703,6 +705,17 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
   stampPassages(allowed, routeCost, stand, cols, rows, center, cellPx, doc.zones, hull)
   const place = (key: number) => stand.get(key) ?? center(key)
   const stepCost = (key: number) => (sleeveCells.has(key) ? ROUTE_OPEN : routeCost.get(key) ?? ROUTE_OPEN)
+  // Магистраль и зональная труба не идут по клумбе, кустам, дому и воде. Бетон — только если обхода нет.
+  const graph = new Set<number>()
+  for (const key of allowed) {
+    const point = place(key)
+    const mask = wetMask(point, doc.zones)
+    if (mask === 'drip' || mask === 'hard') continue
+    if (doc.zones.some((zone) => zone.kind === 'concrete' && zone.points.length >= 3 && pointInZone(point, zone.points, zone.holes))) {
+      routeCost.set(key, ROUTE_FORCED)
+    }
+    graph.add(key)
+  }
 
   const lawnSet = new Set(lawnKeys)
   const heads: HeadSpot[] = []
@@ -721,11 +734,12 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
     for (const point of zone.points) far = Math.max(far, dist(source, point))
     for (const spot of placeSprayOnPolygon(zone.points, holes, ppm, family, headCapLph, source.pressureBar, far / ppm)) {
       if (heads.length >= MAX_HEADS) break
-      const key = snapHeadKey(spot.point, lawnSet, center) ?? snapHeadKey(spot.point, allowed, center)
+      const key = snapHeadKey(spot.point, lawnSet, center) ?? snapHeadKey(spot.point, graph, place)
       if (key === null) continue
       heads.push({ key, ...spot })
     }
   }
+  coverGrasses(doc.plants ?? [], doc.zones, heads, graph, place, ppm)
   if (heads.length > MAX_HEADS) heads.length = MAX_HEADS
 
   const drips: DripSpot[] = []
@@ -734,19 +748,19 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
     if (!plantGetsDrip(plant, doc.zones)) continue
     const run = placeDripAtPlant(plant, ppm)
     if (!run || run.points.length < 2) continue
-    const spot = nearestKey(run.points[0], allowed, center)
+    const spot = nearestKey(run.points[0], graph, place)
     if (spot === null) continue
     drips.push({ key: spot, points: run.points, spacingM: run.spacingM, emitterLph: run.emitterLph })
   }
 
   if (heads.length === 0 && drips.length === 0) return null
   const avoidRoot = [...heads.map((head) => head.point), ...drips.map((drip) => drip.points[0])]
-  const root = nearestKey(source, allowed, center, avoidRoot, SNAP_PX) ?? nearestKey(source, allowed, center)
+  const root = nearestKey(source, graph, place, avoidRoot, SNAP_PX) ?? nearestKey(source, graph, place)
   if (root === null) return null
 
   const taken = new Set<number>([root])
   for (const head of heads) {
-    const next = !taken.has(head.key) ? head.key : freeCell(head.key, allowed, taken, cols, rows)
+    const next = !taken.has(head.key) ? head.key : freeCell(head.key, graph, taken, cols, rows)
     if (next === null) {
       head.key = -1
       continue
@@ -759,7 +773,7 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
       taken.add(drip.key)
       continue
     }
-    const next = freeCell(drip.key, allowed, taken, cols, rows)
+    const next = freeCell(drip.key, graph, taken, cols, rows)
     if (next === null) {
       drip.key = -1
       continue
@@ -769,7 +783,7 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
   }
   const placedHeads = heads.filter((head) => head.key >= 0)
   const placedDrips = drips.filter((drip) => drip.key >= 0)
-  const reachable = steiner(root, [...placedHeads.map((head) => head.key), ...placedDrips.map((drip) => drip.key)], allowed, cols, rows, stepCost)
+  const reachable = steiner(root, [...placedHeads.map((head) => head.key), ...placedDrips.map((drip) => drip.key)], graph, cols, rows, stepCost)
   const keptHeads = placedHeads.filter((head) => reachable.has(head.key))
   const keptDrips = placedDrips.filter((drip) => reachable.has(drip.key))
   if (keptHeads.length === 0 && keptDrips.length === 0) return null
@@ -805,7 +819,7 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
       continue
     }
     const mid = centroid(group.map((item) => center(item.key)))
-    const valveSpot: number = pickValveCell(allowed, routeCost, reserved, mid, center) ?? root
+    const valveSpot: number = pickValveCell(graph, routeCost, reserved, mid, place) ?? root
     spots.push(valveSpot)
     if (valveSpot !== root) reserved.add(valveSpot)
   }
@@ -815,7 +829,7 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
   const ids = sequencer()
   const clear = (a: Point, b: Point) => segmentOpen(a, b, doc.zones, cellPx)
   const trunkAllowed = new Set<number>([root])
-  for (const key of allowed) {
+  for (const key of graph) {
     if (terminalKeys.has(key)) continue
     const at = place(key)
     // Магистраль не подходит к головке ближе привязки, иначе расход сядет до клапана.
@@ -836,8 +850,8 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
       continue
     }
     const around =
-      linkCells(root, spot, allowed, cols, rows, stepCost, place, valveLeaves) ??
-      linkCells(root, spot, allowed, cols, rows, stepCost, place)
+      linkCells(root, spot, graph, cols, rows, stepCost, place, valveLeaves) ??
+      linkCells(root, spot, graph, cols, rows, stepCost, place)
     if (around) {
       pendingLinks.push(around)
       claimed.add(spot)
@@ -868,7 +882,7 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
     const zonePipes: LaidPipe[] = []
     const owned = groups[i].map((item) => item.key)
     const local = new Set<number>([spot])
-    for (const key of allowed) {
+    for (const key of graph) {
       if (key !== spot && trunkCells.has(key)) continue
       if (terminalKeys.has(key) && !owned.includes(key)) continue
       if (spots.some((other) => other === key && other !== spot)) continue
@@ -884,7 +898,7 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
         reached.add(key)
         continue
       }
-      const around = linkCells(spot, key, allowed, cols, rows, stepCost, place, valveLeaves)
+      const around = linkCells(spot, key, graph, cols, rows, stepCost, place, valveLeaves)
       if (!around) continue
       zonePipes.push({ id: ids('pipe'), points: shorten(around, clear), role: 'zone' })
       hit = true
@@ -905,10 +919,17 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
     const at = place(head.key)
     if (dist(at, head.point) > 1) park(head.key, { id: ids('pipe'), points: [at, head.point], role: 'zone' })
   }
+  const leads: Point[][] = []
   for (const drip of finalDrips) {
     const at = place(drip.key)
     const start = drip.points[0]
-    if (start && dist(at, start) > 1) park(drip.key, { id: ids('pipe'), points: [at, start], role: 'zone' })
+    if (!start || dist(at, start) <= SNAP_PX) continue
+    const buried = doc.zones.some((zone) => isDripKind(zone.kind) && zone.points.length >= 3 && pointInZone(start, zone.points, zone.holes))
+    if (buried) {
+      leads.push([at, start])
+      continue
+    }
+    if (clear(at, start)) park(drip.key, { id: ids('pipe'), points: [at, start], role: 'zone' })
   }
 
   pipes.unshift({ id: ids('pipe'), points: [{ x: source.x, y: source.y }, place(root)], role: 'main' })
@@ -930,7 +951,10 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
         flowLph: head.flowLph,
       }
     }),
-    drips: finalDrips.map((drip) => ({ id: ids('drip'), points: drip.points, spacingM: drip.spacingM, emitterLph: drip.emitterLph })),
+    drips: [
+      ...finalDrips.map((drip) => ({ id: ids('drip'), points: drip.points, spacingM: drip.spacingM, emitterLph: drip.emitterLph })),
+      ...leads.map((points) => ({ id: ids('drip'), points, spacingM: 0.3, emitterLph: 2, bare: true as const })),
+    ],
     valves: valveKeys.map((key, index) => ({ id: ids('valve'), name: `Клапан ${index + 1}`, ...place(key) })),
     pipes: laid,
   }
@@ -2134,6 +2158,52 @@ function polylinePx(points: Point[]): number {
   let sum = 0
   for (let i = 1; i < points.length; i++) sum += dist(points[i - 1], points[i])
   return sum
+}
+
+/** Злак без своей капли. Если веер газона его не достал, короткий веер с кромки закрывает куртину. */
+function coverGrasses(
+  plants: { x: number; y: number; kind: 'tree' | 'bush'; form?: string; radiusM: number }[],
+  zones: Zone[],
+  heads: HeadSpot[],
+  graph: Set<number>,
+  place: (key: number) => Point,
+  ppm: number,
+) {
+  for (const plant of plants) {
+    if (plant.kind !== 'bush' || plant.form !== 'grass' || heads.length >= MAX_HEADS) continue
+    if (zones.some((zone) => isObstacleKind(zone.kind) && zone.points.length >= 3 && pointInZone(plant, zone.points, zone.holes))) continue
+    if (!zones.some((zone) => isWetKind(zone.kind) && zone.points.length >= 3 && pointInZone(plant, zone.points, zone.holes))) continue
+    if (heads.some((head) => headReaches(head, plant, ppm))) continue
+    const key = nearestKey(plant, graph, place)
+    if (key === null) continue
+    const at = place(key)
+    const gapM = dist(at, plant) / ppm
+    const reach = gapM + Math.max(plant.radiusM, 0.3)
+    const onEdge = reach <= 4.5
+    const radiusM = onEdge ? Math.max(2.5, Math.min(4.5, Math.round(reach * 2) / 2)) : 2.5
+    const point = onEdge ? at : { x: plant.x, y: plant.y }
+    const nozzleId = onEdge ? 'fan180' : 'fan360'
+    const base = nozzleById(nozzleId)
+    const flowLph = Math.abs(radiusM - base.radiusM) < 0.05 ? base.flowLph : Math.max(1, Math.round(base.flowLph * (radiusM / base.radiusM) ** 2))
+    heads.push({
+      key,
+      point,
+      nozzleId,
+      rotationDeg: onEdge ? bearingDeg(point, plant) : 0,
+      radiusM,
+      flowLph,
+    })
+  }
+}
+
+function headReaches(head: HeadSpot, point: Point, ppm: number): boolean {
+  const nozzle = nozzleById(head.nozzleId)
+  if (dist(head.point, point) > head.radiusM * ppm * 1.02) return false
+  if (nozzle.arcDeg >= 359) return true
+  let delta = bearingDeg(head.point, point) - head.rotationDeg
+  while (delta > 180) delta -= 360
+  while (delta < -180) delta += 360
+  return Math.abs(delta) <= nozzle.arcDeg / 2 + 8
 }
 
 function plantGetsDrip(plant: { x: number; y: number; kind: 'tree' | 'bush'; form?: string }, zones: Zone[]): boolean {
