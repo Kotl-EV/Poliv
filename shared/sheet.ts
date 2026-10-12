@@ -312,7 +312,7 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
       const fill = draft ? '#ffffff' : head.nozzleId.startsWith('bub') ? '#2a6288' : '#fffdf8'
       parts.push(`<circle cx="${fmt(head.x)}" cy="${fmt(head.y)}" r="${fmt(r)}" fill="${fill}" stroke="${draft ? '#1c2822' : ink}" stroke-width="${fmt(1.6 / k)}"/>`)
       const pressure = analysis.pressureMarks.find((item) => item.id === head.id)
-      if (pressure) {
+      if (pressure && (pressure.low || layers.headInfo)) {
         const pressureInk = draft || !pressure.low ? '#1c2822' : '#8d2b1f'
         parts.push(
           `<text data-pressure="1" x="${fmt(pressure.x + 14 / k)}" y="${fmt(pressure.y)}" fill="${pressureInk}" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="start" dominant-baseline="middle">${xml(pressureLabel(pressure.bar))}</text>`,
@@ -581,8 +581,9 @@ function legendSvg(doc: Doc, analysis: Analysis, layers: SheetLayers, x: number,
         const box = valve?.boxId ? (doc.boxes ?? []).find((item) => item.id === valve.boxId) : undefined
         const kinds = new Set(analysis.marks.filter((item) => item.stationId === id).map((item) => item.kind))
         const type = kinds.has('sprinkler') && kinds.has('drip') ? 'дождевание и капля' : kinds.has('drip') ? 'капля' : kinds.has('sprinkler') ? 'дождевание' : ''
-        const bits = [`Станция ${stationNo(analysis.stations, id)}`]
-        if (station?.name) bits.push(station.name)
+        const no = stationNo(analysis.stations, id)
+        const bits = [`Станция ${no}`]
+        if (station?.name && station.name !== `Клапан ${no}`) bits.push(station.name)
         if (box) bits.push(box.name)
         if (type) bits.push(type)
         if (station) bits.push(`${Math.round(station.flowLph)} л/ч`)

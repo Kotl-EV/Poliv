@@ -766,6 +766,32 @@ test('two lawns with the same dose still share a station when the flow fits', ()
   assert.ok(shared.length >= 1, 'same dose stayed on separate valves')
 })
 
+test('heads on one station stay inside one part of a large lawn', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 10
+  doc.zones = [zone('lawn', 'lawn', 0, 0, 500, 360)]
+  doc.source = { x: -30, y: 180, pressureBar: 3, flowLimitLph: null }
+  const next = layoutIrrigation(doc)
+  assert.ok(next)
+  const row = analyze(next)
+  const byStation = new Map<string, { x: number; y: number }[]>()
+  for (const head of next.sprinklers) {
+    const mark = row.marks.find((item) => item.kind === 'sprinkler' && item.id === head.id)
+    if (!mark) continue
+    const list = byStation.get(mark.stationId) ?? []
+    list.push(head)
+    byStation.set(mark.stationId, list)
+  }
+  assert.ok(byStation.size >= 2)
+  for (const [id, heads] of byStation) {
+    let far = 0
+    for (const a of heads) {
+      for (const b of heads) far = Math.max(far, Math.hypot(a.x - b.x, a.y - b.y) / 10)
+    }
+    assert.ok(far <= 24, `station ${id} spans ${far.toFixed(1)} m`)
+  }
+})
+
 test('a large lawn uses rotors and covers most of the grass', () => {
   const doc = emptyDoc()
   doc.pxPerMeter = 10

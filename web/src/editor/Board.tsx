@@ -492,7 +492,7 @@ export const Board = forwardRef<SVGSVGElement, {
                   {no}
                 </text>
               )}
-              {pressure && (
+              {pressure && (pressure.low || props.headInfo || selected) && (
                 <text
                   x={sprinkler.x + 14 / view.k}
                   y={sprinkler.y}

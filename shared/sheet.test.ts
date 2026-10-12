@@ -436,7 +436,7 @@ test('a drip emitter count reaches the sheet and hides with the drip', () => {
   assert.equal(off[0].svg.includes('data-drip-flow='), false)
 })
 
-test('a head pressure reaches the sheet and hides with the heads', () => {
+test('a healthy head pressure stays off the sheet until the caption layer is on', () => {
   const doc = {
     ...emptyDoc(),
     source: { x: 0, y: 0, pressureBar: 3, flowLimitLph: null },
@@ -447,24 +447,41 @@ test('a head pressure reaches the sheet and hides with the heads', () => {
   }
   const analysis = analyze(doc)
   const mark = analysis.pressureMarks.find((item) => item.id === 's')
-  assert.ok(mark)
-  const on = buildSheetPages(doc, analysis, { title: 'Напор', date: '01.01.2026', includeSpec: false })
+  assert.ok(mark && !mark.low)
+  const plain = buildSheetPages(doc, analysis, { title: 'Напор', date: '01.01.2026', includeSpec: false })
+  assert.equal(plain[0].svg.includes('data-pressure='), false)
+  const on = buildSheetPages(doc, analysis, {
+    title: 'Напор',
+    date: '01.01.2026',
+    includeSpec: false,
+    layers: { ...DEFAULT_SHEET_LAYERS, headInfo: true },
+  })
   assert.match(on[0].svg, /data-pressure="1"/)
   assert.equal(on[0].svg.includes(`>${pressureLabel(mark.bar)}</text>`), true)
   const off = buildSheetPages(doc, analysis, {
     title: 'Напор',
     date: '01.01.2026',
     includeSpec: false,
-    layers: { ...DEFAULT_SHEET_LAYERS, spray: false },
+    layers: { ...DEFAULT_SHEET_LAYERS, headInfo: true, spray: false },
   })
   assert.equal(off[0].svg.includes('data-pressure='), false)
-  const pipesOff = buildSheetPages(doc, analysis, {
-    title: 'Напор',
-    date: '01.01.2026',
-    includeSpec: false,
-    layers: { ...DEFAULT_SHEET_LAYERS, pipes: false },
-  })
-  assert.match(pipesOff[0].svg, /data-pressure="1"/)
+})
+
+test('a low head pressure reaches the sheet in red', () => {
+  const doc = {
+    ...emptyDoc(),
+    source: { x: 0, y: 0, pressureBar: 1.5, flowLimitLph: null },
+    zones: [],
+    valves: [],
+    pipes: [{ id: 'run', points: [{ x: 0, y: 0 }, { x: 200, y: 0 }] }],
+    sprinklers: [{ id: 's', nozzleId: 'fan180', x: 200, y: 0, radiusM: 4.5, arcDeg: 180, rotationDeg: 0, flowLph: 360 }],
+  }
+  const analysis = analyze(doc)
+  const mark = analysis.pressureMarks.find((item) => item.id === 's')
+  assert.ok(mark?.low)
+  const on = buildSheetPages(doc, analysis, { title: 'Напор', date: '01.01.2026', includeSpec: false })
+  assert.match(on[0].svg, /data-pressure="1"/)
+  assert.match(on[0].svg, /#8d2b1f/)
 })
 
 test('a valve shows its station flow and hides with the fittings', () => {

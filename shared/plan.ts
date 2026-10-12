@@ -18,7 +18,9 @@ const RUNTIME_BAND = 1.25
 const MIN_LAWN_M2 = 8
 
 type StationFamily = 'fan' | 'rotator' | 'rotor' | 'bubbler' | 'drip'
-type StationItem = { key: number; flow: number; family: StationFamily }
+type StationItem = { key: number; flow: number; family: StationFamily; x: number; y: number }
+/** Головки одной станции остаются в этом пятне, иначе труба станции пересекает чужие. */
+const STATION_SPAN_M = 24
 
 /** Ведро источника, если оно задано и уже потолка клапана. Ноль и пустое поле оставляют 1500 л/ч. */
 function stationLimit(flowLimitLph: number | null | undefined): number {
@@ -99,6 +101,7 @@ function runtimesShare(left: number, right: number): boolean {
  * Короткое и длинное время тоже не делят клапан, иначе короткая зона получит чужую норму.
  * Разная почва даёт разное число включений и тоже не делит клапан.
  * Одинаковое число включений с разной паузой не делит клапан: глина ждёт дольше суглинка.
+ * Дальние головки не делят клапан: станция остаётся пятном, а не ниткой через участок.
  */
 function groupStations(
   items: StationItem[],
@@ -106,6 +109,7 @@ function groupStations(
   cap: number,
   cyclesOf: Map<number, number>,
   soakOf: Map<number, number>,
+  ppm: number,
 ): StationItem[][] {
   const consumers = [...items].sort((a, b) => (runtimeOf.get(b.key) ?? 0) - (runtimeOf.get(a.key) ?? 0) || b.flow - a.flow || a.key - b.key)
   const groups: StationItem[][] = []
@@ -122,7 +126,10 @@ function groupStations(
       if (bins[i].soak !== soak) continue
       if (!runtimesShare(bins[i].runtime, runtime)) continue
       if (bins[i].flow + item.flow > cap) continue
-      const cost = Math.max(bins[i].runtime, runtime) - bins[i].runtime
+      let span = 0
+      for (const member of groups[i]) span = Math.max(span, Math.hypot(member.x - item.x, member.y - item.y))
+      if (ppm > 0 && span / ppm > STATION_SPAN_M) continue
+      const cost = span
       const tighter = cost < bestCost || (cost === bestCost && best !== -1 && bins[i].flow > bins[best].flow)
       if (tighter) {
         bestCost = cost
@@ -460,8 +467,8 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
   if (keptHeads.length === 0 && keptDrips.length === 0) return null
 
   const consumers: StationItem[] = [
-    ...keptHeads.map((head) => ({ key: head.key, flow: head.flowLph, family: nozzleById(head.nozzleId).kind })),
-    ...keptDrips.map((drip) => ({ key: drip.key, flow: dripFlow(drip, ppm), family: 'drip' as const })),
+    ...keptHeads.map((head) => ({ key: head.key, flow: head.flowLph, family: nozzleById(head.nozzleId).kind, x: head.point.x, y: head.point.y })),
+    ...keptDrips.map((drip) => ({ key: drip.key, flow: dripFlow(drip, ppm), family: 'drip' as const, x: drip.points[0].x, y: drip.points[0].y })),
   ]
   const waters = zoneWaters(zones, keptHeads, keptDrips, ppm)
   const runtimeOf = new Map<number, number>()
@@ -479,7 +486,7 @@ export function layoutPlan(page: { width: number; height: number; pxPerMeter: nu
     cyclesOf.set(drip.key, water.cycles)
     soakOf.set(drip.key, water.soak)
   }
-  const groups = groupStations(consumers, runtimeOf, STATION_LPH, cyclesOf, soakOf)
+  const groups = groupStations(consumers, runtimeOf, STATION_LPH, cyclesOf, soakOf, ppm)
 
   const terminalKeys = new Set(consumers.map((item) => item.key))
   const reserved = new Set<number>([root, ...terminalKeys])
@@ -746,8 +753,8 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
   if (keptHeads.length === 0 && keptDrips.length === 0) return null
 
   const consumers: StationItem[] = [
-    ...keptHeads.map((head) => ({ key: head.key, flow: head.flowLph, family: nozzleById(head.nozzleId).kind })),
-    ...keptDrips.map((drip) => ({ key: drip.key, flow: dripFlow(drip, ppm), family: 'drip' as const })),
+    ...keptHeads.map((head) => ({ key: head.key, flow: head.flowLph, family: nozzleById(head.nozzleId).kind, x: head.point.x, y: head.point.y })),
+    ...keptDrips.map((drip) => ({ key: drip.key, flow: dripFlow(drip, ppm), family: 'drip' as const, x: drip.points[0].x, y: drip.points[0].y })),
   ]
   const waters = zoneWaters(doc.zones, keptHeads, keptDrips, ppm)
   const runtimeOf = new Map<number, number>()
@@ -765,7 +772,7 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
     cyclesOf.set(drip.key, water.cycles)
     soakOf.set(drip.key, water.soak)
   }
-  const groups = groupStations(consumers, runtimeOf, stationLimit(doc.source?.flowLimitLph), cyclesOf, soakOf)
+  const groups = groupStations(consumers, runtimeOf, stationLimit(doc.source?.flowLimitLph), cyclesOf, soakOf, ppm)
 
   const terminalKeys = new Set(consumers.map((item) => item.key))
   const reserved = new Set<number>([root, ...terminalKeys])
