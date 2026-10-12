@@ -8,8 +8,8 @@ import { centroid, coverPath, dist, handleFromControl, midpoint, noteLeader, poi
 import { headCaption, nozzleById } from '@shared/nozzles.ts'
 import { runtimeLabel } from '@shared/program.ts'
 import { DEFAULT_PPM, gridStepM, hatchOf, hatchTile, HATCHES, precipWash, surfaceOf, type HatchNode } from '@shared/landscape.ts'
-import { pipeWeight, pressureLabel, sourceLabel, valveFlowLabel } from '@shared/pipes.ts'
-import { dripFlowTags, dripTags, fittingShape, flowArrows, funnyPoints, pipeTags, sleeveTags, type FlowArrow } from '@shared/pipeview.ts'
+import { pipeWeight, pressureLabel, sourceLabel } from '@shared/pipes.ts'
+import { dripTags, fittingShape, flowArrows, funnyPoints, pipeTags, sleeveTags, type FlowArrow } from '@shared/pipeview.ts'
 import type { Analysis, Doc, FittingMark, Fixture, Measure, Note, Plant, Point, Sprinkler, Zone, ZoneKind } from '@shared/types.ts'
 
 export const CLOSE_SCREEN_PX = 14
@@ -420,24 +420,6 @@ export const Board = forwardRef<SVGSVGElement, {
             {tag.text}
           </text>
         ))}
-        {dripFlowTags(doc.drips, doc.pxPerMeter, view.k).map((tag, index) => (
-          <text
-            key={`drip-flow-${index}`}
-            x={tag.x}
-            y={tag.y}
-            className="pipe-tag"
-            fontSize={11 / view.k}
-            textAnchor="middle"
-            dominantBaseline="middle"
-            transform={`rotate(${tag.rotate} ${tag.x} ${tag.y})`}
-            stroke="#f7f3ea"
-            strokeWidth={3 / view.k}
-            paintOrder="stroke"
-            pointerEvents="none"
-          >
-            {tag.text}
-          </text>
-        ))}
         {doc.drips.map((drip) =>
           drip.points.slice(0, -1).map((point, index) => (
             <line
@@ -619,7 +601,6 @@ export const Board = forwardRef<SVGSVGElement, {
           const ink = no > 0 ? stationInk(analysis.stations, valve.id) : ''
           const station = analysis.stations.find((row) => row.id === valve.id)
           const run = props.runtime && station ? runtimeLabel(station.runtimeMin, station.cycles) : null
-          const flow = station && station.flowLph > 0 ? valveFlowLabel(station.flowLph) : null
           return (
             <g key={valve.id}>
               <polygon
@@ -656,22 +637,6 @@ export const Board = forwardRef<SVGSVGElement, {
                   pointerEvents="none"
                 >
                   {run}
-                </text>
-              )}
-              {flow && (
-                <text
-                  x={valve.x + 14 / view.k}
-                  y={valve.y}
-                  className="pipe-tag"
-                  fontSize={11 / view.k}
-                  textAnchor="start"
-                  dominantBaseline="middle"
-                  stroke="#f7f3ea"
-                  strokeWidth={3 / view.k}
-                  paintOrder="stroke"
-                  pointerEvents="none"
-                >
-                  {flow}
                 </text>
               )}
             </g>

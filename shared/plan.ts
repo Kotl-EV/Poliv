@@ -1,4 +1,4 @@
-import { PLANT_DRIP_MIN, SNAP_PX, climateFactor, cyclePlan, defaultDose, emptyDoc } from './doc.ts'
+import { PLANT_DRIP_MIN, SNAP_PX, climateFactor, cyclePlan, defaultDose, emptyDoc, plantDripMinutes } from './doc.ts'
 import { placeDripAtPlant } from './drip.ts'
 import { dist, pointInPolygon, pointInZone, polygonAreaPx, zoneAreaPx } from './geom.ts'
 import { isDripKind, isObstacleKind, isSprayKind, isWetKind } from './landscape.ts'
@@ -30,8 +30,14 @@ function stationLimit(flowLimitLph: number | null | undefined): number {
 
 type ZoneWater = { minutes: number; cycles: number; soak: number }
 
-/** Время и число включений зоны по её расходу. Пустая зона — ноль. */
-function zoneWaters(zones: Zone[], heads: { point: Point; flowLph: number }[], drips: DripSpot[], ppm: number): Map<string, ZoneWater> {
+/** Время и число включений зоны по её расходу. Пустая зона — ноль. Кольца на клумбе не заливают её площадь. */
+function zoneWaters(
+  zones: Zone[],
+  heads: { point: Point; flowLph: number }[],
+  drips: DripSpot[],
+  ppm: number,
+  plants: { x: number; y: number; radiusM: number }[] = [],
+): Map<string, ZoneWater> {
   const waters = new Map<string, ZoneWater>()
   for (const zone of zones) {
     const area = zoneAreaPx(zone.points, zone.holes) / (ppm * ppm)
@@ -39,14 +45,21 @@ function zoneWaters(zones: Zone[], heads: { point: Point; flowLph: number }[], d
       waters.set(zone.id, { minutes: 0, cycles: 0, soak: 0 })
       continue
     }
-    let flow = 0
+    let spray = 0
     for (const head of heads) {
-      if (pointInZone(head.point, zone.points, zone.holes)) flow += head.flowLph
+      if (pointInZone(head.point, zone.points, zone.holes)) spray += head.flowLph
     }
-    for (const drip of drips) {
-      if (!isDripKind(zone.kind)) continue
-      if (pointInZone(centroid(drip.points), zone.points, zone.holes)) flow += dripFlow(drip, ppm)
+    let drip = 0
+    if (isDripKind(zone.kind)) {
+      for (const line of drips) {
+        if (pointInZone(centroid(line.points), zone.points, zone.holes)) drip += dripFlow(line, ppm)
+      }
     }
+    if (drip > 0 && spray <= 0 && planted(zone, plants)) {
+      waters.set(zone.id, { minutes: plantDripMinutes(zone.doseMm, zone.climate, zone.kind), cycles: 1, soak: 0 })
+      continue
+    }
+    const flow = spray + drip
     if (flow <= 0) {
       waters.set(zone.id, { minutes: 0, cycles: 0, soak: 0 })
       continue
@@ -57,6 +70,15 @@ function zoneWaters(zones: Zone[], heads: { point: Point; flowLph: number }[], d
     waters.set(zone.id, { minutes, cycles: plan.cycles ?? 0, soak: plan.soakMin })
   }
   return waters
+}
+
+/** На клумбе или в кустах есть крона. Тогда капля поит растение, а не весь полигон. */
+function planted(zone: Zone, plants: { x: number; y: number; radiusM: number }[]): boolean {
+  if (!isDripKind(zone.kind)) return false
+  for (const plant of plants) {
+    if (plant.radiusM > 0 && pointInZone(plant, zone.points, zone.holes)) return true
+  }
+  return false
 }
 
 function longerWater(row: ZoneWater, best: ZoneWater): boolean {
@@ -756,7 +778,7 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
     ...keptHeads.map((head) => ({ key: head.key, flow: head.flowLph, family: nozzleById(head.nozzleId).kind, x: head.point.x, y: head.point.y })),
     ...keptDrips.map((drip) => ({ key: drip.key, flow: dripFlow(drip, ppm), family: 'drip' as const, x: drip.points[0].x, y: drip.points[0].y })),
   ]
-  const waters = zoneWaters(doc.zones, keptHeads, keptDrips, ppm)
+  const waters = zoneWaters(doc.zones, keptHeads, keptDrips, ppm, doc.plants ?? [])
   const runtimeOf = new Map<number, number>()
   const cyclesOf = new Map<number, number>()
   const soakOf = new Map<number, number>()
@@ -805,16 +827,44 @@ export function layoutIrrigation(doc: Doc, family: SprayFamily = 'auto'): Doc | 
   const valveLeaves = new Set(spots.filter((spot) => spot !== root))
   const trunk = steiner(root, spots.filter((spot) => spot !== root), trunkAllowed, cols, rows, stepCost, valveLeaves)
   const trunkCells = new Set(trunk.keys())
+  const pendingLinks: Point[][] = []
+  const claimed = new Set<number>()
+  for (let i = 0; i < spots.length; i++) {
+    let spot = spots[i]
+    if (spot === root || trunk.has(spot)) {
+      claimed.add(spot)
+      continue
+    }
+    const around =
+      linkCells(root, spot, allowed, cols, rows, stepCost, place, valveLeaves) ??
+      linkCells(root, spot, allowed, cols, rows, stepCost, place)
+    if (around) {
+      pendingLinks.push(around)
+      claimed.add(spot)
+      continue
+    }
+    // Магистраль до этой клетки не дошла. Клапан садится на уже найденную трубу и остаётся её вершиной.
+    let best = root
+    let bestD = Infinity
+    for (const key of trunk.keys()) {
+      if (claimed.has(key)) continue
+      if (key !== root && valveLeaves.has(key)) continue
+      const distance = dist(place(key), place(spot))
+      if (distance < bestD) {
+        bestD = distance
+        best = key
+      }
+    }
+    spots[i] = best
+    claimed.add(best)
+  }
   pipes.push(...pipesFromTree(trunk, place, ids, clear, new Set(spots), 'main'))
+  for (const around of pendingLinks) pipes.push({ id: ids('pipe'), points: shorten(around, clear), role: 'main' })
   const zoneBundles: LaidPipe[][] = []
   const bundleOf = new Map<number, number>()
   for (let i = 0; i < groups.length; i++) {
     const spot = spots[i]
     for (const item of groups[i]) bundleOf.set(item.key, i)
-    if (spot !== root && !trunk.has(spot)) {
-      const around = linkCells(root, spot, allowed, cols, rows, stepCost, place, valveLeaves)
-      if (around) pipes.push({ id: ids('pipe'), points: shorten(around, clear), role: 'main' })
-    }
     const zonePipes: LaidPipe[] = []
     const owned = groups[i].map((item) => item.key)
     const local = new Set<number>([spot])
@@ -1746,14 +1796,14 @@ function linkCells(
   return cells.map(at)
 }
 
-/** Хорда не режет здание, воду, бетон и дорожку. Иначе спрямление срезало бы обход. */
+/** Хорда не режет здание, воду, бетон, дорожку и посадку. Иначе спрямление срезало бы обход. */
 function segmentOpen(a: Point, b: Point, zones: Zone[], cellPx: number): boolean {
   const steps = Math.max(1, Math.ceil(dist(a, b) / (cellPx * 0.5)))
   for (let s = 0; s <= steps; s++) {
     const point = { x: a.x + ((b.x - a.x) * s) / steps, y: a.y + ((b.y - a.y) * s) / steps }
     for (const zone of zones) {
       if (zone.points.length < 3) continue
-      const blocked = zone.kind === 'building' || zone.kind === 'water' || zone.kind === 'concrete' || zone.kind === 'path'
+      const blocked = zone.kind === 'building' || zone.kind === 'water' || zone.kind === 'concrete' || zone.kind === 'path' || isDripKind(zone.kind)
       if (!blocked) continue
       if (pointInZone(point, zone.points, zone.holes)) return false
     }

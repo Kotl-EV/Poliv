@@ -8,8 +8,8 @@ import { headCaption, nozzleById } from './nozzles.ts'
 import { programTable, runtimeLabel } from './program.ts'
 import { gearHint, gearList } from './gear.ts'
 import { sleeveLengthM } from './join.ts'
-import { dripFlowTags, dripTags, fittingShape, flowArrows, funnyPoints, pipeTags, sleeveTags } from './pipeview.ts'
-import { pipeWeight, pressureLabel, sourceLabel, valveFlowLabel } from './pipes.ts'
+import { dripTags, fittingShape, flowArrows, funnyPoints, pipeTags, sleeveTags } from './pipeview.ts'
+import { pipeWeight, pressureLabel, sourceLabel } from './pipes.ts'
 import type { Analysis, Doc, FittingMark, Plant, Point } from './types.ts'
 
 export const SHEET_DPI = 150
@@ -298,11 +298,6 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
         `<text x="${fmt(tag.x)}" y="${fmt(tag.y)}" fill="#1c2822" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle" transform="rotate(${fmt(tag.rotate)} ${fmt(tag.x)} ${fmt(tag.y)})">${xml(tag.text)}</text>`,
       )
     }
-    for (const tag of dripFlowTags(doc.drips, doc.pxPerMeter, k)) {
-      parts.push(
-        `<text data-drip-flow="1" x="${fmt(tag.x)}" y="${fmt(tag.y)}" fill="#1c2822" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="middle" dominant-baseline="middle" transform="rotate(${fmt(tag.rotate)} ${fmt(tag.x)} ${fmt(tag.y)})">${xml(tag.text)}</text>`,
-      )
-    }
   }
   if (layers.spray) {
     for (const head of doc.sprinklers) {
@@ -371,11 +366,6 @@ function schemePage(doc: Doc, analysis: Analysis, opts: SheetOpts & { layers: Sh
       if (layers.runtime && station) {
         const label = runtimeLabel(station.runtimeMin, station.cycles)
         if (label) parts.push(plotLabel(valve.x, valve.y + 16 / k, k, label, 11))
-      }
-      if (station && station.flowLph > 0) {
-        parts.push(
-          `<text data-valve-flow="1" x="${fmt(valve.x + 14 / k)}" y="${fmt(valve.y)}" fill="#1c2822" stroke="#f7f3ea" stroke-width="${fmt(3 / k)}" paint-order="stroke" font-size="${fmt(11 / k)}" font-weight="600" font-family="Segoe UI, PT Sans, Arial, sans-serif" text-anchor="start" dominant-baseline="middle">${xml(valveFlowLabel(station.flowLph))}</text>`,
-        )
       }
     }
     if (doc.source) {
@@ -586,7 +576,6 @@ function legendSvg(doc: Doc, analysis: Analysis, layers: SheetLayers, x: number,
         if (station?.name && station.name !== `Клапан ${no}`) bits.push(station.name)
         if (box) bits.push(box.name)
         if (type) bits.push(type)
-        if (station) bits.push(`${Math.round(station.flowLph)} л/ч`)
         items.push({
           swatch: `<line x1="0" y1="6" x2="12" y2="6" stroke="${stationInk(analysis.stations, id)}" stroke-width="3" stroke-linecap="round"/>`,
           label: bits.join(' · '),

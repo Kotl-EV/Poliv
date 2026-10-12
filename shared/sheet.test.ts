@@ -409,7 +409,7 @@ test('a pipe loss stays off the sheet', () => {
   assert.equal(on[0].svg.includes(tags[0].text), false)
 })
 
-test('a drip emitter count reaches the sheet and hides with the drip', () => {
+test('a drip line on the sheet keeps its length and leaves the emitter count off', () => {
   const doc = {
     ...emptyDoc(),
     zones: [],
@@ -425,15 +425,9 @@ test('a drip emitter count reaches the sheet and hides with the drip', () => {
   const tags = dripFlowTags(doc.drips, doc.pxPerMeter, 1)
   assert.equal(tags.length, 1)
   const on = buildSheetPages(doc, analysis, { title: 'Капля', date: '01.01.2026', includeSpec: false })
-  assert.equal(on[0].svg.match(/data-drip-flow="1"/g)?.length, 1)
-  assert.equal(on[0].svg.includes(`>${tags[0].text}</text>`), true)
-  const off = buildSheetPages(doc, analysis, {
-    title: 'Капля',
-    date: '01.01.2026',
-    includeSpec: false,
-    layers: { ...DEFAULT_SHEET_LAYERS, drip: false },
-  })
-  assert.equal(off[0].svg.includes('data-drip-flow='), false)
+  assert.equal(on[0].svg.includes('data-drip-flow='), false)
+  assert.equal(on[0].svg.includes(tags[0].text), false)
+  assert.match(on[0].svg, />7 м</)
 })
 
 test('a healthy head pressure stays off the sheet until the caption layer is on', () => {
@@ -484,7 +478,7 @@ test('a low head pressure reaches the sheet in red', () => {
   assert.match(on[0].svg, /#8d2b1f/)
 })
 
-test('a valve shows its station flow and hides with the fittings', () => {
+test('a valve keeps its station number and leaves the flow off the sheet', () => {
   assert.equal(valveFlowLabel(360), '360 л/ч')
   assert.equal(valveFlowLabel(12.6), '13 л/ч')
   const doc = {
@@ -498,21 +492,11 @@ test('a valve shows its station flow and hides with the fittings', () => {
   const analysis = analyze(doc)
   assert.equal(analysis.stations.find((item) => item.id === 'v1')?.flowLph, 360)
   const on = buildSheetPages(doc, analysis, { title: 'Клапан', date: '01.01.2026', includeSpec: false })
-  assert.match(on[0].svg, /data-valve-flow="1"/)
-  assert.equal(on[0].svg.includes('>360 л/ч</text>'), true)
-  const off = buildSheetPages(doc, analysis, {
-    title: 'Клапан',
-    date: '01.01.2026',
-    includeSpec: false,
-    layers: { ...DEFAULT_SHEET_LAYERS, fittings: false },
-  })
-  assert.equal(off[0].svg.includes('data-valve-flow='), false)
-  const dry = {
-    ...doc,
-    sprinklers: [],
-  }
-  const idle = buildSheetPages(dry, analyze(dry), { title: 'Клапан', date: '01.01.2026', includeSpec: false })
-  assert.equal(idle[0].svg.includes('data-valve-flow='), false)
+  assert.match(on[0].svg, /Станция 1/)
+  assert.equal(on[0].svg.includes('data-valve-flow='), false)
+  assert.equal(on[0].svg.includes('>360 л/ч</text>'), false)
+  const pages = buildSheetPages(doc, analysis, { title: 'Клапан', date: '01.01.2026' })
+  assert.match(pages.map((page) => page.svg).join('\n'), /360 л\/ч/)
 })
 
 test('a source label names the pressure and hides with the fittings', () => {

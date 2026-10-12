@@ -80,6 +80,16 @@ const KINDS = new Set<ZoneKind>(['lawn', 'bed', 'shrub', 'path', 'concrete', 'wa
 /** Капля у растения вне клумбы: свои 90 минут, не минуты газона. */
 export const PLANT_DRIP_MIN = 90
 
+/**
+ * Кольцо у растения не заливает всю клумбу.
+ * 8 мм остаются 90 минутами, более жирная норма растягивает их, более лёгкая сжимает.
+ */
+export function plantDripMinutes(doseMm: number, climate: Climate, kind: ZoneKind): number {
+  const base = defaultDose(kind)
+  if (!(doseMm > 0) || !(base > 0)) return 0
+  return (PLANT_DRIP_MIN * doseMm * climateFactor(climate)) / base
+}
+
 export function defaultDose(kind: ZoneKind): number {
   const wet = surfaceOf(kind).wet
   if (wet === 'drip') return 8

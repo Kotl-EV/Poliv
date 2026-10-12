@@ -893,6 +893,32 @@ test('an ornamental grass bush skips the drip ring', () => {
   assert.equal(near(doc.plants[1]), true)
 })
 
+test('trees on a large bed keep a short drip and the network stays on the source', () => {
+  const doc = emptyDoc()
+  doc.pxPerMeter = 10
+  doc.zones = [
+    zone('lawn', 'lawn', 0, 0, 500, 360),
+    zone('bed', 'bed', 20, 16, 460, 70),
+    zone('house', 'building', 24, 120, 140, 160),
+  ]
+  doc.source = { x: -30, y: 180, pressureBar: 3, flowLimitLph: null }
+  doc.plants = [80, 180, 280, 380].map((x, index) => ({ id: `tree-${index}`, kind: 'tree' as const, x, y: 50, radiusM: 4 }))
+  const next = layoutIrrigation(doc)
+  assert.ok(next)
+  const row = analyze(next)
+  const bed = row.zones.find((item) => item.id === 'bed')
+  assert.ok(bed?.runtimeMin && bed.runtimeMin <= 120, `bed ${bed?.runtimeMin}`)
+  assert.ok((bed.precipMmH ?? 0) >= 1, `precip ${bed.precipMmH}`)
+  for (const station of row.stations) {
+    if (station.flowLph > 0 && station.flowLph < 400) {
+      assert.ok(station.runtimeMin !== null && station.runtimeMin <= 120, `drip ${station.runtimeMin}`)
+    }
+  }
+  assert.equal(row.warnings.some((item) => item.includes('не стоит на трубе')), false)
+  assert.equal(row.warnings.some((item) => item.includes('не соединена')), false)
+  assert.equal(row.warnings.some((item) => item.includes('за другим клапаном')), false)
+})
+
 test('a bed without a lawn gets drip only at its plants', () => {
   const doc = emptyDoc()
   doc.pxPerMeter = 10

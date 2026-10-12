@@ -1,4 +1,4 @@
-import { PLANT_DRIP_MIN, climateFactor, cyclePlan, defaultDose, intakeMmH, SNAP_PX } from './doc.ts'
+import { PLANT_DRIP_MIN, climateFactor, cyclePlan, defaultDose, intakeMmH, plantDripMinutes, SNAP_PX } from './doc.ts'
 import { bearingDeg, closestOnSegment, dist, pointInZone, zoneAreaPx } from './geom.ts'
 import { isDripKind } from './landscape.ts'
 import { nozzleById } from './nozzles.ts'
@@ -102,22 +102,33 @@ function hitchPoint(point: Point, nodes: Node[], ppm: number | null): { node: No
 function zoneRows(doc: Doc): Analysis['zones'] {
   return doc.zones.map((zone) => {
     const areaM2 = doc.pxPerMeter ? zoneAreaPx(zone.points, zone.holes) / (doc.pxPerMeter * doc.pxPerMeter) : null
-    const wetM2 = canopyM2(zone, doc) ?? areaM2
-    let flow = 0
+    const canopy = canopyM2(zone, doc)
+    const wetM2 = canopy ?? areaM2
+    let spray = 0
     for (const sprinkler of doc.sprinklers) {
-      if (pointInZone(sprinkler, zone.points, zone.holes)) flow += sprinkler.flowLph
+      if (pointInZone(sprinkler, zone.points, zone.holes)) spray += sprinkler.flowLph
     }
-    for (const drip of doc.drips) {
-      if (pointInZone(centroid(drip.points), zone.points, zone.holes)) flow += dripMeasure(drip, doc.pxPerMeter).flowLph
+    let drip = 0
+    for (const line of doc.drips) {
+      if (pointInZone(centroid(line.points), zone.points, zone.holes)) drip += dripMeasure(line, doc.pxPerMeter).flowLph
     }
-    const precipMmH = wetM2 && wetM2 > 0 ? flow / wetM2 : null
+    const flow = spray + drip
+    let precipMmH = wetM2 && wetM2 > 0 ? flow / wetM2 : null
     const doseMm = zone.doseMm >= 0 && zone.doseMm <= 40 ? zone.doseMm : defaultDose(zone.kind)
     const climate = zone.climate ?? 'open'
     const appliedMm = doseMm * climateFactor(climate)
-    const runtimeMin = appliedMm <= 0 ? 0 : precipMmH && precipMmH > 0 ? (appliedMm / precipMmH) * 60 : null
+    let runtimeMin = appliedMm <= 0 ? 0 : precipMmH && precipMmH > 0 ? (appliedMm / precipMmH) * 60 : null
     const soil = zone.soil ?? 'loam'
     const slope = zone.slope ?? 'flat'
-    const plan = cyclePlan(runtimeMin, precipMmH, soil, slope)
+    // Кольца на клумбе не выливают норму на всю крону: иначе большая посадка стоит сутками.
+    const ringsOnly = isDripKind(zone.kind) && canopy !== null && spray <= 0 && drip > 0
+    if (ringsOnly && appliedMm > 0) {
+      runtimeMin = plantDripMinutes(doseMm, climate, zone.kind)
+      precipMmH = runtimeMin > 0 ? appliedMm / (runtimeMin / 60) : null
+    }
+    const plan = ringsOnly
+      ? { cycles: runtimeMin && runtimeMin > 0 ? 1 : 0, soakMin: 0 }
+      : cyclePlan(runtimeMin, precipMmH, soil, slope)
     return {
       id: zone.id,
       name: zone.name,
@@ -683,7 +694,7 @@ function unique(items: string[]): string[] {
   return [...new Set(items)]
 }
 
-/** Площадь крон на клумбе или в кустах. По ней считается мм/ч капельного полива. */
+/** Площадь крон на клумбе или в кустах. Ненулевая крона переводит каплю на время растения. */
 function canopyM2(zone: Zone, doc: Doc): number | null {
   if (!isDripKind(zone.kind)) return null
   const plants = (doc.plants ?? []).filter((plant) => pointInZone(plant, zone.points, zone.holes))
