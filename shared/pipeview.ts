@@ -50,32 +50,135 @@ export function flowArrows(segments: SegmentResult[], ppm: number | null, k: num
   return arrows
 }
 
-/** Подпись диаметра и длины у середины участка, сбоку от линии и текстом вверх. */
+/** Короче этого прямая без подписи: маленький кусок трубы молчит. */
+const PIPE_TAG_MIN_M = 4
+
+/** Подпись диаметра и длины у середины длинной прямой. Короткие куски одной прямой делят одну подпись. */
 export function pipeTags(segments: SegmentResult[], ppm: number | null, k: number): PipeTag[] {
-  const minPx = ppm && ppm > 0 ? 0.55 * ppm : 36
+  const minPx = ppm && ppm > 0 ? PIPE_TAG_MIN_M * ppm : 36
   const gap = 8 / Math.max(k, 0.05)
   const tags: PipeTag[] = []
-  for (const segment of segments) {
-    if (segment.status !== 'ok' || segment.odMm === null) continue
-    const dx = segment.b.x - segment.a.x
-    const dy = segment.b.y - segment.a.y
-    const len = Math.hypot(dx, dy)
-    if (len < minPx) continue
-    let deg = (Math.atan2(dy, dx) * 180) / Math.PI
-    if (deg > 90 || deg < -90) deg += 180
-    const nx = -dy / len
-    const ny = dx / len
-    const metres = segment.lengthM === null
-      ? ''
-      : ` · ${segment.lengthM.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} м`
+  for (const run of straightRuns(segments)) {
+    const px = run.reduce((sum, segment) => sum + Math.hypot(segment.b.x - segment.a.x, segment.b.y - segment.a.y), 0)
+    if (px < minPx) continue
+    const od = run[0]?.odMm
+    if (od === null || od === undefined) continue
+    const lengthM = runMetres(run)
+    const metres = lengthM === null ? '' : ` · ${lengthM.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} м`
+    const text = `Ø${od}${metres}`
+    if (!captionFits(px, text, k)) continue
+    const spot = runSpot(run, px / 2)
+    if (!spot) continue
     tags.push({
-      text: `Ø${segment.odMm}${metres}`,
-      x: (segment.a.x + segment.b.x) / 2 + nx * gap,
-      y: (segment.a.y + segment.b.y) / 2 + ny * gap,
-      rotate: Math.round(deg * 10) / 10,
+      text,
+      x: spot.x + spot.nx * gap,
+      y: spot.y + spot.ny * gap,
+      rotate: spot.rotate,
     })
   }
   return tags
+}
+
+/** Текст шире участка не ставим: на листе он закрыл бы соседние трубы. */
+function captionFits(len: number, text: string, k: number): boolean {
+  const font = 11 / Math.max(k, 0.05)
+  return len >= text.length * font * 0.58
+}
+
+function runMetres(run: SegmentResult[]): number | null {
+  if (run.some((segment) => segment.lengthM === null)) return null
+  return run.reduce((sum, segment) => sum + (segment.lengthM ?? 0), 0)
+}
+
+function runSpot(run: SegmentResult[], at: number): { x: number; y: number; nx: number; ny: number; rotate: number } | null {
+  let remain = at
+  for (const segment of run) {
+    const dx = segment.b.x - segment.a.x
+    const dy = segment.b.y - segment.a.y
+    const len = Math.hypot(dx, dy)
+    if (len < 1e-6) continue
+    if (remain > len && segment !== run[run.length - 1]) {
+      remain -= len
+      continue
+    }
+    const t = Math.min(1, Math.max(0, remain / len))
+    let deg = (Math.atan2(dy, dx) * 180) / Math.PI
+    if (deg > 90 || deg < -90) deg += 180
+    return {
+      x: segment.a.x + dx * t,
+      y: segment.a.y + dy * t,
+      nx: -dy / len,
+      ny: dx / len,
+      rotate: Math.round(deg * 10) / 10,
+    }
+  }
+  return null
+}
+
+/** Прямая одного диаметра. Поворот больше 15° начинает новую подпись, прямой ход идёт сквозь тройник. */
+function straightRuns(segments: SegmentResult[]): SegmentResult[][] {
+  const usable = segments.filter((segment) => {
+    if (segment.status !== 'ok' || segment.odMm === null) return false
+    return Math.hypot(segment.b.x - segment.a.x, segment.b.y - segment.a.y) > 0.5
+  })
+  const keyOf = (point: Point) => `${Math.round(point.x)}:${Math.round(point.y)}`
+  const at = new Map<string, number[]>()
+  usable.forEach((segment, index) => {
+    for (const point of [segment.a, segment.b]) {
+      const key = keyOf(point)
+      const list = at.get(key) ?? []
+      list.push(index)
+      at.set(key, list)
+    }
+  })
+  const used = new Set<number>()
+  const runs: SegmentResult[][] = []
+  const cos15 = Math.cos((15 * Math.PI) / 180)
+  for (let index = 0; index < usable.length; index++) {
+    if (used.has(index)) continue
+    used.add(index)
+    const run = [usable[index]]
+    grow(run, true)
+    grow(run, false)
+    runs.push(run)
+  }
+  return runs
+
+  function grow(run: SegmentResult[], forward: boolean) {
+    while (run.length) {
+      const tip = forward ? run[run.length - 1] : run[0]
+      const from = forward ? tip.b : tip.a
+      const back = forward ? tip.a : tip.b
+      const dir = unit(from.x - back.x, from.y - back.y)
+      if (!dir) return
+      const nexts = (at.get(keyOf(from)) ?? []).filter((item) => !used.has(item))
+      let pick: number | null = null
+      let jointIsA = false
+      for (const item of nexts) {
+        const cand = usable[item]
+        if (cand.odMm !== tip.odMm) continue
+        const atA = keyOf(cand.a) === keyOf(from)
+        const far = atA ? cand.b : cand.a
+        const step = unit(far.x - from.x, far.y - from.y)
+        if (!step || dir.x * step.x + dir.y * step.y < cos15) continue
+        if (pick !== null) return
+        pick = item
+        jointIsA = atA
+      }
+      if (pick === null) return
+      const cand = usable[pick]
+      used.add(pick)
+      const ordered = jointIsA ? cand : { ...cand, a: cand.b, b: cand.a }
+      if (forward) run.push(ordered)
+      else run.unshift(ordered)
+    }
+  }
+}
+
+function unit(x: number, y: number): { x: number; y: number } | null {
+  const len = Math.hypot(x, y)
+  if (len < 1e-6) return null
+  return { x: x / len, y: y / len }
 }
 
 export type SpeedTag = { text: string; x: number; y: number; rotate: number; hot: boolean }

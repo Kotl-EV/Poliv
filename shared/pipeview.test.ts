@@ -54,6 +54,43 @@ test('a long fed pipe gets a diameter tag and a short one does not', () => {
   assert.equal(fraction[0].text, 'Ø32 · 12,4 м')
 })
 
+test('a short pipe stays quiet and collinear scraps share one label', () => {
+  assert.equal(pipeTags([segment({ b: { x: 40, y: 0 }, lengthM: 2 })], 20, 1).length, 0)
+  const straight = pipeTags(
+    [
+      segment({ a: { x: 0, y: 0 }, b: { x: 60, y: 0 }, lengthM: 3 }),
+      segment({ a: { x: 60, y: 0 }, b: { x: 120, y: 0 }, lengthM: 3 }),
+    ],
+    20,
+    1,
+  )
+  assert.equal(straight.length, 1)
+  assert.equal(straight[0].text, 'Ø25 · 6 м')
+  assert.ok(Math.abs(straight[0].x - 60) < 1e-6)
+  const elbow = pipeTags(
+    [
+      segment({ a: { x: 0, y: 0 }, b: { x: 120, y: 0 }, lengthM: 6 }),
+      segment({ a: { x: 120, y: 0 }, b: { x: 120, y: 120 }, lengthM: 6 }),
+    ],
+    20,
+    1,
+  )
+  assert.equal(elbow.length, 2)
+  assert.equal(pipeTags([segment({})], 20, 0.05).length, 0)
+  const tee = pipeTags(
+    [
+      segment({ a: { x: 0, y: 0 }, b: { x: 60, y: 0 }, lengthM: 3 }),
+      segment({ a: { x: 60, y: 0 }, b: { x: 120, y: 0 }, lengthM: 3 }),
+      segment({ a: { x: 60, y: 0 }, b: { x: 60, y: 40 }, lengthM: 2 }),
+    ],
+    20,
+    1,
+  )
+  assert.equal(tee.length, 1)
+  assert.equal(tee[0].text, 'Ø25 · 6 м')
+  assert.ok(Math.abs(tee[0].x - 60) < 1e-6)
+})
+
 test('a drip line is labelled with its length and a short one is not', () => {
   const tags = dripTags([{ points: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 40 }] }], 20, 1)
   assert.equal(tags.length, 1)
