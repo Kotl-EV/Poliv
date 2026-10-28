@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 import { analyze } from '@shared/analyze.ts'
 import { dripRingPoints } from '@shared/drip.ts'
-import { brushOutline, clipRegions, mirrorAcross, splitRegion, type BrushTip, type ClipOp } from '@shared/clip.ts'
+import { brushParts, clipRegions, mirrorAcross, regionsOverlap, splitRegion, weldRegions, type BrushTip, type ClipOp } from '@shared/clip.ts'
 import { asClimate, asSlope, asSoil, defaultDose, emptyDoc, SNAP_PX } from '@shared/doc.ts'
 import { exampleDoc } from '@shared/example.ts'
 import {
@@ -554,6 +554,61 @@ export function EditorPage({
   function setDraftPoints(points: Point[]) {
     draftRef.current = points
     setDraft(points)
+  }
+
+  function finishBrush() {
+    const radius = (brushM * ppm) / 2
+    const parts = brushParts(draftRef.current, radius, brushTip).filter((part) => zoneAreaPx(part.points, part.holes) >= 36)
+    setDraftPoints([])
+    if (parts.length === 0) return
+    const current = docRef.current
+    const hosts = current.zones.filter((zone) => (
+      zone.kind === zoneKind && parts.some((part) => regionsOverlap({ points: outlineOf(zone.points, zone.bends), holes: zone.holes }, part))
+    ))
+    let regions = parts
+    let absorbed = hosts
+    if (hosts.length > 0) {
+      const welded = weldRegions([
+        ...hosts.map((zone) => ({ points: outlineOf(zone.points, zone.bends), holes: zone.holes })),
+        ...parts,
+      ])
+      if (welded && welded.some((part) => zoneAreaPx(part.points, part.holes) >= 36)) {
+        regions = welded.filter((part) => zoneAreaPx(part.points, part.holes) >= 36)
+      } else {
+        absorbed = []
+      }
+    }
+    if (regions.length === 0) return
+    const surface = surfaceOf(zoneKind)
+    const host = absorbed.find((zone) => zone.id === selection?.id)
+      ?? absorbed.slice().sort((a, b) => zoneAreaPx(b.points, b.holes) - zoneAreaPx(a.points, a.holes))[0]
+    const absorbedIds = new Set(absorbed.map((zone) => zone.id))
+    const kept = current.zones.filter((zone) => !absorbedIds.has(zone.id))
+    const hatch = HATCHES.find((item) => item.id === drawHatch && item.kind === zoneKind) ? { hatch: drawHatch as HatchId } : {}
+    const added: Zone[] = []
+    regions.forEach((region, index) => {
+      if (index === 0 && host) {
+        added.push(shapeZone(host, region.points, region.holes))
+        return
+      }
+      const zone: Zone = {
+        id: uid('zone'),
+        name: surface.label,
+        kind: zoneKind,
+        doseMm: defaultDose(zoneKind),
+        soil: 'loam',
+        slope: 'flat',
+        climate: 'open',
+        points: region.points,
+        ...(region.holes && region.holes.length ? { holes: region.holes } : {}),
+        ...hatch,
+      }
+      added.push(zone)
+    })
+    if (added.length === 0) return
+    commit({ ...current, zones: [...kept, ...added] })
+    setSelection({ kind: 'zone', id: added[0].id })
+    laid({ kind: 'zone', item: added[0] })
   }
 
   function addZone(points: Point[], holes?: Point[][]) {
@@ -1453,11 +1508,7 @@ export function EditorPage({
     }
     if (tool === 'brush' && brushing.current) {
       brushing.current = false
-      if (draftRef.current.length > 0) {
-        const region = brushOutline(draftRef.current, (brushM * ppm) / 2, brushTip)
-        if (region) addZone(region.points, region.holes)
-        setDraftPoints([])
-      }
+      finishBrush()
       drag.current = null; stretch.current = null
       click.current = null
       grab.current = null
@@ -3461,7 +3512,7 @@ export function EditorPage({
         {tool === 'dim' && <span>Размер: два клика. Shift и кнопка ⊥ держат линию прямой. Концы можно перетащить.</span>}
         {anchorPick && <span>Якорь: кликните точку. Поворот, отражение и масштаб пойдут вокруг неё. Esc — отмена.</span>}
         {leaderNote && <span>Выноска: кликните, куда смотрит стрелка. Shift и кнопка ⊥ держат её прямой. Esc — отмена.</span>}
-        {tool === 'brush' && <span>Кисть: круг, квадрат или треугольник. Рисуйте зажатой кнопкой. Esc — отмена.</span>}
+        {tool === 'brush' && <span>Кисть: круг, квадрат или треугольник. Рисуйте зажатой кнопкой — пятно сливается в один контур. Esc — отмена.</span>}
         {boolPick === 'union' && <span>Объединение: кликните второй контур. Он впитается в выбранный.</span>}
         {boolPick === 'diff' && <span>Вычитание: кликните контур, который вырезать. Он останется на месте.</span>}
         {boolPick === 'intersect' && <span>Пересечение: кликните второй контур. Останется только общая часть.</span>}

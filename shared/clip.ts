@@ -1,4 +1,4 @@
-import { centroid, closestOnSegment, dist, pointInPolygon, polygonAreaPx, strokeToPolygon, zoneAreaPx } from './geom.ts'
+import { boundsOf, centroid, circlePoints, closestOnSegment, dist, pointInPolygon, pointInZone, polygonAreaPx, strokeToPolygon, zoneAreaPx } from './geom.ts'
 import type { Point } from './types.ts'
 
 export type ClipOp = 'union' | 'intersect' | 'diff' | 'xor'
@@ -285,40 +285,335 @@ function areaOf(region: Region): number {
   return zoneAreaPx(region.points, region.holes)
 }
 
-/** Кисть IRRISketch: круг, квадрат или треугольник вдоль штриха. */
-export function brushOutline(points: Point[], radius: number, tip: BrushTip): Region | null {
-  if (!(radius > 0) || points.length === 0) return null
-  if (tip === 'round') {
-    const ring = strokeToPolygon(points, radius)
-    return ring.length >= 3 ? { points: ring } : null
+function tipReach(tip: BrushTip, radius: number): number {
+  return tip === 'triangle' ? radius * 1.25 : radius
+}
+
+function coversTip(tip: BrushTip, center: Point, radius: number, x: number, y: number): boolean {
+  if (tip === 'square') return Math.abs(x - center.x) <= radius && Math.abs(y - center.y) <= radius
+  if (tip === 'round') return (x - center.x) ** 2 + (y - center.y) ** 2 <= radius * radius
+  return pointInPolygon({ x, y }, stamp(center, radius, 'triangle'))
+}
+
+function clockwiseTurn(inX: number, inY: number, outX: number, outY: number): number {
+  const cross = inX * outY - inY * outX
+  const dot = inX * outX + inY * outY
+  let angle = Math.atan2(cross, dot)
+  if (angle < 0) angle += Math.PI * 2
+  return angle
+}
+
+function distToSeg(point: Point, a: Point, b: Point): number {
+  return closestOnSegment(point, a, b).distance
+}
+
+function rdpOpen(points: Point[], tol: number): Point[] {
+  if (points.length < 3) return points.map((point) => ({ ...point }))
+  let max = 0
+  let index = 0
+  const a = points[0]
+  const b = points[points.length - 1]
+  for (let i = 1; i < points.length - 1; i++) {
+    const gap = distToSeg(points[i], a, b)
+    if (gap > max) {
+      max = gap
+      index = i
+    }
   }
+  if (max <= tol) return [{ ...a }, { ...b }]
+  const left = rdpOpen(points.slice(0, index + 1), tol)
+  const right = rdpOpen(points.slice(index), tol)
+  return [...left.slice(0, -1), ...right]
+}
+
+function rdpClosed(points: Point[], tol: number): Point[] {
+  if (points.length < 8) return points
+  let far = 1
+  let best = -1
+  for (let i = 1; i < points.length; i++) {
+    const gap = dist(points[0], points[i])
+    if (gap > best) {
+      best = gap
+      far = i
+    }
+  }
+  if (far <= 1 || far >= points.length - 1) return points
+  const one = rdpOpen(points.slice(0, far + 1), tol)
+  const two = rdpOpen([...points.slice(far), points[0]], tol)
+  const ring = [...one.slice(0, -1), ...two.slice(0, -1)]
+  return ring.length >= 3 ? ring : points
+}
+
+function simplifyRing(points: Point[], tol: number): Point[] {
+  let ring = points
+  let limit = tol
+  for (let pass = 0; pass < 5; pass++) {
+    if (ring.length < 8) break
+    if (pass > 0 && ring.length <= 240) break
+    const next = rdpClosed(ring, limit)
+    if (next.length >= ring.length) break
+    ring = next
+    limit *= 1.7
+  }
+  return ring
+}
+
+function traceMask(mask: Uint8Array, cols: number, rows: number, minX: number, minY: number, cell: number): Region[] {
+  type Seg = { ax: number; ay: number; bx: number; by: number; used: boolean }
+  const segs: Seg[] = []
+  const filled = (i: number, j: number) => i >= 0 && j >= 0 && i < cols && j < rows && mask[j * cols + i] === 1
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      if (!filled(i, j)) continue
+      if (!filled(i, j - 1)) segs.push({ ax: i, ay: j, bx: i + 1, by: j, used: false })
+      if (!filled(i + 1, j)) segs.push({ ax: i + 1, ay: j, bx: i + 1, by: j + 1, used: false })
+      if (!filled(i, j + 1)) segs.push({ ax: i + 1, ay: j + 1, bx: i, by: j + 1, used: false })
+      if (!filled(i - 1, j)) segs.push({ ax: i, ay: j + 1, bx: i, by: j, used: false })
+    }
+  }
+  const from = new Map<string, number[]>()
+  const key = (x: number, y: number) => `${x},${y}`
+  segs.forEach((seg, index) => {
+    const list = from.get(key(seg.ax, seg.ay)) ?? []
+    list.push(index)
+    from.set(key(seg.ax, seg.ay), list)
+  })
+  const world = (ix: number, iy: number): Point => ({ x: minX + ix * cell, y: minY + iy * cell })
+  const raw: Point[][] = []
+  for (let start = 0; start < segs.length; start++) {
+    if (segs[start].used) continue
+    const ring: Point[] = []
+    let index = start
+    let guard = segs.length + 2
+    let closed = false
+    while (guard-- > 0) {
+      const current = segs[index]
+      current.used = true
+      ring.push(world(current.ax, current.ay))
+      if (current.bx === segs[start].ax && current.by === segs[start].ay && ring.length >= 3) {
+        closed = true
+        break
+      }
+      const options = (from.get(key(current.bx, current.by)) ?? []).filter((item) => !segs[item].used)
+      if (options.length === 0) break
+      const inX = current.bx - current.ax
+      const inY = current.by - current.ay
+      let best = options[0]
+      let bestTurn = Infinity
+      for (const option of options) {
+        const edge = segs[option]
+        const angle = clockwiseTurn(inX, inY, edge.bx - edge.ax, edge.by - edge.ay)
+        if (angle < bestTurn) {
+          bestTurn = angle
+          best = option
+        }
+      }
+      index = best
+    }
+    if (closed) raw.push(ring)
+  }
+  const minArea = Math.max(1, cell * cell * 1.5)
+  const cleaned = raw
+    .map((ring) => {
+      const rawArea = Math.abs(signedArea(ring))
+      let simple = simplifyRing(ring, cell * 0.7)
+      if (Math.abs(signedArea(simple)) < rawArea * 0.75) simple = simplifyRing(ring, cell * 0.25)
+      return cleanRing(simple)
+    })
+    .filter((ring) => ring.length >= 3 && Math.abs(signedArea(ring)) >= minArea)
+  const positive = cleaned.filter((ring) => signedArea(ring) > 0)
+  const negative = cleaned.filter((ring) => signedArea(ring) < 0)
+  const outers = positive.filter((ring) => !positive.some((other) => (
+    other !== ring && Math.abs(signedArea(other)) > Math.abs(signedArea(ring)) + 1 && pointInPolygon(centroid(ring), other)
+  )))
+  const regions: Region[] = outers.map((points) => ({ points, holes: [] as Point[][] }))
+  for (const hole of negative) {
+    const center = centroid(hole)
+    const host = regions
+      .filter((region) => pointInZone(center, region.points, region.holes))
+      .sort((left, right) => polygonAreaPx(left.points) - polygonAreaPx(right.points))[0]
+    if (!host) continue
+    host.holes = [...(host.holes ?? []), hole]
+  }
+  for (const ring of positive) {
+    if (outers.includes(ring)) continue
+    regions.push({ points: ring })
+  }
+  return regions
+    .map((region) => ({
+      points: region.points,
+      holes: (region.holes ?? []).filter((hole) => polygonAreaPx(hole) >= minArea),
+    }))
+    .filter((region) => zoneAreaPx(region.points, region.holes) >= minArea)
+    .map((region) => (region.holes && region.holes.length > 0 ? region : { points: region.points }))
+}
+
+/** Закрашенный штрих: один или несколько залитых контуров, без самопересечения ленты. */
+export function brushParts(points: Point[], radius: number, tip: BrushTip): Region[] {
+  if (!(radius > 0) || points.length === 0) return []
   const line: Point[] = []
   for (const point of points) {
     const last = line[line.length - 1]
-    if (!last || dist(last, point) >= radius * 0.2) line.push(point)
+    if (!last || dist(last, point) >= Math.max(0.4, radius * 0.08)) line.push(point)
   }
-  if (line.length === 0) return null
-  const stamps: Point[][] = [stamp(line[0], radius, tip)]
-  const step = radius * 0.45
-  for (let i = 1; i < line.length; i++) {
+  if (line.length === 0) return []
+  if (line.length === 1) {
+    if (tip === 'round') {
+      const ring = circlePoints(line[0], { x: line[0].x + radius, y: line[0].y }, 24)
+      return ring.length >= 3 ? [{ points: ring }] : []
+    }
+    return [{ points: stamp(line[0], radius, tip) }]
+  }
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const point of line) {
+    minX = Math.min(minX, point.x)
+    minY = Math.min(minY, point.y)
+    maxX = Math.max(maxX, point.x)
+    maxY = Math.max(maxY, point.y)
+  }
+  const reach = tipReach(tip, radius)
+  minX -= reach
+  minY -= reach
+  maxX += reach
+  maxY += reach
+  const spanX = Math.max(maxX - minX, 1)
+  const spanY = Math.max(maxY - minY, 1)
+  let cell = Math.max(radius / 8, 0.35)
+  const maxCells = 640
+  if (spanX / cell > maxCells) cell = spanX / maxCells
+  if (spanY / cell > maxCells) cell = spanY / maxCells
+  const cols = Math.max(1, Math.ceil(spanX / cell))
+  const rows = Math.max(1, Math.ceil(spanY / cell))
+  const mask = new Uint8Array(cols * rows)
+  const samples: Point[] = []
+  const step = Math.max(cell * 0.75, radius * 0.22)
+  for (let i = 0; i < line.length; i++) {
+    samples.push(line[i])
+    if (i === 0) continue
     const a = line[i - 1]
     const b = line[i]
     const len = dist(a, b)
     for (let travel = step; travel < len; travel += step) {
       const t = travel / len
-      stamps.push(stamp({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }, radius, tip))
-      if (stamps.length > 240) break
+      samples.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t })
     }
-    stamps.push(stamp(b, radius, tip))
-    if (stamps.length > 240) break
   }
-  let current: Region = { points: stamps[0] }
-  for (let i = 1; i < stamps.length; i++) {
-    const parts = clipRegions('union', current, { points: stamps[i] })
-    if (parts.length === 0) continue
-    current = parts.reduce((best, region) => (areaOf(region) > areaOf(best) ? region : best))
+  for (const sample of samples) {
+    const i0 = Math.max(0, Math.floor((sample.x - reach - minX) / cell))
+    const i1 = Math.min(cols - 1, Math.ceil((sample.x + reach - minX) / cell))
+    const j0 = Math.max(0, Math.floor((sample.y - reach - minY) / cell))
+    const j1 = Math.min(rows - 1, Math.ceil((sample.y + reach - minY) / cell))
+    for (let j = j0; j <= j1; j++) {
+      const row = j * cols
+      for (let i = i0; i <= i1; i++) {
+        if (mask[row + i]) continue
+        const x = minX + (i + 0.5) * cell
+        const y = minY + (j + 0.5) * cell
+        if (coversTip(tip, sample, radius, x, y)) mask[row + i] = 1
+      }
+    }
   }
-  return current.points.length >= 3 ? current : null
+  const traced = traceMask(mask, cols, rows, minX, minY, cell)
+  if (traced.length > 0) return traced
+  if (tip === 'round') {
+    const ring = strokeToPolygon(line, radius)
+    return ring.length >= 3 ? [{ points: ring }] : []
+  }
+  return []
+}
+
+/** Кисть: круг, квадрат или треугольник. Закраска возвращает залитый контур, а не ленту штриха. */
+export function brushOutline(points: Point[], radius: number, tip: BrushTip): Region | null {
+  const parts = brushParts(points, radius, tip)
+  if (parts.length === 0) return null
+  return parts.reduce((best, region) => (areaOf(region) > areaOf(best) ? region : best))
+}
+
+function ringsCross(a: Point[], b: Point[]): boolean {
+  for (let i = 0; i < a.length; i++) {
+    const a2 = a[(i + 1) % a.length]
+    for (let j = 0; j < b.length; j++) {
+      const b2 = b[(j + 1) % b.length]
+      const hit = crossParams(a[i], a2, b[j], b2)
+      if (hit && hit.t >= -1e-6 && hit.t <= 1 + 1e-6 && hit.u >= -1e-6 && hit.u <= 1 + 1e-6) return true
+    }
+  }
+  return false
+}
+
+/** Два контура делят площадь или хотя бы ребро. */
+export function regionsOverlap(a: Region, b: Region): boolean {
+  const ab = boundsOf([...a.points, ...(a.holes ?? []).flat()])
+  const bb = boundsOf([...b.points, ...(b.holes ?? []).flat()])
+  if (ab.maxX < bb.minX || bb.maxX < ab.minX || ab.maxY < bb.minY || bb.maxY < ab.minY) return false
+  if (a.points.some((point) => pointInZone(point, b.points, b.holes))) return true
+  if (b.points.some((point) => pointInZone(point, a.points, a.holes))) return true
+  return ringsCross(a.points, b.points)
+}
+
+function weldByClip(regions: Region[]): Region[] | null {
+  let acc = regions.slice()
+  let guard = acc.length * acc.length + 2
+  let moved = true
+  while (moved && guard-- > 0) {
+    moved = false
+    for (let i = 0; i < acc.length && !moved; i++) {
+      for (let j = i + 1; j < acc.length; j++) {
+        if (!regionsOverlap(acc[i], acc[j])) continue
+        const parts = clipRegions('union', acc[i], acc[j])
+        const area = parts.reduce((sum, region) => sum + areaOf(region), 0)
+        const floor = Math.max(areaOf(acc[i]), areaOf(acc[j]))
+        if (parts.length === 0 || area < floor * 0.9) return null
+        acc = [...acc.slice(0, i), ...acc.slice(i + 1, j), ...acc.slice(j + 1), ...parts]
+        moved = true
+        break
+      }
+    }
+  }
+  return acc
+}
+
+/** Склеивает пересекающиеся заливки в общие контуры. null — склейка развалилась. */
+export function weldRegions(regions: Region[]): Region[] | null {
+  const solid = regions.filter((region) => region.points.length >= 3 && areaOf(region) > 0)
+  if (solid.length <= 1) return solid
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const region of solid) {
+    for (const point of [...region.points, ...(region.holes ?? []).flat()]) {
+      minX = Math.min(minX, point.x)
+      minY = Math.min(minY, point.y)
+      maxX = Math.max(maxX, point.x)
+      maxY = Math.max(maxY, point.y)
+    }
+  }
+  const span = Math.max(maxX - minX, maxY - minY, 1)
+  if (span > 1600) return weldByClip(solid)
+  const cell = Math.max(span / 420, 0.4)
+  const cols = Math.ceil((maxX - minX) / cell) + 2
+  const rows = Math.ceil((maxY - minY) / cell) + 2
+  if (cols > 460 || rows > 460) return weldByClip(solid)
+  const mask = new Uint8Array(cols * rows)
+  const originX = minX - cell
+  const originY = minY - cell
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const point = { x: originX + (i + 0.5) * cell, y: originY + (j + 0.5) * cell }
+      if (solid.some((region) => pointInZone(point, region.points, region.holes))) mask[j * cols + i] = 1
+    }
+  }
+  const traced = traceMask(mask, cols, rows, originX, originY, cell)
+  if (traced.length === 0) return null
+  const before = solid.reduce((sum, region) => sum + areaOf(region), 0)
+  const after = traced.reduce((sum, region) => sum + areaOf(region), 0)
+  const largest = solid.reduce((best, region) => Math.max(best, areaOf(region)), 0)
+  if (after < largest * 0.85 || after > before * 1.12) return weldByClip(solid)
+  return traced
 }
 
 /** Отражение точки через прямую a–b. */

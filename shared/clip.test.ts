@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { brushOutline, clipRegions, mirrorAcross, splitRegion } from './clip.ts'
+import { brushOutline, clipRegions, mirrorAcross, splitRegion, weldRegions } from './clip.ts'
 import { offsetRing, pointInZone, zoneAreaPx } from './geom.ts'
 import type { Point } from './types.ts'
 
@@ -139,4 +139,68 @@ test('one triangle click is a triangle', () => {
   assert.ok(region)
   assert.equal(region!.points.length, 3)
   assert.ok(zoneAreaPx(region!.points) > 10)
+})
+
+function ringCrosses(points: Point[]): boolean {
+  const n = points.length
+  const proper = (a: Point, b: Point, c: Point, d: Point) => {
+    const rx = b.x - a.x
+    const ry = b.y - a.y
+    const sx = d.x - c.x
+    const sy = d.y - c.y
+    const den = rx * sy - ry * sx
+    if (Math.abs(den) < 1e-9) return false
+    const t = ((c.x - a.x) * sy - (c.y - a.y) * sx) / den
+    const u = ((c.x - a.x) * ry - (c.y - a.y) * rx) / den
+    return t > 1e-3 && t < 1 - 1e-3 && u > 1e-3 && u < 1 - 1e-3
+  }
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const gap = Math.min(Math.abs(i - j), n - Math.abs(i - j))
+      if (gap <= 1) continue
+      if (proper(points[i], points[(i + 1) % n], points[j], points[(j + 1) % n])) return true
+    }
+  }
+  return false
+}
+
+test('a scribbled spot becomes one filled polygon', () => {
+  const points: Point[] = []
+  for (let y = 0; y <= 48; y += 8) {
+    const even = (y / 8) % 2 === 0
+    for (let x = even ? 0 : 80; even ? x <= 80 : x >= 0; x += even ? 6 : -6) points.push({ x, y })
+  }
+  const region = brushOutline(points, 10, 'round')
+  assert.ok(region)
+  assert.equal(region!.holes, undefined)
+  assert.ok(pointInZone({ x: 40, y: 24 }, region!.points, region!.holes))
+  const covered = zoneAreaPx(region!.points, region!.holes)
+  assert.ok(covered > 5500 && covered < 9000, String(covered))
+  assert.equal(ringCrosses(region!.points), false)
+})
+
+test('a round brush stroke keeps a hole in the middle', () => {
+  const points: Point[] = []
+  for (let i = 0; i <= 48; i++) {
+    const angle = (i / 48) * Math.PI * 2
+    points.push({ x: 80 + Math.cos(angle) * 40, y: 80 + Math.sin(angle) * 40 })
+  }
+  const region = brushOutline(points, 8, 'round')
+  assert.ok(region)
+  assert.ok(region!.holes && region!.holes.length === 1, JSON.stringify(region!.holes?.length))
+  assert.ok(pointInZone({ x: 120, y: 80 }, region!.points, region!.holes))
+  assert.equal(pointInZone({ x: 80, y: 80 }, region!.points, region!.holes), false)
+  assert.equal(ringCrosses(region!.points), false)
+})
+
+test('two overlapping brush strokes weld into one polygon', () => {
+  const left = brushOutline([{ x: 0, y: 0 }, { x: 60, y: 0 }], 10, 'round')
+  const right = brushOutline([{ x: 40, y: 0 }, { x: 100, y: 0 }], 10, 'round')
+  assert.ok(left && right)
+  const welded = weldRegions([left!, right!])
+  assert.ok(welded && welded.length === 1, JSON.stringify(welded?.map((region) => zoneAreaPx(region.points, region.holes))))
+  assert.ok(pointInZone({ x: 10, y: 0 }, welded![0].points, welded![0].holes))
+  assert.ok(pointInZone({ x: 50, y: 0 }, welded![0].points, welded![0].holes))
+  assert.ok(pointInZone({ x: 90, y: 0 }, welded![0].points, welded![0].holes))
+  assert.equal(ringCrosses(welded![0].points), false)
 })
